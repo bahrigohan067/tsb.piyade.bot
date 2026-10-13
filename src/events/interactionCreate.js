@@ -123,9 +123,20 @@ module.exports = {
             .setMaxLength(120)
             .setRequired(true);
 
+          const genderInput = new TextInputBuilder()
+            .setCustomId('modal_gender')
+            .setLabel('Cinsiyetiniz (Erkek / Kız)')
+            .setValue(selectedGender.includes('kiz') ? 'Kız' : 'Erkek')
+            .setPlaceholder('Erkek veya Kız')
+            .setStyle(TextInputStyle.Short)
+            .setMinLength(1)
+            .setMaxLength(15)
+            .setRequired(true);
+
           modal.addComponents(
             new ActionRowBuilder().addComponents(nameInput),
-            new ActionRowBuilder().addComponents(robloxInput)
+            new ActionRowBuilder().addComponents(robloxInput),
+            new ActionRowBuilder().addComponents(genderInput)
           );
 
           return interaction.showModal(modal);
@@ -165,7 +176,25 @@ async function handleRegistrationModalSubmit(interaction) {
 
   const realName = interaction.fields.getTextInputValue('modal_real_name').trim();
   const robloxInput = interaction.fields.getTextInputValue('modal_roblox_input').trim();
-  const gender = interaction.customId.includes('gender_erkek') ? '👨 Erkek' : '👩 Kız';
+
+  // Formda yazılan cinsiyet okunuyor
+  let inputGender = '';
+  try {
+    inputGender = interaction.fields.getTextInputValue('modal_gender')?.trim() || '';
+  } catch (e) {}
+
+  if (!inputGender && interaction.customId.includes('gender_')) {
+    inputGender = interaction.customId.includes('kiz') ? 'Kız' : 'Erkek';
+  }
+
+  const isFemale =
+    inputGender.toLowerCase().includes('kız') ||
+    inputGender.toLowerCase().includes('kiz') ||
+    inputGender.toLowerCase().includes('kadın') ||
+    inputGender.toLowerCase() === 'k' ||
+    inputGender.toLowerCase().includes('bayan');
+
+  const gender = isFemale ? '👩 Kız' : '👨 Erkek';
 
   // Güvenlik & Tekrar Kontrolleri
   if (interaction.member.roles.cache.has(config.ROLES.REGISTERED_CHECK)) {
@@ -386,14 +415,30 @@ async function handleApprove(interaction, applicantId) {
   }
 
   try {
-    // 1. Rolleri Tanımla (1559604645821812896 ve 1559604702143062016)
+    // 1. Genel Rolleri Tanımla (1559604645821812896 ve 1559604702143062016)
     for (const roleId of config.ROLES.APPROVED_ROLES) {
       if (roleId && interaction.guild.roles.cache.has(roleId)) {
         await applicantMember.roles.add(roleId, `Kayıt Onaylandı (Yetkili: ${interaction.user.tag})`);
       }
     }
 
-    // 2. Kayıtsız Rolünü Al (1559604540997636147)
+    // 2. Cinsiyet Rolünü Tanımla (Erkek: 1559637360558350356 | Kız: 1559637300042797096)
+    const genderStr = (activeApp?.gender || '').toLowerCase();
+    const isFemale =
+      genderStr.includes('kız') ||
+      genderStr.includes('kiz') ||
+      genderStr.includes('kadın') ||
+      genderStr === 'k';
+
+    const genderRoleId = isFemale ? config.ROLES.FEMALE : config.ROLES.MALE;
+    if (genderRoleId && interaction.guild.roles.cache.has(genderRoleId)) {
+      await applicantMember.roles.add(
+        genderRoleId,
+        `Cinsiyet Rolü: ${isFemale ? 'Kız' : 'Erkek'} (Yetkili: ${interaction.user.tag})`
+      );
+    }
+
+    // 3. Kayıtsız Rolünü Al (1559604540997636147)
     if (config.ROLES.UNREGISTERED && applicantMember.roles.cache.has(config.ROLES.UNREGISTERED)) {
       await applicantMember.roles.remove(config.ROLES.UNREGISTERED, 'Kayıt tamamlandı.');
     }

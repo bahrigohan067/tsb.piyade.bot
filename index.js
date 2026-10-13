@@ -60,12 +60,23 @@ process.on('uncaughtException', (err, origin) => {
 // Botu Başlat
 if (!config.TOKEN) {
   console.error('========================================================================');
-  console.error('❌ HATA: Bot tokeni bulunamadı!');
-  console.error('Lütfen .env dosyasına TSB_TOKEN=... ekleyin veya Railway üzerinde');
-  console.error('Environment Variables kısmına TSB_TOKEN değişkenini tanımlayın.');
+  console.error('❌ HATA: Bot tokeni (TSB_TOKEN) bulunamadı veya boş!');
+  console.error('Railway Variables sekmesinde TSB_TOKEN değişkeninin tanımlı olduğundan emin olun.');
   console.error('========================================================================');
+  process.exit(1);
 } else {
+  console.log('🔄 Discord Gateway bağlantısı kuruluyor...');
   client.login(config.TOKEN).catch((err) => {
+    console.error('========================================================================');
     console.error('❌ Bot Discord\'a bağlanırken hata oluştu:', err.message);
+    if (err.message.includes('disallowed intents') || err.message.includes('Privileged intent')) {
+      console.error('👉 ÇÖZÜM: Discord Developer Portal > Bot > Privileged Gateway Intents kısmından');
+      console.error('   "SERVER MEMBERS INTENT" ve "MESSAGE CONTENT INTENT" seçeneklerini açın!');
+    } else if (err.message.includes('An invalid token was provided')) {
+      console.error('👉 ÇÖZÜM: Girdiğiniz TSB_TOKEN geçersiz! Developer Portal\'dan tokeni kopyalayıp');
+      console.error('   Railway Variables kısmına tırnaksız olarak tekrar yapıştırın.');
+    }
+    console.error('========================================================================');
+    process.exit(1);
   });
 }

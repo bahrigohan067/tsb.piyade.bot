@@ -22,10 +22,13 @@ Bu bot, **Piyade Team | TSB** Discord sunucusu için geliştirilmiş, Roblox API
    - **Multi-Hesap (Tekil Kimlik) Koruması:** Bir Roblox hesabı yalnızca 1 Discord hesabına bağlanabilir. Başka hesaba kayıtlıysa sistem başvuruyu reddeder.
 5. **Özel Kayıt Odası (Thread):**
    - Kullanıcıya özel `🟡・kullanıcı-adı` odası açılır, işleyiş hakkında detaylı bilgilendirme mesajı atılır.
-6. **Yetkili Onay Kartı:**
-   - Yetkili kanalına (`1559621928187199488`), `<@&1559625308737507358>` yetkili rolü etiketlenerek Roblox avatarı, hesap açılış/katılış tarihleri ve detaylı bilgiler ile düşer.
-7. **Yetkili Kararı:**
-   - **✅ Onayla:** `<@&1559604645821812896>` ve `<@&1559604702143062016>` rolleri verilir, kayıtsız rolü (`1559604540997636147`) alınır. Kullanıcıya DM ve odasından tebrik mesajı atılır.
+6. **Yetkili Kararı & Cinsiyet Rolleri:**
+   - **✅ Onayla:** 
+     - Genel Kayıt Rolleri: `<@&1559604645821812896>` ve `<@&1559604702143062016>`
+     - Erkek ise: `<@&1559637360558350356>` Erkek rolü verilir.
+     - Kız ise: `<@&1559637300042797096>` Kız rolü verilir.
+     - Kayıtsız rolü (`1559604540997636147`) otomatik olarak alınır.
+     - Kullanıcıya DM ve odasından tebrik mesajı atılır.
    - **✖️ Reddet:** Yetkiliden red sebebi istenir. Sebep DM ve odadan bildirilir. Özel oda 5 dakika sonra otomatik olarak silinir.
 8. **Otomatik Kayıtsız Rolü:**
    - Sunucuya katılan her yeni üyeye otomatik `<@&1559604540997636147>` Kayıtsız rolü verilir.
