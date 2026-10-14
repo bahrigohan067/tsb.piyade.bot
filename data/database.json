@@ -1,4 +1,7 @@
 {
   "registrations": [],
-  "activeApplications": {}
+  "activeApplications": {},
+  "vsStats": {},
+  "activeVs": {},
+  "top10MessageId": null
 }

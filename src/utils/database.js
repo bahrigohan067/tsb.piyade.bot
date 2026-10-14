@@ -1,7 +1,10 @@
 const fs = require('fs');
 const path = require('path');
 
-const DATA_DIR = path.join(__dirname, '..', '..', 'data');
+// Railway Kalıcı Disk (Volume) veya Yerel data klasörü desteği
+const DATA_DIR =
+  process.env.DATA_DIR ||
+  (fs.existsSync('/app/data') ? '/app/data' : path.join(__dirname, '..', '..', 'data'));
 const DB_PATH = path.join(DATA_DIR, 'database.json');
 
 class DatabaseManager {
@@ -9,6 +12,9 @@ class DatabaseManager {
     this.data = {
       registrations: [],
       activeApplications: {},
+      vsStats: {},          // { [userId]: { kills: number, wins: number, losses: number, lastUpdated: number } }
+      activeVs: {},         // { [channelId]: { channelId, challengerId, opponentId, createdAt, warned5Hours: boolean } }
+      top10MessageId: null, // Top 10 paneli mesaj ID'si
     };
     this.init();
   }
@@ -21,9 +27,14 @@ class DatabaseManager {
 
       if (fs.existsSync(DB_PATH)) {
         const fileContent = fs.readFileSync(DB_PATH, 'utf-8');
-        this.data = JSON.parse(fileContent);
-        if (!this.data.registrations) this.data.registrations = [];
-        if (!this.data.activeApplications) this.data.activeApplications = {};
+        const parsed = JSON.parse(fileContent);
+        this.data = {
+          registrations: parsed.registrations || [],
+          activeApplications: parsed.activeApplications || {},
+          vsStats: parsed.vsStats || {},
+          activeVs: parsed.activeVs || {},
+          top10MessageId: parsed.top10MessageId || null,
+        };
       } else {
         this.save();
       }
@@ -39,6 +50,10 @@ class DatabaseManager {
       console.error('[DATABASE] Veritabanı kaydedilirken hata oluştu:', err);
     }
   }
+
+  // ==========================================
+  // KAYIT SİSTEMİ BÖLÜMÜ
+  // ==========================================
 
   // Multi-Hesap Kontrolü: Bu Roblox ID'si başka bir Discord kullanıcısına kayıtlı mı?
   getRegistrationByRobloxId(robloxId) {
@@ -58,7 +73,6 @@ class DatabaseManager {
 
   // Yeni başarılı kaydı ekleme
   addRegistration(record) {
-    // Varsa eskisini güncelle veya yenisini ekle
     const index = this.data.registrations.findIndex(
       (r) => String(r.discordId) === String(record.discordId)
     );
@@ -79,7 +93,7 @@ class DatabaseManager {
     this.save();
   }
 
-  // Aktif başvuru kontrolleri
+  // Aktif kayıt başvuru kontrolleri
   getActiveApplication(discordId) {
     if (!discordId) return null;
     return this.data.activeApplications[String(discordId)] || null;
@@ -102,6 +116,108 @@ class DatabaseManager {
 
   getAllRegistrations() {
     return this.data.registrations;
+  }
+
+  // ==========================================
+  // VS (KAPIŞMA) & TOP 10 SİSTEMİ BÖLÜMÜ
+  // ==========================================
+
+  // Kullanıcının VS istatistiklerini getirir
+  getVsStats(userId) {
+    const defaultStats = { kills: 0, wins: 0, losses: 0 };
+    if (!userId) return defaultStats;
+    return this.data.vsStats[String(userId)] || defaultStats;
+  }
+
+  // Kazanan kişiye kill ve win ekler
+  addVsWin(userId) {
+    const id = String(userId);
+    if (!this.data.vsStats[id]) {
+      this.data.vsStats[id] = { kills: 0, wins: 0, losses: 0, lastUpdated: Date.now() };
+    }
+    this.data.vsStats[id].kills += 1;
+    this.data.vsStats[id].wins += 1;
+    this.data.vsStats[id].lastUpdated = Date.now();
+    this.save();
+    return this.data.vsStats[id];
+  }
+
+  // Kaybeden kişiye loss ekler
+  addVsLoss(userId) {
+    const id = String(userId);
+    if (!this.data.vsStats[id]) {
+      this.data.vsStats[id] = { kills: 0, wins: 0, losses: 0, lastUpdated: Date.now() };
+    }
+    this.data.vsStats[id].losses += 1;
+    this.data.vsStats[id].lastUpdated = Date.now();
+    this.save();
+    return this.data.vsStats[id];
+  }
+
+  // Top 10 listesi getir (En çok kill alan en üstte)
+  getTop10() {
+    const entries = Object.entries(this.data.vsStats).map(([userId, stats]) => ({
+      userId,
+      kills: stats.kills || 0,
+      wins: stats.wins || 0,
+      losses: stats.losses || 0,
+      lastUpdated: stats.lastUpdated || 0,
+    }));
+
+    // Kill sayısına göre çoktan aza sırala
+    entries.sort((a, b) => {
+      if (b.kills !== a.kills) {
+        return b.kills - a.kills;
+      }
+      return b.wins - a.wins;
+    });
+
+    return entries.slice(0, 10);
+  }
+
+  // Aktif VS Talebi Yönetimi
+  setActiveVs(channelId, data) {
+    this.data.activeVs[String(channelId)] = {
+      ...data,
+      channelId: String(channelId),
+      createdAt: data.createdAt || Date.now(),
+      warned5Hours: data.warned5Hours || false,
+    };
+    this.save();
+  }
+
+  getActiveVsByChannel(channelId) {
+    if (!channelId) return null;
+    return this.data.activeVs[String(channelId)] || null;
+  }
+
+  getActiveVsByUser(userId) {
+    if (!userId) return null;
+    const uid = String(userId);
+    return Object.values(this.data.activeVs).find(
+      (vs) => String(vs.challengerId) === uid || String(vs.opponentId) === uid
+    ) || null;
+  }
+
+  removeActiveVs(channelId) {
+    if (this.data.activeVs[String(channelId)]) {
+      delete this.data.activeVs[String(channelId)];
+      this.save();
+    }
+  }
+
+  getAllActiveVs() {
+    return Object.values(this.data.activeVs);
+  }
+
+  // Top 10 mesaj ID'si
+  getTop10MessageId() {
+    return this.data.top10MessageId || null;
+  }
+
+  setTop10MessageId(msgId) {
+    this.data.top10MessageId = msgId;
+    this.save();
   }
 }
 

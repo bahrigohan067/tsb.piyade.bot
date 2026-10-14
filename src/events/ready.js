@@ -1,5 +1,6 @@
 const { Events, ActivityType } = require('discord.js');
 const config = require('../../config');
+const { checkVsDeadlines, updateTop10Message } = require('../utils/vsManager');
 
 module.exports = {
   name: Events.ClientReady,
@@ -15,7 +16,7 @@ module.exports = {
     client.user.setPresence({
       activities: [
         {
-          name: 'Piyade Team | Kayıt Sistemi',
+          name: 'Piyade Team | Kayıt & VS Sistemi',
           type: ActivityType.Watching,
         },
       ],
@@ -34,6 +35,11 @@ module.exports = {
         if (guild) {
           await guild.commands.set(commandsData);
           console.log(`[SLASH KOMUTLAR] ${commandsData.length} komut '${guild.name}' sunucusuna başarıyla yüklendi.`);
+          
+          // Sunucu açılışında Top 10 tablosunu güncelle
+          setTimeout(() => {
+            updateTop10Message(guild).catch(() => {});
+          }, 5000);
         } else {
           console.warn(`[SLASH KOMUTLAR] Guild ID (${config.GUILD_ID}) önbellekte bulunamadı. Genel (Global) olarak kaydediliyor...`);
           await client.application.commands.set(commandsData);
@@ -45,5 +51,18 @@ module.exports = {
     } catch (err) {
       console.error('[SLASH KOMUTLAR] Komutlar yüklenirken hata oluştu:', err);
     }
+
+    // Arka Planda Çalışan 48 Saat / 5 Saat VS Kontrol Döngüsü (vs_deadline_check)
+    // İlk kontrol 10 saniye sonra, ardından her 30 dakikada bir çalışır
+    setTimeout(() => {
+      checkVsDeadlines(client).catch(() => {});
+    }, 10000);
+
+    setInterval(() => {
+      console.log('[VS DEADLINE CHECK] Aktif VS süreleri denetleniyor...');
+      checkVsDeadlines(client).catch((err) => {
+        console.error('[VS DEADLINE INTERVAL HATASI]:', err);
+      });
+    }, 30 * 60 * 1000); // 30 dakikada bir
   },
 };

@@ -3,6 +3,7 @@ const {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
+  UserSelectMenuBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
@@ -16,6 +17,12 @@ const {
 const config = require('../../config');
 const database = require('../utils/database');
 const robloxService = require('../services/roblox');
+const {
+  createVsRoomMessage,
+  createVsResultAnnouncement,
+  updateTop10Message,
+  sanitizeChannelName,
+} = require('../utils/vsManager');
 
 module.exports = {
   name: Events.InteractionCreate,
@@ -51,7 +58,6 @@ module.exports = {
                 ephemeral: true,
               });
             } else {
-              // Thread silinmişse aktif başvuruyu temizle, yeni başvuruya izin ver
               database.removeActiveApplication(interaction.user.id);
             }
           }
@@ -92,6 +98,22 @@ module.exports = {
         if (interaction.customId.startsWith('btn_reject_')) {
           const applicantId = interaction.customId.replace('btn_reject_', '');
           return handleRejectButton(interaction, applicantId);
+        }
+
+        // [D] VS SİSTEMİ: "⚔️ VS Talep Oluştur" Butonu
+        if (interaction.customId === 'btn_vs_talep_olustur') {
+          return handleVsRequestStart(interaction);
+        }
+
+        // [E] VS SİSTEMİ: Karar Butonları: Kazanan Belirleme (btn_vs_win_...)
+        if (interaction.customId.startsWith('btn_vs_win_')) {
+          const winnerId = interaction.customId.replace('btn_vs_win_', '');
+          return handleVsWinnerDecision(interaction, winnerId);
+        }
+
+        // [F] VS SİSTEMİ: Karar Butonları: Talep İptal Edildi (btn_vs_cancel)
+        if (interaction.customId === 'btn_vs_cancel') {
+          return handleVsCancelDecision(interaction);
         }
       }
 
@@ -143,7 +165,14 @@ module.exports = {
         }
       }
 
-      // 4. MODAL GÖNDERİMLERİ (MODAL SUBMIT)
+      // 4. USER SELECT MENU (VS RAKİP SEÇİMİ)
+      if (interaction.isUserSelectMenu()) {
+        if (interaction.customId === 'select_vs_opponent') {
+          return handleVsOpponentSelected(interaction);
+        }
+      }
+
+      // 5. MODAL GÖNDERİMLERİ (MODAL SUBMIT)
       if (interaction.isModalSubmit()) {
         // [A] Kullanıcı Kayıt Formu Gönderimi
         if (interaction.customId.startsWith('modal_kayit_')) {
@@ -167,6 +196,10 @@ module.exports = {
     }
   },
 };
+
+// =========================================================================
+// KAYIT SİSTEMİ FONKSİYONLARI
+// =========================================================================
 
 /**
  * Kullanıcı kayıt formunu doldurup gönderdiğinde çalışan ana fonksiyon.
@@ -207,7 +240,6 @@ async function handleRegistrationModalSubmit(interaction) {
   const robloxResult = await robloxService.resolveUser(robloxInput);
 
   if (!robloxResult.success) {
-    // Hesap bulunamadıysa DM ile bilgilendir
     if (robloxResult.error === 'NOT_FOUND') {
       try {
         await interaction.user.send(
@@ -222,7 +254,6 @@ async function handleRegistrationModalSubmit(interaction) {
       });
     }
 
-    // Yasaklı (Banned) hesap
     if (robloxResult.error === 'BANNED') {
       try {
         await interaction.user.send(
@@ -236,7 +267,6 @@ async function handleRegistrationModalSubmit(interaction) {
       });
     }
 
-    // Diğer API / Bağlantı hataları
     return interaction.editReply({
       content: `❌ ${robloxResult.message || 'Roblox doğrulaması yapılamadı.'}`,
     });
@@ -268,7 +298,6 @@ async function handleRegistrationModalSubmit(interaction) {
       reason: `Özel Kayıt Odası - ${realName} (${interaction.user.tag})`,
     });
   } catch (err) {
-    // Özel thread yetkisi veya sunucu seviyesi yetersizse genel thread aç
     try {
       thread = await registerChannel.threads.create({
         name: `🟡・${interaction.user.username}`,
@@ -284,10 +313,8 @@ async function handleRegistrationModalSubmit(interaction) {
     }
   }
 
-  // Kullanıcıyı odaya ekle
   await thread.members.add(interaction.user.id).catch(() => {});
 
-  // Odaya karşılama ve işleyiş bilgilendirme mesajı gönder
   const threadInfoEmbed = new EmbedBuilder()
     .setTitle('🟡 Başvuru İnceleniyor...')
     .setColor(config.COLORS.PENDING)
@@ -296,7 +323,7 @@ async function handleRegistrationModalSubmit(interaction) {
       `📋 **Kayıt İşleyişi Bilgilendirmesi:**\n` +
       `• Bilgileriniz ve Roblox profiliniz başarıyla doğrulandı.\n` +
       `• Başvurunuz yetkili onay kanalına iletildi.\n` +
-      `• Yetkililerimiz onayladığında rolleriniz otomatik olarak tanımlanacaktır.\n` +
+      `• Yetkililerimiz onayladığında rolleriniz otomatik olarak tanımlanacak ve odanız silinecektir.\n` +
       `• Başvurunuz reddedilirse, red sebebi bu odadan ve DM üzerinden size bildirilecektir.\n\n` +
       `⏳ *Lütfen yetkili kararını sabırla bekleyiniz.*`
     )
@@ -310,9 +337,6 @@ async function handleRegistrationModalSubmit(interaction) {
 
   // 4. Yetkili Onay Kartı Gönderme
   const staffChannel = interaction.guild.channels.cache.get(config.CHANNELS.STAFF_APPROVAL);
-  if (!staffChannel) {
-    console.error(`[ONAY KANALI] Yetkili onay kanalı (${config.CHANNELS.STAFF_APPROVAL}) bulunamadı!`);
-  }
 
   const staffEmbed = new EmbedBuilder()
     .setTitle('📋 Yeni Kayıt Başvurusu')
@@ -369,7 +393,6 @@ async function handleRegistrationModalSubmit(interaction) {
     });
   }
 
-  // Aktif başvuruyu kaydet
   database.setActiveApplication(interaction.user.id, {
     threadId: thread.id,
     realName,
@@ -381,7 +404,6 @@ async function handleRegistrationModalSubmit(interaction) {
     staffChannelId: staffChannel ? staffChannel.id : null,
   });
 
-  // Kullanıcıya ephemeral yanıt
   return interaction.editReply({
     content: `✅ Başvurunuz başarıyla alındı! Size özel oluşturulan kayıt odasını takip edebilirsiniz: <#${thread.id}>`,
   });
@@ -391,7 +413,6 @@ async function handleRegistrationModalSubmit(interaction) {
  * Yetkili ✅ ONAYLA butonuna bastığında çalışan fonksiyon.
  */
 async function handleApprove(interaction, applicantId) {
-  // Yetki Kontrolü
   const isStaff =
     interaction.member.roles.cache.has(config.ROLES.STAFF) ||
     interaction.member.permissions.has(PermissionFlagsBits.Administrator);
@@ -443,15 +464,18 @@ async function handleApprove(interaction, applicantId) {
       await applicantMember.roles.remove(config.ROLES.UNREGISTERED, 'Kayıt tamamlandı.');
     }
 
-    // 3. Sunucu İçi İsmi Güncelle (Opsiyonel / Hiyerarşi izin verirse)
+    // 4. Sunucu İçi İsmi Güncelle: {Formda yazdığı gerçek adı} | {Roblox Oyuncu Nicki}
     if (activeApp && activeApp.realName) {
-      const newNick = `${activeApp.realName} | ${activeApp.robloxUsername || ''}`.trim();
-      if (newNick.length <= 32) {
-        await applicantMember.setNickname(newNick).catch(() => {});
+      const fullNick = `${activeApp.realName} | ${activeApp.robloxUsername || ''}`.trim();
+      const newNick = fullNick.length > 32 ? fullNick.slice(0, 32) : fullNick;
+      try {
+        await applicantMember.setNickname(newNick, 'Kayıt onaylandı - Otomatik isim güncelleme');
+      } catch (nickErr) {
+        console.warn(`[NICKNAME GÜNCELLEME HATASI] (${applicantMember.user.tag}):`, nickErr.message);
       }
     }
 
-    // 4. Veritabanına Başarılı Kayıt Olarak Ekle
+    // 5. Veritabanına Başarılı Kayıt Olarak Ekle
     database.addRegistration({
       discordId: applicantId,
       robloxId: activeApp ? activeApp.robloxId : null,
@@ -465,7 +489,7 @@ async function handleApprove(interaction, applicantId) {
     // Aktif başvurudan kaldır
     database.removeActiveApplication(applicantId);
 
-    // 5. Yetkili Kartını Yeşile Çevir ve Güncelle
+    // 6. Yetkili Kartını Yeşile Çevir ve Güncelle
     if (interaction.message) {
       const oldEmbed = interaction.message.embeds[0];
       const updatedEmbed = EmbedBuilder.from(oldEmbed)
@@ -479,33 +503,8 @@ async function handleApprove(interaction, applicantId) {
 
       await interaction.message.edit({
         embeds: [updatedEmbed],
-        components: [], // Butonları kaldır
+        components: [],
       });
-    }
-
-    // 6. Özel Kayıt Odasına Bilgilendirme Gönder
-    if (activeApp && activeApp.threadId) {
-      const thread = await interaction.guild.channels.fetch(activeApp.threadId).catch(() => null);
-      if (thread) {
-        const approvedThreadEmbed = new EmbedBuilder()
-          .setTitle('✅ Kayıt Başvurunuz Onaylandı!')
-          .setColor(config.COLORS.SUCCESS)
-          .setDescription(
-            `🎉 Tebrikler <@${applicantId}>!\n\n` +
-            `Kayıt başvurunuz yetkili <@${interaction.user.id}> tarafından **ONAYLANDI**.\n` +
-            `Sunucu rolleriniz başarıyla tanımlandı. Aramıza hoş geldin, iyi oyunlar dileriz!`
-          )
-          .setTimestamp();
-
-        await thread.send({
-          content: `<@${applicantId}>`,
-          embeds: [approvedThreadEmbed],
-        });
-
-        // Odanın adını güncelle ve kilitle
-        await thread.setName(`✅・${activeApp.realName}`).catch(() => {});
-        await thread.setLocked(true).catch(() => {});
-      }
     }
 
     // 7. Kullanıcıya DM Gönder
@@ -515,8 +514,21 @@ async function handleApprove(interaction, applicantId) {
       );
     } catch (e) {}
 
+    // 8. Özel Kayıt Odasını (Alt Başlığı) Sil
+    if (activeApp && activeApp.threadId) {
+      try {
+        const thread = await interaction.guild.channels.fetch(activeApp.threadId).catch(() => null);
+        if (thread) {
+          await thread.delete('Kayıt işlemi tamamlandı - Özel oda silindi.');
+          console.log(`[THREAD SİLİNDİ] Onaylanan kayıt odası silindi: ${activeApp.threadId}`);
+        }
+      } catch (threadErr) {
+        console.warn(`[THREAD SİLME HATASI] (${activeApp.threadId}):`, threadErr.message);
+      }
+    }
+
     return interaction.editReply({
-      content: `✅ <@${applicantId}> kullanıcısının kaydı başarıyla onaylandı ve rolleri verildi!`,
+      content: `✅ <@${applicantId}> kullanıcısının kaydı başarıyla onaylandı, rolleri verildi, ismi güncellendi ve kayıt odası silindi!`,
     });
   } catch (err) {
     console.error('[ONAY HATASI] Onaylama sırasında hata:', err);
@@ -569,7 +581,6 @@ async function handleRejectModalSubmit(interaction, applicantId) {
   const activeApp = database.getActiveApplication(applicantId);
   const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
 
-  // Aktif başvurulardan kaldır (böylece tekrar başvurabilir)
   database.removeActiveApplication(applicantId);
 
   // 1. Yetkili Kartını Kırmızıya Çevir ve Sebebi Ekle
@@ -597,7 +608,7 @@ async function handleRejectModalSubmit(interaction, applicantId) {
 
           await staffMsg.edit({
             embeds: [updatedEmbed],
-            components: [], // Butonları kaldır
+            components: [],
           });
         }
       }
@@ -606,10 +617,9 @@ async function handleRejectModalSubmit(interaction, applicantId) {
     console.error('[RED KART GÜNCELLEME HATASI]:', cardErr.message);
   }
 
-  // 2. Özel Kayıt Odasına Bilgilendirme Gönder ve 5 Dakika Sonra Silinmesi İçin Zamanlayıcı Kur
-  let threadRef = null;
+  // 2. Özel Kayıt Odasına Bilgilendirme Gönder ve 5 Dakika Sonra Sil
   if (activeApp && activeApp.threadId) {
-    threadRef = await interaction.guild.channels.fetch(activeApp.threadId).catch(() => null);
+    const threadRef = await interaction.guild.channels.fetch(activeApp.threadId).catch(() => null);
     if (threadRef) {
       const rejectedThreadEmbed = new EmbedBuilder()
         .setTitle('✖️ Kayıt Başvurunuz Reddedildi')
@@ -629,13 +639,11 @@ async function handleRejectModalSubmit(interaction, applicantId) {
 
       await threadRef.setName('✖️・reddedildi').catch(() => {});
 
-      // 5 dakika (300,000 ms) sonra odayı sil
       setTimeout(async () => {
         try {
           const t = await interaction.guild.channels.fetch(activeApp.threadId).catch(() => null);
           if (t) {
             await t.delete('Kayıt başvurusu reddedildi (5 dakika süre doldu)');
-            console.log(`[THREAD TEMİZLİK] Reddedilen başvuru odası silindi (${activeApp.threadId}).`);
           }
         } catch (e) {}
       }, 5 * 60 * 1000);
@@ -657,4 +665,282 @@ async function handleRejectModalSubmit(interaction, applicantId) {
   return interaction.editReply({
     content: `✖️ <@${applicantId}> kullanıcısının başvurusu reddedildi ve kullanıcı bilgilendirildi. Oda 5 dakika içinde silinecek.`,
   });
+}
+
+// =========================================================================
+// VS (KAPIŞMA) SİSTEMİ FONKSİYONLARI
+// =========================================================================
+
+/**
+ * Kullanıcı "⚔️ VS Talep Oluştur" butonuna bastığında çalışan fonksiyon.
+ */
+async function handleVsRequestStart(interaction) {
+  // Aktif Talep Kontrolü: Oyuncunun açık VS kanalı var mı?
+  const existingVs = database.getActiveVsByUser(interaction.user.id);
+  if (existingVs) {
+    const existingChannel = await interaction.guild.channels.fetch(existingVs.channelId).catch(() => null);
+    if (existingChannel) {
+      return interaction.reply({
+        content: `❌ Zaten açık bir VS talebiniz bulunuyor: <#${existingVs.channelId}>`,
+        ephemeral: true,
+      });
+    } else {
+      database.removeActiveVs(existingVs.channelId);
+    }
+  }
+
+  // Rakip Seçimi için UserSelectMenu
+  const userSelect = new UserSelectMenuBuilder()
+    .setCustomId('select_vs_opponent')
+    .setPlaceholder('Kapışmak istediğin rakibini seç...')
+    .setMinValues(1)
+    .setMaxValues(1);
+
+  const row = new ActionRowBuilder().addComponents(userSelect);
+
+  return interaction.reply({
+    content: `⚔️ **VS Talep Başlatma**\nLütfen aşağıdan kapışmak istediğiniz rakibi seçiniz:`,
+    components: [row],
+    ephemeral: true,
+  });
+}
+
+/**
+ * Kullanıcı rakibini menüden seçtiğinde çalışan fonksiyon.
+ */
+async function handleVsOpponentSelected(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const opponentId = interaction.values[0];
+
+  // Kontrol 1: Kendisiyle kapışamaz
+  if (opponentId === interaction.user.id) {
+    return interaction.editReply({
+      content: '❌ Kendinle kapışamazsın!',
+    });
+  }
+
+  // Kontrol 2: Rakip üye bulunabiliyor mu ve bot mu?
+  const opponentMember = await interaction.guild.members.fetch(opponentId).catch(() => null);
+  if (!opponentMember || opponentMember.user.bot) {
+    return interaction.editReply({
+      content: '❌ Bir bot veya sunucuda bulunmayan bir kullanıcı ile kapışamazsınız!',
+    });
+  }
+
+  // Kontrol 3: Açan kişinin aktif talebi var mı?
+  const challengerActive = database.getActiveVsByUser(interaction.user.id);
+  if (challengerActive) {
+    return interaction.editReply({
+      content: `❌ Zaten açık bir VS talebiniz bulunuyor: <#${challengerActive.channelId}>`,
+    });
+  }
+
+  // Kontrol 4: Rakibin aktif talebi var mı?
+  const opponentActive = database.getActiveVsByUser(opponentId);
+  if (opponentActive) {
+    return interaction.editReply({
+      content: `❌ Seçtiğiniz kullanıcının (<@${opponentId}>) halihazırda devam eden açık bir VS maçı bulunuyor!`,
+    });
+  }
+
+  // Adım 4: Özel VS Kanalının Oluşturulması
+  try {
+    const parentCategory = interaction.channel.parentId || null;
+    const challengerNick = interaction.member.displayName || interaction.user.username;
+    const opponentNick = opponentMember.displayName || opponentMember.user.username;
+
+    const channelName = `vs-${sanitizeChannelName(challengerNick)}-vs-${sanitizeChannelName(opponentNick)}`;
+
+    // Kanal İzinleri
+    const permissionOverwrites = [
+      {
+        id: interaction.guild.id, // @everyone
+        deny: [PermissionFlagsBits.ViewChannel],
+      },
+      {
+        id: interaction.user.id, // Açan kişi
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      },
+      {
+        id: opponentId, // Rakip
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.ReadMessageHistory,
+        ],
+      },
+      {
+        id: interaction.client.user.id, // Bot
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageChannels,
+          PermissionFlagsBits.ManageMessages,
+        ],
+      },
+    ];
+
+    // Yetkili rolü izni ekle
+    if (config.ROLES.VS_STAFF && interaction.guild.roles.cache.has(config.ROLES.VS_STAFF)) {
+      permissionOverwrites.push({
+        id: config.ROLES.VS_STAFF,
+        allow: [
+          PermissionFlagsBits.ViewChannel,
+          PermissionFlagsBits.SendMessages,
+          PermissionFlagsBits.AttachFiles,
+          PermissionFlagsBits.ReadMessageHistory,
+          PermissionFlagsBits.ManageMessages,
+        ],
+      });
+    }
+
+    const vsChannel = await interaction.guild.channels.create({
+      name: channelName,
+      type: ChannelType.GuildText,
+      parent: parentCategory,
+      topic: `vs|${interaction.user.id}|${opponentId}|standard|${Date.now()}`,
+      permissionOverwrites: permissionOverwrites,
+      reason: `VS Talebi: ${challengerNick} vs ${opponentNick}`,
+    });
+
+    // Kanal içi karar mesajı
+    const roomPayload = createVsRoomMessage(interaction.member, opponentMember);
+    const pinnedMsg = await vsChannel.send(roomPayload);
+    await pinnedMsg.pin().catch(() => {});
+
+    // Veritabanına kaydet
+    database.setActiveVs(vsChannel.id, {
+      channelId: vsChannel.id,
+      challengerId: interaction.user.id,
+      opponentId: opponentId,
+      createdAt: Date.now(),
+      warned5Hours: false,
+      messageId: pinnedMsg.id,
+    });
+
+    return interaction.editReply({
+      content: `✅ VS odanız başarıyla açıldı! Maç kanalına gitmek için tıklayın: <#${vsChannel.id}>`,
+    });
+  } catch (err) {
+    console.error('[VS ODA AÇMA HATASI]:', err);
+    return interaction.editReply({
+      content: `❌ VS kanalı oluşturulurken bir hata meydana geldi: ${err.message}`,
+    });
+  }
+}
+
+/**
+ * Kapışma Talep Yetkilisi Kazanan Belirlediğinde çalışan fonksiyon.
+ */
+async function handleVsWinnerDecision(interaction, winnerId) {
+  // Yetki Kontrolü
+  const isVsStaff =
+    interaction.member.roles.cache.has(config.ROLES.VS_STAFF) ||
+    interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+
+  if (!isVsStaff) {
+    return interaction.reply({
+      content: '❌ Bu butonlara sadece Kapışma Talep Yetkilisi basabilir!',
+      ephemeral: true,
+    });
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const vsData = database.getActiveVsByChannel(interaction.channel.id);
+  let challengerId = vsData ? vsData.challengerId : null;
+  let opponentId = vsData ? vsData.opponentId : null;
+
+  // Veritabanında bulunamadıysa topic'ten kurtar
+  if (!challengerId && interaction.channel.topic && interaction.channel.topic.startsWith('vs|')) {
+    const parts = interaction.channel.topic.split('|');
+    challengerId = parts[1];
+    opponentId = parts[2];
+  }
+
+  // Kaybeden kim?
+  const loserId = String(winnerId) === String(challengerId) ? opponentId : challengerId;
+
+  // 1. İstatistikleri Güncelle (Kill ve Galibiyet)
+  const winnerStats = database.addVsWin(winnerId);
+  if (loserId) {
+    database.addVsLoss(loserId);
+  }
+
+  // 2. Resmi Sonuç Kanalına Duyuru Gönder ([vs sonuç])
+  const resultChannel = interaction.guild.channels.cache.get(config.CHANNELS.VS_RESULT);
+  if (resultChannel) {
+    try {
+      const announcementPayload = createVsResultAnnouncement(winnerId, loserId, winnerStats.kills);
+      await resultChannel.send(announcementPayload);
+      console.log(`[VS SONUÇ] Sonuç duyuruldu: Kazanan ${winnerId}, Kill: ${winnerStats.kills}`);
+    } catch (sendErr) {
+      console.error('[VS SONUÇ DUYURU HATASI]:', sendErr.message);
+    }
+  }
+
+  // 3. Top 10 Sıralama Tablosunu Güncelle ([top 10])
+  await updateTop10Message(interaction.guild);
+
+  // 4. Odaya Bitiş Mesajı Gönder
+  await interaction.channel.send({
+    content:
+      `🏆 **VS Sonuçlandı!**\n` +
+      `**Kazanan:** <@${winnerId}>\n` +
+      `Yetkili: <@${interaction.user.id}>\n\n` +
+      `📌 Resmi duyuru <#${config.CHANNELS.VS_RESULT}> kanalına iletildi ve Top 10 sıralaması güncellendi.\n` +
+      `⏳ Bu oda **5 saniye** içinde kalıcı olarak silinecektir.`,
+  });
+
+  // Veritabanından aktif VS'i kaldır
+  database.removeActiveVs(interaction.channel.id);
+
+  // 5. Odayı 5 Saniye Sonra Kalıcı Olarak Sil
+  setTimeout(async () => {
+    try {
+      await interaction.channel.delete(`VS maçı sonuçlandı (Kazanan: ${winnerId})`);
+      console.log(`[VS KANAL SİLİNDİ] ${interaction.channel.id} kanalı başarıyla kapatıldı.`);
+    } catch (delErr) {}
+  }, 5000);
+
+  return interaction.editReply({
+    content: `✅ Maç başarıyla sonuçlandırıldı! Kazanan <@${winnerId}> olarak kaydedildi ve oda siliniyor.`,
+  });
+}
+
+/**
+ * Kapışma Talep Yetkilisi Talebi İptal Ettiğinde çalışan fonksiyon.
+ */
+async function handleVsCancelDecision(interaction) {
+  const isVsStaff =
+    interaction.member.roles.cache.has(config.ROLES.VS_STAFF) ||
+    interaction.member.permissions.has(PermissionFlagsBits.Administrator);
+
+  if (!isVsStaff) {
+    return interaction.reply({
+      content: '❌ Bu butonlara sadece Kapışma Talep Yetkilisi basabilir!',
+      ephemeral: true,
+    });
+  }
+
+  await interaction.reply({
+    content: '🔴 Bu VS talebi yetkili tarafından iptal edildi. Oda siliniyor...',
+  });
+
+  database.removeActiveVs(interaction.channel.id);
+
+  setTimeout(async () => {
+    try {
+      await interaction.channel.delete(`VS yetkili tarafından iptal edildi (${interaction.user.tag})`);
+    } catch (e) {}
+  }, 3000);
 }
