@@ -1,6 +1,7 @@
 const { Events, ActivityType } = require('discord.js');
 const config = require('../../config');
 const { checkVsDeadlines, updateTop10Message } = require('../utils/vsManager');
+const { updateHelpPanelMessage } = require('../utils/helpManager');
 
 module.exports = {
   name: Events.ClientReady,
@@ -64,5 +65,20 @@ module.exports = {
         console.error('[VS DEADLINE INTERVAL HATASI]:', err);
       });
     }, 30 * 60 * 1000); // 30 dakikada bir
+
+    // Acil Yardım Paneli 30 Saniyelik Aktiflik Güncelleme Döngüsü
+    setTimeout(() => {
+      const guild = client.guilds.cache.get(config.GUILD_ID);
+      if (guild) updateHelpPanelMessage(guild).catch(() => {});
+    }, 8000);
+
+    setInterval(() => {
+      const guild = client.guilds.cache.get(config.GUILD_ID);
+      if (guild) {
+        updateHelpPanelMessage(guild).catch((err) => {
+          // Çok sık log basıp terminali kirletmemesi için warn seviyesinde tutulabilir
+        });
+      }
+    }, 30 * 1000); // 30 saniyede bir paneli güncelle
   },
 };

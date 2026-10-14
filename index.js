@@ -9,6 +9,7 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,      // Sunucuya katılan üyeleri ve rolleri algılamak için
+    GatewayIntentBits.GuildPresences,    // Üyelerin çevrim içi/aktiflik durumunu okumak için
     GatewayIntentBits.GuildMessages,
   ],
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember, Partials.User],

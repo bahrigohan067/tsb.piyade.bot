@@ -15,6 +15,7 @@ class DatabaseManager {
       vsStats: {},          // { [userId]: { kills: number, wins: number, losses: number, lastUpdated: number } }
       activeVs: {},         // { [channelId]: { channelId, challengerId, opponentId, createdAt, warned5Hours: boolean } }
       top10MessageId: null, // Top 10 paneli mesaj ID'si
+      helpPanelMessageId: null, // Acil yardım paneli mesaj ID'si
     };
     this.init();
   }
@@ -34,6 +35,7 @@ class DatabaseManager {
           vsStats: parsed.vsStats || {},
           activeVs: parsed.activeVs || {},
           top10MessageId: parsed.top10MessageId || null,
+          helpPanelMessageId: parsed.helpPanelMessageId || null,
         };
       } else {
         this.save();
@@ -219,6 +221,16 @@ class DatabaseManager {
 
   setTop10MessageId(msgId) {
     this.data.top10MessageId = msgId;
+    this.save();
+  }
+
+  // Acil Yardım Paneli mesaj ID'si
+  getHelpPanelMessageId() {
+    return this.data.helpPanelMessageId || null;
+  }
+
+  setHelpPanelMessageId(msgId) {
+    this.data.helpPanelMessageId = msgId;
     this.save();
   }
 }

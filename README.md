@@ -69,6 +69,20 @@ Bu bot, **Piyade Team | TSB** Discord sunucusu için geliştirilmiş, Roblox API
 
 ---
 
+### 4. 🚨 Acil Takviye & Yardım Çağrısı Sistemi
+* **Panel Kurulumu (`/yardim_paneli_kur`):**
+  - `https://discord.com/channels/1559313292651008040/1559323174594945104` kanalına **Kırmızı** temalı acil yardım paneli kurulur.
+* **Canlı Discord Aktiflik Göstergesi:**
+  - Bot anlık olarak `<@&1559604702143062016>` rolüne sahip tüm kullanıcıların Discord aktifliklerini kontrol eder.
+  - Paneli **30 saniyede bir** güncelleyerek: Çevrim içi (🟢), Boşta (🌙), Rahatsız Etmeyin (⛔), Çevrim dışı (⚫) sayılarını ve anlık aktif üyeleri gösterir.
+* **Acil Yardım Çağrısı:**
+  - TSB oyununda 1v3 / teamer baskısına uğrayan veya yardıma ihtiyacı olan üye **`🚨 ACİL YARDIM ÇAĞIR`** butonuna basar.
+  - Bildirim kanalına (`https://discord.com/channels/1559313292651008040/1559928245598560336`) en başta `<@&1559604702143062016>` rolü etiketlenerek acil durum alarm kartı düşer.
+* **5 Dakika Bekleme Süresi (Cooldown):**
+  - Butona basan üye **5 dakika** boyunca tekrar butona basamaz.
+
+---
+
 ## 🛠️ Slash Komutları Listesi
 
 | Komut | Yetki | Açıklama |
@@ -77,6 +91,7 @@ Bu bot, **Piyade Team | TSB** Discord sunucusu için geliştirilmiş, Roblox API
 | `/kayit-bilgi` | Yetkili | Bir üyenin veya Roblox ID'sinin kayıt detaylarını sorgular. |
 | `/vs_talep_panel_kur` | Yönetici | VS Talep panelini ilgili kanala kurar. |
 | `/top10_guncelle` | Yönetici | Top 10 sıralama tablosunu anında yeniler. |
+| `/yardim_paneli_kur` | Yönetici | Acil Yardım ve Takviye Çağrısı panelini kurar. |
 
 ---
 

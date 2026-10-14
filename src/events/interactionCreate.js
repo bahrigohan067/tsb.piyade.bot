@@ -23,6 +23,7 @@ const {
   updateTop10Message,
   sanitizeChannelName,
 } = require('../utils/vsManager');
+const { handleHelpRequest } = require('../utils/helpManager');
 
 module.exports = {
   name: Events.InteractionCreate,
@@ -114,6 +115,11 @@ module.exports = {
         // [F] VS SİSTEMİ: Karar Butonları: Talep İptal Edildi (btn_vs_cancel)
         if (interaction.customId === 'btn_vs_cancel') {
           return handleVsCancelDecision(interaction);
+        }
+
+        // [G] ACİL YARDIM ÇAĞRISI BUTONU (btn_acil_yardim)
+        if (interaction.customId === 'btn_acil_yardim') {
+          return handleHelpRequest(interaction);
         }
       }
 

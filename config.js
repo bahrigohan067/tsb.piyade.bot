@@ -19,6 +19,10 @@ module.exports = {
     VS_RESULT: '1559317757294546975',
     // Top 10 Sıralama Kanalı
     TOP10: '1559318329775104020',
+    // Acil Takviye / Yardım Paneli Kanalı
+    HELP_PANEL: '1559323174594945104',
+    // Yardım Çağrılarının Düşeceği Bildirim Kanalı
+    HELP_ALERT: '1559928245598560336',
   },
 
   // Rol ID'leri
