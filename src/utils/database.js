@@ -154,15 +154,17 @@ class DatabaseManager {
     return this.data.vsStats[id];
   }
 
-  // Top 10 listesi getir (En çok kill alan en üstte)
+  // Top 10 listesi getir (En çok kill alan en üstte, 0 kill olanlar dahil edilmez)
   getTop10() {
-    const entries = Object.entries(this.data.vsStats).map(([userId, stats]) => ({
-      userId,
-      kills: stats.kills || 0,
-      wins: stats.wins || 0,
-      losses: stats.losses || 0,
-      lastUpdated: stats.lastUpdated || 0,
-    }));
+    const entries = Object.entries(this.data.vsStats)
+      .map(([userId, stats]) => ({
+        userId,
+        kills: stats.kills || 0,
+        wins: stats.wins || 0,
+        losses: stats.losses || 0,
+        lastUpdated: stats.lastUpdated || 0,
+      }))
+      .filter((entry) => entry.kills > 0); // 0 kill olanlar sıralamada yer almaz
 
     // Kill sayısına göre çoktan aza sırala
     entries.sort((a, b) => {
