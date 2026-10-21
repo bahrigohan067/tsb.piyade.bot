@@ -92,6 +92,7 @@ Bu bot, **Piyade Team | TSB** Discord sunucusu için geliştirilmiş, Roblox API
 | `/vs_talep_panel_kur` | Yönetici | VS Talep panelini ilgili kanala kurar. |
 | `/top10_guncelle` | Yönetici | Top 10 sıralama tablosunu anında yeniler. |
 | `/yardim_paneli_kur` | Yönetici | Acil Yardım ve Takviye Çağrısı panelini kurar. |
+| `!temizle [sayı]` / `/temizle` | Mesajları Yönet | Belirtilen miktarda mesajı kanaldan siler (1 - 300). |
 
 ---
 
