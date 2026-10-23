@@ -427,16 +427,11 @@ function createChunkedFields(baseTitle, content) {
 }
 
 /**
- * Yetkili kontrolü (Tryout Yetkilisi, Developer, Yönetici veya Sunucu Kurucusu)
+ * Yetkili kontrolü (Sadece 1559614111128490044 rolü)
  */
-function hasTryoutPermission(member, guild) {
-  if (!member || !guild) return false;
-  return (
-    member.id === guild.ownerId ||
-    member.roles.cache.has(config.ROLES.TRYOUT_STAFF) ||
-    member.roles.cache.has(config.ROLES.DEVELOPER) ||
-    member.permissions.has(PermissionFlagsBits.Administrator)
-  );
+function hasTryoutPermission(member) {
+  if (!member || !member.roles || !member.roles.cache) return false;
+  return member.roles.cache.has(config.ROLES.TRYOUT_STAFF);
 }
 
 /**
@@ -770,9 +765,9 @@ async function handleTryoutModalSubmit(interaction, targetUserId) {
  * Hatalı bir formu iptal eder, verilen rolü geri alır ve önceki rolü kullanıcıya iade eder (/form-iptal)
  */
 async function handleCancelFormCommand(interaction, rawFormCode) {
-  if (!hasTryoutPermission(interaction.member, interaction.guild)) {
+  if (!interaction.member.roles.cache.has(config.ROLES.TRYOUT_STAFF)) {
     return interaction.reply({
-      content: `❌ Bu komutu sadece <@&${config.ROLES.TRYOUT_STAFF}> yetkilileri, Developer veya Yöneticiler kullanabilir!`,
+      content: `❌ Bu komutu sadece <@&${config.ROLES.TRYOUT_STAFF}> rolüne sahip yetkililer kullanabilir!`,
       ephemeral: true,
     });
   }
