@@ -93,6 +93,7 @@ Bu bot, **Piyade Team | TSB** Discord sunucusu için geliştirilmiş, Roblox API
 | `/top10_guncelle` | Yönetici | Top 10 sıralama tablosunu anında yeniler. |
 | `/yardim_paneli_kur` | Yönetici | Acil Yardım ve Takviye Çağrısı panelini kurar. |
 | `!temizle [sayı]` / `/temizle` | Mesajları Yönet | Belirtilen miktarda mesajı kanaldan siler (1 - 300). |
+| `/rols` | Kurucu | Sunucudaki rolleri ve ID'lerini hiyerarşi sırasıyla listeler. |
 
 ---
 
