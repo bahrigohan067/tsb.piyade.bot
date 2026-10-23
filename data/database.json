@@ -3,5 +3,9 @@
   "activeApplications": {},
   "vsStats": {},
   "activeVs": {},
-  "top10MessageId": null
+  "top10MessageId": null,
+  "helpPanelMessageId": null,
+  "tryoutStats": {},
+  "tryoutForms": {},
+  "tryoutLeaderboardMessageId": null
 }

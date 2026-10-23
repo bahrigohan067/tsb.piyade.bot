@@ -24,6 +24,11 @@ const {
   sanitizeChannelName,
 } = require('../utils/vsManager');
 const { handleHelpRequest } = require('../utils/helpManager');
+const {
+  handleTryoutStart,
+  handleTryoutUserSelected,
+  handleTryoutModalSubmit,
+} = require('../utils/tryoutManager');
 
 module.exports = {
   name: Events.InteractionCreate,
@@ -121,6 +126,11 @@ module.exports = {
         if (interaction.customId === 'btn_acil_yardim') {
           return handleHelpRequest(interaction);
         }
+
+        // [H] TRYOUT / SEVİYE DEĞERLENDİRME BUTONU (btn_tryout_degerlendir)
+        if (interaction.customId === 'btn_tryout_degerlendir') {
+          return handleTryoutStart(interaction);
+        }
       }
 
       // 3. AÇILIR MENÜ (STRING SELECT MENU) ETKİLEŞİMLERİ
@@ -171,10 +181,14 @@ module.exports = {
         }
       }
 
-      // 4. USER SELECT MENU (VS RAKİP SEÇİMİ)
+      // 4. USER SELECT MENU (VS RAKİP SEÇİMİ & TRYOUT KULLANICI SEÇİMİ)
       if (interaction.isUserSelectMenu()) {
         if (interaction.customId === 'select_vs_opponent') {
           return handleVsOpponentSelected(interaction);
+        }
+
+        if (interaction.customId === 'select_tryout_user') {
+          return handleTryoutUserSelected(interaction);
         }
       }
 
@@ -189,6 +203,12 @@ module.exports = {
         if (interaction.customId.startsWith('modal_reject_staff_')) {
           const applicantId = interaction.customId.replace('modal_reject_staff_', '');
           return handleRejectModalSubmit(interaction, applicantId);
+        }
+
+        // [C] Tryout Seviye Değerlendirme Formu Gönderimi
+        if (interaction.customId.startsWith('modal_tryout_eval_')) {
+          const targetUserId = interaction.customId.replace('modal_tryout_eval_', '');
+          return handleTryoutModalSubmit(interaction, targetUserId);
         }
       }
     } catch (err) {
