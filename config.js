@@ -48,6 +48,9 @@ module.exports = {
 
     // Kapışma Talep Yetkilisi Rolü
     VS_STAFF: '1559892661547307038',
+
+    // Developer Rolü
+    DEVELOPER: '1561777507223601353',
   },
 
   // Renk Kodları (Discord Embed renkleri)

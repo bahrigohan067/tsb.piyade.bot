@@ -4,14 +4,17 @@ const config = require('../../config');
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('rols')
-    .setDescription('Sunucudaki tüm rolleri ve ID\'lerini sırasıyla gösterir. (Sadece Kurucu)')
+    .setDescription('Sunucudaki tüm rolleri ve ID\'lerini sırasıyla gösterir. (Kurucu & Developer)')
     .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
 
   async execute(interaction) {
-    // 1. Güvenlik Kontrolü: Sadece Sunucu Kurucusu (Owner) kullanabilir
-    if (interaction.user.id !== interaction.guild.ownerId) {
+    // 1. Güvenlik Kontrolü: Sunucu Kurucusu veya Developer Rolü (<@&1561777507223601353>)
+    const isOwner = interaction.user.id === interaction.guild.ownerId;
+    const isDeveloper = config.ROLES.DEVELOPER && interaction.member.roles.cache.has(config.ROLES.DEVELOPER);
+
+    if (!isOwner && !isDeveloper) {
       return interaction.reply({
-        content: `❌ Bu komutu yalnızca **Sunucu Kurucusu** (<@${interaction.guild.ownerId}>) kullanabilir!`,
+        content: `❌ Bu komutu yalnızca **Sunucu Kurucusu** veya **<@&${config.ROLES.DEVELOPER}>** rolüne sahip kişiler kullanabilir!`,
         ephemeral: true,
       });
     }
@@ -55,7 +58,7 @@ module.exports = {
             roleLines.join('\n\n')
           )
           .setFooter({
-            text: `Toplam Rol: ${sortedRoles.length} • Sadece Kurucu Yetkisi`,
+            text: `Toplam Rol: ${sortedRoles.length} • Kurucu & Developer Yetkisi`,
           })
           .setTimestamp();
 
