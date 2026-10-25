@@ -7,6 +7,7 @@ const {
 
 const config = require('../../config');
 const database = require('./database');
+const robloxService = require('../services/roblox');
 
 // 5 dakikalık bekleme süresi (Cooldown: Map<userId, timestamp>)
 const helpCooldowns = new Map();
@@ -112,12 +113,12 @@ async function createHelpPanelPayload(guild) {
       `• Çoklu kişiye karşı (**1v2, 1v3, 1v4 Teamerlar**) tek kaldıysanız,\n` +
       `• Sunucuda ezilme, hedef alınma veya haksız durumlara maruz kalıyorsanız,\n` +
       `• Ekipçe baskın veya acil arkadaş desteğine ihtiyacınız varsa!\n\n` +
-      `Aşağıda bulunan **"🚨 ACİL YARDIM ÇAĞIR"** butonuna basarak tüm Piyade Team savaşçılarına acil durum bildirimi gönderebilirsiniz!\n\n` +
+      `Aşağıda bulunan **"🚨 ACİL YARDIM ÇAĞIR"** butonuna basarak tüm Piyade Team savaşçılarına acil durum bildirimi ve DM mesajı gönderebilirsiniz!\n\n` +
       `***\n\n` +
       `## 📋 Nasıl Kullanılır?\n` +
       `> **1️⃣ Adım:** Aşağıdaki kırmızı **"🚨 ACİL YARDIM ÇAĞIR"** butonuna basın.\n` +
-      `> **2️⃣ Adım:** Bot anında <#${config.CHANNELS.HELP_ALERT}> kanalına <@&${config.ROLES.REGISTERED_CHECK}> rolünü etiketleyerek bildirim atar.\n` +
-      `> **3️⃣ Adım:** Açılan çağrı kanalına Roblox sunucu linkinizi veya profilinizi atarak ekibinize katılmalarını sağlayın!\n\n` +
+      `> **2️⃣ Adım:** Bot anında <#${config.CHANNELS.HELP_ALERT}> kanalına bildirim atar ve aktif olan tüm üyelerin **DM kutusuna** acil çağrı mesajı gönderir.\n` +
+      `> **3️⃣ Adım:** Bildirim mesajının altındaki **"🎮 Roblox Profiline Git & Sunucusuna Katıl"** butonuna basan üyeler doğrudan profilinize giderek sunucunuza katılır!\n\n` +
       `***\n\n` +
       `${presenceSection}` +
       `***\n\n` +
@@ -209,11 +210,29 @@ async function handleHelpRequest(interaction) {
     });
   }
 
-  // Kullanıcının Roblox bilgilerini veritabanından bul
-  const reg = database.getRegistrationByDiscordId(userId);
-  const robloxInfo = reg
-    ? `[${reg.robloxUsername} (@${reg.realName || ''})](https://www.roblox.com/users/${reg.robloxId}/profile)`
-    : '`Profil Kayıtlı Değil`';
+  // Kullanıcının Roblox bilgilerini veritabanından (veya sunucu takma adından) bul
+  let reg = database.getRegistrationByDiscordId(userId);
+  let robloxProfileUrl = null;
+  let robloxInfo = '`Profil Kayıtlı Değil`';
+
+  if (reg && reg.robloxId) {
+    robloxProfileUrl = `https://www.roblox.com/users/${reg.robloxId}/profile`;
+    robloxInfo = `[${reg.robloxUsername} (@${reg.realName || ''})](${robloxProfileUrl})`;
+  } else {
+    // Veritabanında yoksa sunucu takma adından ("Gerçek Ad | RobloxNick") çözümlemeyi dene
+    const displayName = interaction.member.displayName || interaction.user.username;
+    const parts = displayName.split('|').map((s) => s.trim());
+    const possibleRobloxNick = parts.length > 1 ? parts[parts.length - 1] : displayName;
+
+    const resolved = await robloxService.resolveUser(possibleRobloxNick).catch(() => null);
+    if (resolved && resolved.success && resolved.user) {
+      robloxProfileUrl = `https://www.roblox.com/users/${resolved.user.id}/profile`;
+      robloxInfo = `[${resolved.user.name} (@${resolved.user.displayName})](${robloxProfileUrl})`;
+    } else {
+      robloxProfileUrl = `https://www.roblox.com/search/users?keyword=${encodeURIComponent(possibleRobloxNick)}`;
+      robloxInfo = `[${possibleRobloxNick}](${robloxProfileUrl})`;
+    }
+  }
 
   const alertEmbed = new EmbedBuilder()
     .setTitle('🚨 ACİL DESTEK / TAKVİYE ÇAĞRISI!')
@@ -226,24 +245,86 @@ async function handleHelpRequest(interaction) {
       `⚔️ **Durum:** TSB oyununda acil takviye ihtiyacı (1v3, teamer baskısı veya haksız kapışma)!\n` +
       `⏰ **Çağrı Zamanı:** <t:${Math.floor(now / 1000)}:F> (<t:${Math.floor(now / 1000)}:R>)\n\n` +
       `***\n\n` +
-      `> ⚡ **Aktif olan tüm üyeler:** Lütfen derhal bu mesaja yanıt vererek veya arkadaşımızın sunucusuna girerek desteğe katılın!`
+      `> ⚡ **Aktif olan tüm üyeler:** Lütfen derhal aşağıdaki butona tıklayarak arkadaşımızın profiline gidin ve bulunduğu sunucuya girerek desteğe katılın!`
     )
     .setFooter({
       text: 'Piyade Team • Acil Müdahale & Destek Sistemi',
     })
     .setTimestamp();
 
+  // Bildirimin altındaki doğrudan Roblox Profiline götüren buton
+  const profileButtonRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setLabel('🎮 Roblox Profiline Git & Sunucusuna Katıl')
+      .setStyle(ButtonStyle.Link)
+      .setURL(robloxProfileUrl)
+  );
+
   try {
-    // Mesajın en başında rol etiketleniyor
-    await alertChannel.send({
+    // 1) Bildirim kanalına mesajı ve profil butonunu gönder
+    const sentAlertMsg = await alertChannel.send({
       content: `<@&${config.ROLES.REGISTERED_CHECK}> 🚨 **ACİL TAKVİYE ÇAĞRISI!**`,
       embeds: [alertEmbed],
+      components: [profileButtonRow],
     });
+
+    // 2) Aktif olan (<@&1559604702143062016> rolündeki online/idle/dnd) kullanıcılara DM gönder
+    const presenceStats = await getRolePresenceStats(interaction.guild);
+    let dmTargets = [];
+
+    if (presenceStats && presenceStats.activeMembers.length > 0) {
+      dmTargets = presenceStats.activeMembers
+        .map((item) => item.member)
+        .filter((m) => m.id !== userId && !m.user.bot);
+    }
+
+    const dmEmbed = new EmbedBuilder()
+      .setTitle('🚨 PİYADE TEAM | ACİL TAKVİYE ÇAĞRISI!')
+      .setColor(0xED4245)
+      .setDescription(
+        `⚡ **Sunucumuzda bir ekip arkadaşımız şu an oyunda acil yardıma ihtiyaç duyuyor!**\n\n` +
+        `👤 **Yardım İsteyen Savaşçı:** <@${userId}> (\`${interaction.member.displayName}\`)\n` +
+        `🎮 **Roblox Profili:** ${robloxInfo}\n` +
+        `📢 **Bildirim Kanalı:** <#${config.CHANNELS.HELP_ALERT}>\n` +
+        `⏰ **Çağrı Zamanı:** <t:${Math.floor(now / 1000)}:R>\n\n` +
+        `> 👇 **Hemen desteğe katılmak için aşağıdaki butona basarak oyuncunun Roblox profiline gidebilir ve sunucusuna katılabilirsin!**`
+      )
+      .setFooter({
+        text: 'Piyade Team • Acil Müdahale & DM Bildirim Sistemi',
+      })
+      .setTimestamp();
+
+    const dmButtonRow = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('🎮 Roblox Profiline Git & Sunucusuna Katıl')
+        .setStyle(ButtonStyle.Link)
+        .setURL(robloxProfileUrl),
+      new ButtonBuilder()
+        .setLabel('📢 Bildirim Mesajına Git')
+        .setStyle(ButtonStyle.Link)
+        .setURL(sentAlertMsg.url)
+    );
+
+    // Aktif üyelere paralel olarak DM gönder (DM'i kapalı olanlarda hata vermeden geçer)
+    let dmSuccessCount = 0;
+    if (dmTargets.length > 0) {
+      const dmResults = await Promise.allSettled(
+        dmTargets.map((member) =>
+          member.user.send({
+            content: `🚨 **ACİL TAKVİYE ÇAĞRISI!** <@${userId}> oyunda destek bekliyor!`,
+            embeds: [dmEmbed],
+            components: [dmButtonRow],
+          })
+        )
+      );
+      dmSuccessCount = dmResults.filter((r) => r.status === 'fulfilled').length;
+    }
 
     return interaction.editReply({
       content:
         `✅ **Acil yardım çağrınız başarıyla gönderildi!**\n` +
-        `Bildirim <#${config.CHANNELS.HELP_ALERT}> kanalına <@&${config.ROLES.REGISTERED_CHECK}> rolü etiketlenerek iletildi.\n` +
+        `• 📢 Bildirim <#${config.CHANNELS.HELP_ALERT}> kanalına **Roblox Profil Butonu** ile birlikte iletildi.\n` +
+        `• 📩 Şu anda aktif olan **${dmSuccessCount}** ekip üyemize özel **DM bildirimi** gönderildi.\n` +
         `*(Bir sonraki yardım çağrısını 5 dakika sonra yapabilirsiniz.)*`,
     });
   } catch (err) {
