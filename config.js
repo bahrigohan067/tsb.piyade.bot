@@ -35,6 +35,10 @@ module.exports = {
     COLOR_PANEL: '1559605214690934854',
     // Küfür / Uygunsuz İçerik Log Kanalı
     PROFANITY_LOG: '1563911595590156361',
+    // Uyarı Verme Paneli Kanalı
+    WARNING_PANEL: '1563923294602666125',
+    // Uyarıların Düşeceği Bildirim / Log Kanalı
+    WARNING_LOG: '1563923439121604720',
   },
 
   // Rol ID'leri
@@ -69,6 +73,23 @@ module.exports = {
 
     // Mesaj Denetimcisi Rolü (Küfür log kanalında etiketlenir)
     MESSAGE_MODERATOR: '1563914587273953363',
+
+    // Askıda (1 Haftalık Karantina / Jail) Rolü
+    SUSPENDED: '1563922256525000895',
+
+    // Uyarı Sistemi Yetkilileri (Butonları ve /uyari-iptal komutunu kullanabilenler)
+    WARNING_AUTHORITIES: [
+      '1561777507223601353', // Developer
+      '1559614111128490044', // Yönetmenlik
+    ],
+
+    // 4. Yetkili Uyarısında veya Y1 İhlalinde Alınacak Yetkili Rolleri
+    STAFF_ROLES_TO_STRIP: [
+      '1559625308737507358', // Kayıt Yetkilisi
+      '1559892661547307038', // Kapışma Talep Yetkilisi
+      '1563914587273953363', // Mesaj Denetimcisi
+      '1559614111128490044', // Yönetmenlik / Tryout Yetkilisi
+    ],
   },
 
   // Özel Kullanıcı ID'leri
@@ -85,7 +106,8 @@ module.exports = {
     DANGER: 0xE74C3C,        // Kırmızı / Reddedildi
     GOLD_ORANGE: 0xFF8C00,   // Sarı ve Turuncu Karışımı (Top 10 için)
     NAVY: 0x0A2540,          // Lacivert (Tryout Değerlendirme Kartı için)
-    WARNING_ORANGE: 0xFF7A00, // Turuncu (Kullanıcı Uyarı DM'i için)
+    WARNING_ORANGE: 0xFF7A00, // Turuncu (Kullanıcı Uyarı DM'i & Sözlü Uyarı için)
+    DARK_RED: 0x8B0000,      // Koyu Kırmızı (Yetkili Uyarıları için)
   },
 
   // Özel Discord Emojileri

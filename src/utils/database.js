@@ -20,6 +20,9 @@ class DatabaseManager {
       tryoutForms: {},                // { [formCode]: { formCode, userId, staffId, previousRoleId, previousLevel, newRoleId, newLevel, description, improvements, resultMessageId, resultChannelId, createdAt, cancelled } }
       tryoutLeaderboardMessageId: null, // Tryout sıralama tablosu mesaj ID'si
       profanityStats: {},             // { [userId]: { userId, count, lastAt } }
+      warningRoles: {},               // Otomatik oluşturulan Uyarı / Yetkili Uyarı rol ID'leri
+      warningStats: {},               // { [userId]: { userId, points, tier, staffWarnings, totalWarnings, lastWarnedAt, suspendedUntil } }
+      warnings: {},                   // { [warnId]: { id, type, userId, staffId, ruleCode, reason, ... } }
     };
     this.init();
   }
@@ -44,6 +47,9 @@ class DatabaseManager {
           tryoutForms: parsed.tryoutForms || {},
           tryoutLeaderboardMessageId: parsed.tryoutLeaderboardMessageId || null,
           profanityStats: parsed.profanityStats || {},
+          warningRoles: parsed.warningRoles || {},
+          warningStats: parsed.warningStats || {},
+          warnings: parsed.warnings || {},
         };
       } else {
         this.save();
@@ -428,6 +434,95 @@ class DatabaseManager {
   getProfanityCount(userId) {
     const entry = this.data.profanityStats[String(userId)];
     return entry ? entry.count : 0;
+  }
+
+  // ==========================================
+  // UYARI SİSTEMİ BÖLÜMÜ
+  // ==========================================
+
+  getWarningRoles() {
+    return this.data.warningRoles || {};
+  }
+
+  setWarningRoles(rolesMap) {
+    this.data.warningRoles = {
+      ...(this.data.warningRoles || {}),
+      ...rolesMap,
+    };
+    this.save();
+    return this.data.warningRoles;
+  }
+
+  /**
+   * 4 Haneli Benzersiz Uyarı ID'si Üretir (Örn: A8F2)
+   */
+  generateWarningId() {
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    let id = '';
+    do {
+      id = '';
+      for (let i = 0; i < 4; i++) {
+        id += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+    } while (this.data.warnings && this.data.warnings[id]);
+    return id;
+  }
+
+  getUserWarningStats(userId) {
+    const uid = String(userId);
+    if (!this.data.warningStats[uid]) {
+      return {
+        userId: uid,
+        points: 0,
+        tier: 0,
+        staffWarnings: 0,
+        totalWarnings: 0,
+        lastWarnedAt: 0,
+        suspendedUntil: null,
+      };
+    }
+    return this.data.warningStats[uid];
+  }
+
+  setUserWarningStats(userId, stats) {
+    const uid = String(userId);
+    this.data.warningStats[uid] = {
+      ...this.getUserWarningStats(uid),
+      ...stats,
+      userId: uid,
+    };
+    this.save();
+    return this.data.warningStats[uid];
+  }
+
+  getAllWarningStats() {
+    return Object.values(this.data.warningStats || {});
+  }
+
+  saveWarningRecord(record) {
+    const id = String(record.id).toUpperCase().replace(/^#/, '');
+    this.data.warnings[id] = {
+      ...record,
+      id,
+      createdAt: record.createdAt || Date.now(),
+      cancelled: false,
+    };
+    this.save();
+    return this.data.warnings[id];
+  }
+
+  getWarningRecord(rawId) {
+    if (!rawId) return null;
+    const clean = String(rawId).trim().toUpperCase().replace(/^#/, '');
+    return this.data.warnings[clean] || null;
+  }
+
+  updateWarningRecord(rawId, patch) {
+    const record = this.getWarningRecord(rawId);
+    if (!record) return null;
+    Object.assign(record, patch);
+    this.save();
+    return record;
   }
 }
 

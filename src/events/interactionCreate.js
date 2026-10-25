@@ -30,6 +30,13 @@ const {
   handleTryoutModalSubmit,
 } = require('../utils/tryoutManager');
 const { handleColorButton } = require('../utils/colorManager');
+const {
+  handleWarningButton,
+  handleWarningUserSelected,
+  handleVerbalWarnModalSubmit,
+  handleOfficialWarnModalSubmit,
+  handleProofButton,
+} = require('../utils/warningManager');
 
 module.exports = {
   name: Events.InteractionCreate,
@@ -138,6 +145,24 @@ module.exports = {
           const roleId = interaction.customId.replace('btn_color_', '');
           return handleColorButton(interaction, roleId);
         }
+
+        // [J] UYARI SİSTEMİ: SÖZLÜ UYARI & RESMİ UYARI BUTONLARI
+        if (interaction.customId === 'btn_warn_verbal') {
+          return handleWarningButton(interaction, 'verbal');
+        }
+        if (interaction.customId === 'btn_warn_official') {
+          return handleWarningButton(interaction, 'official');
+        }
+
+        // [K] UYARI SİSTEMİ: KANIT GÖRSELİ YÜKLE / PAS GEÇ BUTONLARI
+        if (interaction.customId.startsWith('btn_warn_proof_upload_')) {
+          const warnId = interaction.customId.replace('btn_warn_proof_upload_', '');
+          return handleProofButton(interaction, 'upload', warnId);
+        }
+        if (interaction.customId.startsWith('btn_warn_proof_skip_')) {
+          const warnId = interaction.customId.replace('btn_warn_proof_skip_', '');
+          return handleProofButton(interaction, 'skip', warnId);
+        }
       }
 
       // 3. AÇILIR MENÜ (STRING SELECT MENU) ETKİLEŞİMLERİ
@@ -188,7 +213,7 @@ module.exports = {
         }
       }
 
-      // 4. USER SELECT MENU (VS RAKİP SEÇİMİ & TRYOUT KULLANICI SEÇİMİ)
+      // 4. USER SELECT MENU (VS RAKİP, TRYOUT & UYARI KULLANICI SEÇİMİ)
       if (interaction.isUserSelectMenu()) {
         if (interaction.customId === 'select_vs_opponent') {
           return handleVsOpponentSelected(interaction);
@@ -196,6 +221,14 @@ module.exports = {
 
         if (interaction.customId === 'select_tryout_user') {
           return handleTryoutUserSelected(interaction);
+        }
+
+        if (interaction.customId === 'select_warn_verbal_user') {
+          return handleWarningUserSelected(interaction, 'verbal');
+        }
+
+        if (interaction.customId === 'select_warn_official_user') {
+          return handleWarningUserSelected(interaction, 'official');
         }
       }
 
@@ -216,6 +249,18 @@ module.exports = {
         if (interaction.customId.startsWith('modal_tryout_eval_')) {
           const targetUserId = interaction.customId.replace('modal_tryout_eval_', '');
           return handleTryoutModalSubmit(interaction, targetUserId);
+        }
+
+        // [D] Sözlü Uyarı Formu Gönderimi
+        if (interaction.customId.startsWith('modal_warn_verbal_')) {
+          const targetUserId = interaction.customId.replace('modal_warn_verbal_', '');
+          return handleVerbalWarnModalSubmit(interaction, targetUserId);
+        }
+
+        // [E] Resmi Uyarı (Madde No) Formu Gönderimi
+        if (interaction.customId.startsWith('modal_warn_official_')) {
+          const targetUserId = interaction.customId.replace('modal_warn_official_', '');
+          return handleOfficialWarnModalSubmit(interaction, targetUserId);
         }
       }
     } catch (err) {

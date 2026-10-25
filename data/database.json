@@ -7,5 +7,9 @@
   "helpPanelMessageId": null,
   "tryoutStats": {},
   "tryoutForms": {},
-  "tryoutLeaderboardMessageId": null
+  "tryoutLeaderboardMessageId": null,
+  "profanityStats": {},
+  "warningRoles": {},
+  "warningStats": {},
+  "warnings": {}
 }

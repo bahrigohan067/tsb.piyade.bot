@@ -4,6 +4,11 @@ const { checkVsDeadlines, updateTop10Message } = require('../utils/vsManager');
 const { updateHelpPanelMessage } = require('../utils/helpManager');
 const { updateTryoutLeaderboard } = require('../utils/tryoutManager');
 const { ensureColorPanelMessage } = require('../utils/colorManager');
+const {
+  ensureWarningPanelMessage,
+  checkThirtyDayAmnesty,
+  checkSuspendedExpirations,
+} = require('../utils/warningManager');
 
 module.exports = {
   name: Events.ClientReady,
@@ -39,11 +44,12 @@ module.exports = {
           await guild.commands.set(commandsData);
           console.log(`[SLASH KOMUTLAR] ${commandsData.length} komut '${guild.name}' sunucusuna başarıyla yüklendi.`);
           
-          // Sunucu açılışında Top 10, Tryout Sıralama tablosu ve Renk Panelini güncelle/kur
+          // Sunucu açılışında Top 10, Tryout Sıralama tablosu, Renk Paneli ve Uyarı Panelini güncelle/kur
           setTimeout(() => {
             updateTop10Message(guild).catch(() => {});
             updateTryoutLeaderboard(guild).catch(() => {});
             ensureColorPanelMessage(guild).catch(() => {});
+            ensureWarningPanelMessage(guild).catch(() => {});
           }, 5000);
         } else {
           console.warn(`[SLASH KOMUTLAR] Guild ID (${config.GUILD_ID}) önbellekte bulunamadı. Genel (Global) olarak kaydediliyor...`);
@@ -84,5 +90,20 @@ module.exports = {
         });
       }
     }, 30 * 1000); // 30 saniyede bir paneli güncelle
+
+    // Uyarı Sistemi: 30 Dakikada Bir @Askıda (1 Haftalık Karantina) Süre Kontrolü
+    setTimeout(() => {
+      checkSuspendedExpirations(client).catch(() => {});
+      checkThirtyDayAmnesty(client).catch(() => {});
+    }, 15000);
+
+    setInterval(() => {
+      checkSuspendedExpirations(client).catch(() => {});
+    }, 30 * 60 * 1000); // Her 30 dakikada bir
+
+    // Uyarı Sistemi: Saat Başı 30 Günlük Otomatik Af Kontrolü
+    setInterval(() => {
+      checkThirtyDayAmnesty(client).catch(() => {});
+    }, 60 * 60 * 1000); // Her 1 saatte bir
   },
 };
