@@ -33,6 +33,8 @@ module.exports = {
     TRYOUT_LOG: '1562031846295076874',
     // İsim Rengi Seçim Paneli Kanalı
     COLOR_PANEL: '1559605214690934854',
+    // Küfür / Uygunsuz İçerik Log Kanalı
+    PROFANITY_LOG: '1563911595590156361',
   },
 
   // Rol ID'leri
@@ -80,6 +82,7 @@ module.exports = {
     DANGER: 0xE74C3C,        // Kırmızı / Reddedildi
     GOLD_ORANGE: 0xFF8C00,   // Sarı ve Turuncu Karışımı (Top 10 için)
     NAVY: 0x0A2540,          // Lacivert (Tryout Değerlendirme Kartı için)
+    WARNING_ORANGE: 0xFF7A00, // Turuncu (Kullanıcı Uyarı DM'i için)
   },
 
   // Özel Discord Emojileri

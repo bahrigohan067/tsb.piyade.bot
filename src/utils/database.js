@@ -19,6 +19,7 @@ class DatabaseManager {
       tryoutStats: {},                // { [userId]: { userId, roleId, level, formCount, lastUpdated } }
       tryoutForms: {},                // { [formCode]: { formCode, userId, staffId, previousRoleId, previousLevel, newRoleId, newLevel, description, improvements, resultMessageId, resultChannelId, createdAt, cancelled } }
       tryoutLeaderboardMessageId: null, // Tryout sıralama tablosu mesaj ID'si
+      profanityStats: {},             // { [userId]: { userId, count, lastAt } }
     };
     this.init();
   }
@@ -42,6 +43,7 @@ class DatabaseManager {
           tryoutStats: parsed.tryoutStats || {},
           tryoutForms: parsed.tryoutForms || {},
           tryoutLeaderboardMessageId: parsed.tryoutLeaderboardMessageId || null,
+          profanityStats: parsed.profanityStats || {},
         };
       } else {
         this.save();
@@ -404,6 +406,28 @@ class DatabaseManager {
   setTryoutLeaderboardMessageId(msgId) {
     this.data.tryoutLeaderboardMessageId = msgId;
     this.save();
+  }
+
+  // ==========================================
+  // KÜFÜR / UYGUNSUZ İÇERİK İHLAL KAYITLARI
+  // ==========================================
+
+  /**
+   * Kullanıcının ihlal sayacını 1 artırır ve toplam ihlal sayısını döndürür
+   */
+  addProfanityViolation(userId) {
+    const id = String(userId);
+    const current = this.data.profanityStats[id] || { userId: id, count: 0, lastAt: 0 };
+    current.count += 1;
+    current.lastAt = Date.now();
+    this.data.profanityStats[id] = current;
+    this.save();
+    return current.count;
+  }
+
+  getProfanityCount(userId) {
+    const entry = this.data.profanityStats[String(userId)];
+    return entry ? entry.count : 0;
   }
 }
 

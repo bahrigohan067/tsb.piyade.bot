@@ -1,11 +1,17 @@
 const { Events, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const config = require('../../config');
+const { moderateMessage } = require('../utils/moderationManager');
 
 module.exports = {
   name: Events.MessageCreate,
   async execute(message) {
     // Botların mesajlarını ve DM'leri yoksay
     if (message.author.bot || !message.guild) return;
+
+    // Küfür / Argo kontrolü (mesaj silinmez; DM uyarısı + yetkili logu)
+    moderateMessage(message).catch((err) =>
+      console.error('[KÜFÜR FİLTRESİ HATASI]:', err.message)
+    );
 
     const content = message.content.trim();
 
