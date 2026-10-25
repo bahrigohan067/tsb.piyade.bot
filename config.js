@@ -66,6 +66,9 @@ module.exports = {
 
     // Tryout / Seviye Değerlendirme Yetkilisi Rolü
     TRYOUT_STAFF: '1559614111128490044',
+
+    // Mesaj Denetimcisi Rolü (Küfür log kanalında etiketlenir)
+    MESSAGE_MODERATOR: '1563914587273953363',
   },
 
   // Özel Kullanıcı ID'leri

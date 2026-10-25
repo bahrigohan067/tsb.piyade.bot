@@ -193,7 +193,13 @@ function buildLogMessage(message, result, violationCount, dmStatus) {
       .setURL(message.url)
   );
 
-  return { embeds: [embed], components: [row], allowedMentions: { parse: [] } };
+  return {
+    content: `<@&${config.ROLES.MESSAGE_MODERATOR}> 🚨 **Uygunsuz içerik bildirimi!**`,
+    embeds: [embed],
+    components: [row],
+    // Sadece Mesaj Denetimcisi rolü etiketlenir; kullanıcı vb. etiketler bildirim atmaz
+    allowedMentions: { parse: [], roles: [config.ROLES.MESSAGE_MODERATOR] },
+  };
 }
 
 /**
