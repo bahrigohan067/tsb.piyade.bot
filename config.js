@@ -31,6 +31,8 @@ module.exports = {
     TRYOUT_RESULT: '1563218527584788560',
     // Seviye Atlama / Değişim Log Kanalı
     TRYOUT_LOG: '1562031846295076874',
+    // İsim Rengi Seçim Paneli Kanalı
+    COLOR_PANEL: '1559605214690934854',
   },
 
   // Rol ID'leri
@@ -103,6 +105,16 @@ module.exports = {
     COFFIN: '<:758573neoncoffin:1559915506650062948>',
     SKULL: '<:567685skull:1559915534617809017>',
   },
+
+  // İsim Rengi Rolleri (1559605214690934854 Kanalı İçin)
+  COLOR_ROLES: [
+    { id: '1559899395233808444', label: 'Siyah',   emoji: '🖤', style: 'Secondary' },
+    { id: '1559926857472675910', label: 'Kırmızı', emoji: '❤️', style: 'Danger' },
+    { id: '1559927000183873597', label: 'Sarı',    emoji: '💛', style: 'Secondary' },
+    { id: '1559926616535339010', label: 'Mavi',    emoji: '💙', style: 'Primary' },
+    { id: '1559926912338362379', label: 'Yeşil',   emoji: '💚', style: 'Success' },
+    { id: '1559926687645311017', label: 'Pembe',   emoji: '🩷', style: 'Primary' },
+  ],
 
   // Aşamalı Seviye Rolleri (1 = En Düşük Seviye, 37 = En Üst Seviye)
   LEVEL_ROLES: [

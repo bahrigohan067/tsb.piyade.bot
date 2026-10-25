@@ -3,6 +3,7 @@ const config = require('../../config');
 const { checkVsDeadlines, updateTop10Message } = require('../utils/vsManager');
 const { updateHelpPanelMessage } = require('../utils/helpManager');
 const { updateTryoutLeaderboard } = require('../utils/tryoutManager');
+const { ensureColorPanelMessage } = require('../utils/colorManager');
 
 module.exports = {
   name: Events.ClientReady,
@@ -38,10 +39,11 @@ module.exports = {
           await guild.commands.set(commandsData);
           console.log(`[SLASH KOMUTLAR] ${commandsData.length} komut '${guild.name}' sunucusuna başarıyla yüklendi.`);
           
-          // Sunucu açılışında Top 10 ve Tryout Sıralama tablosunu güncelle
+          // Sunucu açılışında Top 10, Tryout Sıralama tablosu ve Renk Panelini güncelle/kur
           setTimeout(() => {
             updateTop10Message(guild).catch(() => {});
             updateTryoutLeaderboard(guild).catch(() => {});
+            ensureColorPanelMessage(guild).catch(() => {});
           }, 5000);
         } else {
           console.warn(`[SLASH KOMUTLAR] Guild ID (${config.GUILD_ID}) önbellekte bulunamadı. Genel (Global) olarak kaydediliyor...`);

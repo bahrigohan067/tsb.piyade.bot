@@ -29,6 +29,7 @@ const {
   handleTryoutUserSelected,
   handleTryoutModalSubmit,
 } = require('../utils/tryoutManager');
+const { handleColorButton } = require('../utils/colorManager');
 
 module.exports = {
   name: Events.InteractionCreate,
@@ -130,6 +131,12 @@ module.exports = {
         // [H] TRYOUT / SEVİYE DEĞERLENDİRME BUTONU (btn_tryout_degerlendir)
         if (interaction.customId === 'btn_tryout_degerlendir') {
           return handleTryoutStart(interaction);
+        }
+
+        // [I] İSİM RENGİ SEÇİM BUTONLARI (btn_color_...)
+        if (interaction.customId.startsWith('btn_color_')) {
+          const roleId = interaction.customId.replace('btn_color_', '');
+          return handleColorButton(interaction, roleId);
         }
       }
 
