@@ -1,12 +1,21 @@
 const { Events, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const config = require('../../config');
 const { moderateMessage } = require('../utils/moderationManager');
+const { handleMediaChannel } = require('../utils/mediaChannelManager');
 
 module.exports = {
   name: Events.MessageCreate,
   async execute(message) {
     // Botların mesajlarını ve DM'leri yoksay
     if (message.author.bot || !message.guild) return;
+
+    // 1. Sadece Medya Kanalı Denetimi (Hedef kanalda düz metinleri siler ve uyarır)
+    try {
+      const isMediaRestricted = await handleMediaChannel(message);
+      if (isMediaRestricted) return; // Düz yazı silindi ve uyarıldı, sonraki işlemleri durdur
+    } catch (err) {
+      console.error('[MEDYA KANALI DENETİM HATASI]:', err.message);
+    }
 
     // Küfür / Argo kontrolü (mesaj silinmez; DM uyarısı + yetkili logu)
     moderateMessage(message).catch((err) =>

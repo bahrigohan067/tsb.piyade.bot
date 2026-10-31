@@ -8,16 +8,10 @@ const config = require('./config');
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMembers,          // Sunucuya katılan üyeleri ve rolleri algılamak için
-    GatewayIntentBits.GuildPresences,        // Üyelerin çevrim içi/aktiflik durumunu okumak için
+    GatewayIntentBits.GuildMembers,      // Sunucuya katılan üyeleri ve rolleri algılamak için
+    GatewayIntentBits.GuildPresences,    // Üyelerin çevrim içi/aktiflik durumunu okumak için
     GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,        // !temizle gibi mesaj komutlarını okumak için
-    GatewayIntentBits.GuildModeration,       // Ban/Unban ve ceza denetimi için
-    GatewayIntentBits.GuildVoiceStates,      // Ses odalarına giriş/çıkış/yayın takibi için
-    GatewayIntentBits.GuildEmojisAndStickers,// Emoji ve çıkartma hareketleri için
-    GatewayIntentBits.GuildInvites,          // Davet takibi için
-    GatewayIntentBits.GuildWebhooks,         // Webhook hareketleri için
-    GatewayIntentBits.GuildScheduledEvents,  // Sunucu etkinlikleri için
+    GatewayIntentBits.MessageContent,    // !temizle gibi mesaj komutlarını okumak için
   ],
   partials: [Partials.Channel, Partials.Message, Partials.GuildMember, Partials.User],
 });
@@ -46,17 +40,13 @@ if (fs.existsSync(eventsPath)) {
   const eventFiles = fs.readdirSync(eventsPath).filter((file) => file.endsWith('.js'));
   for (const file of eventFiles) {
     const filePath = path.join(eventsPath, file);
-    const eventModule = require(filePath);
-    const eventList = Array.isArray(eventModule) ? eventModule : [eventModule];
-    for (const event of eventList) {
-      if (!event || !event.name || typeof event.execute !== 'function') continue;
-      if (event.once) {
-        client.once(event.name, (...args) => event.execute(...args));
-      } else {
-        client.on(event.name, (...args) => event.execute(...args));
-      }
-      console.log(`[EVENT YÜKLENDİ] ${event.name}`);
+    const event = require(filePath);
+    if (event.once) {
+      client.once(event.name, (...args) => event.execute(...args));
+    } else {
+      client.on(event.name, (...args) => event.execute(...args));
     }
+    console.log(`[EVENT YÜKLENDİ] ${event.name}`);
   }
 }
 

@@ -39,8 +39,8 @@ module.exports = {
     WARNING_PANEL: '1563923294602666125',
     // Uyarıların Düşeceği Bildirim / Log Kanalı
     WARNING_LOG: '1563923439121604720',
-    // Sunucu Genel Denetim / Log Kanalı (Mesaj atma dışındaki tüm sunucu hareketleri)
-    SERVER_LOG: '1559617707169816698',
+    // Sadece Medya Paylaşım Kanalı
+    MEDIA: '1559316020227739806',
   },
 
   // Rol ID'leri
@@ -91,6 +91,12 @@ module.exports = {
       '1559892661547307038', // Kapışma Talep Yetkilisi
       '1563914587273953363', // Mesaj Denetimcisi
       '1559614111128490044', // Yönetmenlik / Tryout Yetkilisi
+    ],
+
+    // Medya Kanalı Denetiminden Muaf Yönetim Rolleri (Kurucu / Üst Yönetim)
+    MEDIA_EXEMPT: [
+      '1559614111128490044', // Yönetmenlik
+      '1561777507223601353', // Kurucu / Developer
     ],
   },
 
