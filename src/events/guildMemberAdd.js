@@ -1,9 +1,16 @@
 const { Events } = require('discord.js');
 const config = require('../../config');
+const { logMemberAdd } = require('../utils/serverLogManager');
 
 module.exports = {
   name: Events.GuildMemberAdd,
   async execute(member) {
+    // 1. Sunucu Genel Log Kanalına bildir
+    logMemberAdd(member).catch((err) =>
+      console.error('[ÜYE KATILMA LOG HATASI]:', err.message)
+    );
+
+    // 2. Otomatik Kayıtsız rolü ver
     try {
       const unregisteredRoleId = config.ROLES.UNREGISTERED;
       if (!unregisteredRoleId) return;
