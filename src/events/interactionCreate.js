@@ -37,6 +37,7 @@ const {
   handleOfficialWarnModalSubmit,
   handleProofButton,
 } = require('../utils/warningManager');
+const { createRegistrationApplication } = require('../services/registrationService');
 
 module.exports = {
   name: Events.InteractionCreate,
@@ -307,183 +308,24 @@ async function handleRegistrationModalSubmit(interaction) {
 
   const gender = isFemale ? '👩 Kız' : '👨 Erkek';
 
-  // Güvenlik & Tekrar Kontrolleri
-  if (interaction.member.roles.cache.has(config.ROLES.REGISTERED_CHECK)) {
-    return interaction.editReply({
-      content: '❌ Zaten sunucumuza kayıtlısınız!',
-    });
-  }
-
-  // 1. Roblox API Doğrulaması
-  const robloxResult = await robloxService.resolveUser(robloxInput);
-
-  if (!robloxResult.success) {
-    if (robloxResult.error === 'NOT_FOUND') {
-      try {
-        await interaction.user.send(
-          `❌ **Piyade Team | Kayıt Başvurusu Reddedildi**\n\n` +
-          `**Sebep:** Belirtilen Roblox hesabı bulunamadı.\n` +
-          `📌 **Önemli Bilgi:** Lütfen Roblox'taki görünen adınızı (Display Name) değil, profilinizdeki asıl **@kullanıcı** adınızı, ID'nizi veya profil linkinizi yazarak tekrar başvurunuz.`
-        );
-      } catch (e) {}
-
-      return interaction.editReply({
-        content: `❌ **Başvuru Reddedildi:** Girilen Roblox hesabı bulunamadı!\nLütfen görünen adınızı değil, **@kullanıcı** adınızı girdiğinizden emin olun. (Detaylar DM kutunuza iletildi.)`,
-      });
-    }
-
-    if (robloxResult.error === 'BANNED') {
-      try {
-        await interaction.user.send(
-          `❌ **Piyade Team | Kayıt Başvurusu Reddedildi**\n\n` +
-          `**Sebep:** Belirtilen Roblox hesabı Roblox platformunda kalıcı olarak yasaklanmıştır (Banned). Yasaklı hesaplarla sunucumuza kayıt olunamaz.`
-        );
-      } catch (e) {}
-
-      return interaction.editReply({
-        content: `❌ **Başvuru Reddedildi:** Bu Roblox hesabı platform üzerinde yasaklanmıştır (Banned)!`,
-      });
-    }
-
-    return interaction.editReply({
-      content: `❌ ${robloxResult.message || 'Roblox doğrulaması yapılamadı.'}`,
-    });
-  }
-
-  const robloxUser = robloxResult.user;
-
-  // 2. Multi-Hesap (Tekil Kimlik) Koruması
-  const existingReg = database.getRegistrationByRobloxId(robloxUser.id);
-  if (existingReg && String(existingReg.discordId) !== String(interaction.user.id)) {
-    return interaction.editReply({
-      content:
-        `❌ **Multi-Hesap Koruması Devrede!**\n\n` +
-        `Bu Roblox hesabı ([${robloxUser.name}](https://www.roblox.com/users/${robloxUser.id}/profile)) sunucumuzda başka bir Discord kullanıcısına (<@${existingReg.discordId}>) zaten kayıtlıdır!\n\n` +
-        `⚠️ *Sunucumuzda "1 Roblox Hesabı = 1 Discord Hesabı" kuralı geçerlidir.*`,
-    });
-  }
-
-  // 3. Özel Kayıt Odası (Thread) Oluşturma
-  const registerChannel =
-    interaction.guild.channels.cache.get(config.CHANNELS.REGISTER) || interaction.channel;
-
-  let thread;
-  try {
-    thread = await registerChannel.threads.create({
-      name: `🟡・${interaction.user.username}`,
-      autoArchiveDuration: 1440,
-      type: ChannelType.PrivateThread,
-      reason: `Özel Kayıt Odası - ${realName} (${interaction.user.tag})`,
-    });
-  } catch (err) {
-    try {
-      thread = await registerChannel.threads.create({
-        name: `🟡・${interaction.user.username}`,
-        autoArchiveDuration: 1440,
-        type: ChannelType.PublicThread,
-        reason: `Özel Kayıt Odası - ${realName} (${interaction.user.tag})`,
-      });
-    } catch (createErr) {
-      console.error('[THREAD ERROR] Kayıt odası oluşturulamadı:', createErr);
-      return interaction.editReply({
-        content: '❌ Özel kayıt odası oluşturulurken bir hata meydana geldi. Lütfen yetkililer ile iletişime geçiniz.',
-      });
-    }
-  }
-
-  await thread.members.add(interaction.user.id).catch(() => {});
-
-  const threadInfoEmbed = new EmbedBuilder()
-    .setTitle('🟡 Başvuru İnceleniyor...')
-    .setColor(config.COLORS.PENDING)
-    .setDescription(
-      `👋 Hoş geldin <@${interaction.user.id}>!\n\n` +
-      `📋 **Kayıt İşleyişi Bilgilendirmesi:**\n` +
-      `• Bilgileriniz ve Roblox profiliniz başarıyla doğrulandı.\n` +
-      `• Başvurunuz yetkili onay kanalına iletildi.\n` +
-      `• Yetkililerimiz onayladığında rolleriniz otomatik olarak tanımlanacak ve odanız silinecektir.\n` +
-      `• Başvurunuz reddedilirse, red sebebi bu odadan ve DM üzerinden size bildirilecektir.\n\n` +
-      `⏳ *Lütfen yetkili kararını sabırla bekleyiniz.*`
-    )
-    .setFooter({ text: 'Piyade Team • Kayıt Sistemi' })
-    .setTimestamp();
-
-  await thread.send({
-    content: `<@${interaction.user.id}>`,
-    embeds: [threadInfoEmbed],
-  });
-
-  // 4. Yetkili Onay Kartı Gönderme
-  const staffChannel = interaction.guild.channels.cache.get(config.CHANNELS.STAFF_APPROVAL);
-
-  const staffEmbed = new EmbedBuilder()
-    .setTitle('📋 Yeni Kayıt Başvurusu')
-    .setColor(config.COLORS.PENDING)
-    .setThumbnail(robloxUser.avatarUrl)
-    .addFields(
-      { name: '👤 Discord Kullanıcısı', value: `<@${interaction.user.id}> (\`${interaction.user.tag}\`)`, inline: true },
-      { name: '🆔 Discord ID', value: `\`${interaction.user.id}\``, inline: true },
-      { name: '📝 Gerçek Adı', value: `${realName}`, inline: true },
-      { name: '🚻 Cinsiyet', value: `${gender}`, inline: true },
-      {
-        name: '📅 Discord Hesap Açılış Tarihi',
-        value: `<t:${Math.floor(interaction.user.createdTimestamp / 1000)}:F> (<t:${Math.floor(interaction.user.createdTimestamp / 1000)}:R>)`,
-        inline: false,
-      },
-      {
-        name: '📥 Sunucuya Katılış Tarihi',
-        value: `<t:${Math.floor(interaction.member.joinedTimestamp / 1000)}:F> (<t:${Math.floor(interaction.member.joinedTimestamp / 1000)}:R>)`,
-        inline: false,
-      },
-      {
-        name: '🎮 Roblox Kullanıcı Adı',
-        value: `[${robloxUser.name} (@${robloxUser.displayName})](https://www.roblox.com/users/${robloxUser.id}/profile)`,
-        inline: true,
-      },
-      { name: '🆔 Roblox ID', value: `\`${robloxUser.id}\``, inline: true },
-      {
-        name: '🔗 Profil Linki',
-        value: `[Profili Görüntüle](https://www.roblox.com/users/${robloxUser.id}/profile)`,
-        inline: true,
-      },
-      { name: '🧵 Özel Kayıt Odası', value: `<#${thread.id}>`, inline: false }
-    )
-    .setFooter({ text: 'Piyade Team • Yetkili Onay Sistemi' })
-    .setTimestamp();
-
-  const buttonsRow = new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`btn_approve_${interaction.user.id}`)
-      .setLabel('✅ ONAYLA')
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`btn_reject_${interaction.user.id}`)
-      .setLabel('✖️ REDDET')
-      .setStyle(ButtonStyle.Danger)
-  );
-
-  let staffMessage = null;
-  if (staffChannel) {
-    staffMessage = await staffChannel.send({
-      content: `<@&${config.ROLES.STAFF}>`,
-      embeds: [staffEmbed],
-      components: [buttonsRow],
-    });
-  }
-
-  database.setActiveApplication(interaction.user.id, {
-    threadId: thread.id,
+  const result = await createRegistrationApplication({
+    guild: interaction.guild,
+    member: interaction.member,
+    user: interaction.user,
     realName,
     gender,
-    robloxId: robloxUser.id,
-    robloxUsername: robloxUser.name,
-    robloxDisplayName: robloxUser.displayName,
-    staffMessageId: staffMessage ? staffMessage.id : null,
-    staffChannelId: staffChannel ? staffChannel.id : null,
+    robloxInput,
+    source: 'discord',
   });
 
+  if (!result.success) {
+    return interaction.editReply({
+      content: `❌ ${result.message}`,
+    });
+  }
+
   return interaction.editReply({
-    content: `✅ Başvurunuz başarıyla alındı! Size özel oluşturulan kayıt odasını takip edebilirsiniz: <#${thread.id}>`,
+    content: `✅ Başvurunuz başarıyla alındı! Size özel oluşturulan kayıt odasını takip edebilirsiniz: <#${result.threadId}>`,
   });
 }
 

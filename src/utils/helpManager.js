@@ -180,10 +180,44 @@ async function updateHelpPanelMessage(guild) {
 }
 
 /**
- * Kullanıcı "🚨 ACİL YARDIM ÇAĞIR" Butonuna Bastığında Çalışan Fonksiyon
+ * Acil Yardım Durumu ve Aktiflik İstatistiklerini Döndürür
  */
-async function handleHelpRequest(interaction) {
-  const userId = interaction.user.id;
+async function getHelpStatus(guild, userId = null) {
+  const presenceStats = await getRolePresenceStats(guild);
+  let cooldownInfo = { active: false, remainingSeconds: 0, readyAt: null };
+
+  if (userId) {
+    const lastUsed = helpCooldowns.get(String(userId));
+    const COOLDOWN_MS = 5 * 60 * 1000;
+    const now = Date.now();
+    if (lastUsed && now - lastUsed < COOLDOWN_MS) {
+      const remainingMs = lastUsed + COOLDOWN_MS - now;
+      cooldownInfo = {
+        active: true,
+        remainingSeconds: Math.ceil(remainingMs / 1000),
+        readyAt: Math.floor((lastUsed + COOLDOWN_MS) / 1000),
+      };
+    }
+  }
+
+  return {
+    activeTotal: presenceStats ? presenceStats.activeTotal : 0,
+    totalRegistered: presenceStats ? presenceStats.total : 0,
+    onlineCount: presenceStats ? presenceStats.onlineCount : 0,
+    idleCount: presenceStats ? presenceStats.idleCount : 0,
+    dndCount: presenceStats ? presenceStats.dndCount : 0,
+    offlineCount: presenceStats ? presenceStats.offlineCount : 0,
+    cooldown: cooldownInfo,
+  };
+}
+
+/**
+ * Acil Yardım Çağrısını Gerçekleştiren Çekirdek Fonksiyon (Discord & Web API ortak)
+ */
+async function triggerHelpCall({ guild, member, user, source = 'discord' }) {
+  const targetMember = member;
+  const targetUser = user || member.user;
+  const userId = targetUser.id;
   const now = Date.now();
   const COOLDOWN_MS = 5 * 60 * 1000; // 5 Dakika
 
@@ -191,24 +225,27 @@ async function handleHelpRequest(interaction) {
   const lastUsed = helpCooldowns.get(userId);
   if (lastUsed && now - lastUsed < COOLDOWN_MS) {
     const readyAt = Math.floor((lastUsed + COOLDOWN_MS) / 1000);
-    return interaction.reply({
-      content: `⏳ **Bekleme Süresi Aktif!**\nÇok sık yardım çağrısı yapamazsınız. Yeniden çağrı yapabilmek için lütfen bekleyin: <t:${readyAt}:R>`,
-      ephemeral: true,
-    });
+    const remainingSeconds = Math.ceil((lastUsed + COOLDOWN_MS - now) / 1000);
+    return {
+      success: false,
+      cooldown: true,
+      remainingSeconds,
+      readyAt,
+      message: `Çok sık yardım çağrısı yapamazsınız. Yeniden çağrı yapabilmek için lütfen bekleyin (${remainingSeconds} saniye).`,
+    };
+  }
+
+  // 2. Yardım Bildirim Kanalını Kontrol Et
+  const alertChannel = guild.channels.cache.get(config.CHANNELS.HELP_ALERT);
+  if (!alertChannel) {
+    return {
+      success: false,
+      message: 'Yardım bildirim kanalı bulunamadı! Lütfen sunucu ayarlarını kontrol ediniz.',
+    };
   }
 
   // Cooldown kaydet
   helpCooldowns.set(userId, now);
-
-  await interaction.deferReply({ ephemeral: true });
-
-  // 2. Yardım Çağrısını Bildirim Kanalına Gönder
-  const alertChannel = interaction.guild.channels.cache.get(config.CHANNELS.HELP_ALERT);
-  if (!alertChannel) {
-    return interaction.editReply({
-      content: '❌ Yardım bildirim kanalı bulunamadı! Lütfen yetkililere danışınız.',
-    });
-  }
 
   // Kullanıcının Roblox bilgilerini veritabanından (veya sunucu takma adından) bul
   let reg = database.getRegistrationByDiscordId(userId);
@@ -220,7 +257,7 @@ async function handleHelpRequest(interaction) {
     robloxInfo = `[${reg.robloxUsername} (@${reg.realName || ''})](${robloxProfileUrl})`;
   } else {
     // Veritabanında yoksa sunucu takma adından ("Gerçek Ad | RobloxNick") çözümlemeyi dene
-    const displayName = interaction.member.displayName || interaction.user.username;
+    const displayName = targetMember.displayName || targetUser.username;
     const parts = displayName.split('|').map((s) => s.trim());
     const possibleRobloxNick = parts.length > 1 ? parts[parts.length - 1] : displayName;
 
@@ -240,15 +277,16 @@ async function handleHelpRequest(interaction) {
     .setDescription(
       `📢 <@&${config.ROLES.REGISTERED_CHECK}> **DİKKAT! BİR EKİP ÜYEMİZ OYUNDA DESTEK BEKLİYOR!**\n\n` +
       `***\n\n` +
-      `👤 **Yardım İsteyen Savaşçı:** <@${userId}> (\`${interaction.member.displayName}\`)\n` +
+      `👤 **Yardım İsteyen Savaşçı:** <@${userId}> (\`${targetMember.displayName}\`)\n` +
       `🎮 **Roblox Profili:** ${robloxInfo}\n` +
       `⚔️ **Durum:** TSB oyununda acil takviye ihtiyacı (1v3, teamer baskısı veya haksız kapışma)!\n` +
-      `⏰ **Çağrı Zamanı:** <t:${Math.floor(now / 1000)}:F> (<t:${Math.floor(now / 1000)}:R>)\n\n` +
+      `⏰ **Çağrı Zamanı:** <t:${Math.floor(now / 1000)}:F> (<t:${Math.floor(now / 1000)}:R>)\n` +
+      (source === 'site' ? `🌐 **Kaynak:** \`Web Sitesi Paneli\`\n\n` : `\n`) +
       `***\n\n` +
       `> ⚡ **Aktif olan tüm üyeler:** Lütfen derhal aşağıdaki butona tıklayarak arkadaşımızın profiline gidin ve bulunduğu sunucuya girerek desteğe katılın!`
     )
     .setFooter({
-      text: 'Piyade Team • Acil Müdahale & Destek Sistemi',
+      text: `Piyade Team • Acil Müdahale & Destek Sistemi${source === 'site' ? ' • Web Paneli' : ''}`,
     })
     .setTimestamp();
 
@@ -269,7 +307,7 @@ async function handleHelpRequest(interaction) {
     });
 
     // 2) Aktif olan (<@&1559604702143062016> rolündeki online/idle/dnd) kullanıcılara DM gönder
-    const presenceStats = await getRolePresenceStats(interaction.guild);
+    const presenceStats = await getRolePresenceStats(guild);
     let dmTargets = [];
 
     if (presenceStats && presenceStats.activeMembers.length > 0) {
@@ -283,7 +321,7 @@ async function handleHelpRequest(interaction) {
       .setColor(0xED4245)
       .setDescription(
         `⚡ **Sunucumuzda bir ekip arkadaşımız şu an oyunda acil yardıma ihtiyaç duyuyor!**\n\n` +
-        `👤 **Yardım İsteyen Savaşçı:** <@${userId}> (\`${interaction.member.displayName}\`)\n` +
+        `👤 **Yardım İsteyen Savaşçı:** <@${userId}> (\`${targetMember.displayName}\`)\n` +
         `🎮 **Roblox Profili:** ${robloxInfo}\n` +
         `📢 **Bildirim Kanalı:** <#${config.CHANNELS.HELP_ALERT}>\n` +
         `⏰ **Çağrı Zamanı:** <t:${Math.floor(now / 1000)}:R>\n\n` +
@@ -305,12 +343,12 @@ async function handleHelpRequest(interaction) {
         .setURL(sentAlertMsg.url)
     );
 
-    // Aktif üyelere paralel olarak DM gönder (DM'i kapalı olanlarda hata vermeden geçer)
+    // Aktif üyelere paralel olarak DM gönder
     let dmSuccessCount = 0;
     if (dmTargets.length > 0) {
       const dmResults = await Promise.allSettled(
-        dmTargets.map((member) =>
-          member.user.send({
+        dmTargets.map((m) =>
+          m.user.send({
             content: `🚨 **ACİL TAKVİYE ÇAĞRISI!** <@${userId}> oyunda destek bekliyor!`,
             embeds: [dmEmbed],
             components: [dmButtonRow],
@@ -320,23 +358,62 @@ async function handleHelpRequest(interaction) {
       dmSuccessCount = dmResults.filter((r) => r.status === 'fulfilled').length;
     }
 
-    return interaction.editReply({
-      content:
-        `✅ **Acil yardım çağrınız başarıyla gönderildi!**\n` +
-        `• 📢 Bildirim <#${config.CHANNELS.HELP_ALERT}> kanalına **Roblox Profil Butonu** ile birlikte iletildi.\n` +
-        `• 📩 Şu anda aktif olan **${dmSuccessCount}** ekip üyemize özel **DM bildirimi** gönderildi.\n` +
-        `*(Bir sonraki yardım çağrısını 5 dakika sonra yapabilirsiniz.)*`,
-    });
+    return {
+      success: true,
+      message: 'Acil yardım çağrınız başarıyla gönderildi!',
+      dmCount: dmSuccessCount,
+      alertMessageUrl: sentAlertMsg.url,
+      robloxProfileUrl,
+      readyAt: Math.floor((now + COOLDOWN_MS) / 1000),
+    };
   } catch (err) {
     console.error('[YARDIM ÇAĞRISI GÖNDERME HATASI]:', err);
-    return interaction.editReply({
-      content: `❌ Yardım çağrısı gönderilirken bir hata oluştu: ${err.message}`,
-    });
+    return {
+      success: false,
+      message: `Yardım çağrısı gönderilirken bir hata oluştu: ${err.message}`,
+    };
   }
 }
 
+/**
+ * Kullanıcı "🚨 ACİL YARDIM ÇAĞIR" Butonuna Bastığında Çalışan Fonksiyon
+ */
+async function handleHelpRequest(interaction) {
+  await interaction.deferReply({ ephemeral: true });
+
+  const result = await triggerHelpCall({
+    guild: interaction.guild,
+    member: interaction.member,
+    user: interaction.user,
+    source: 'discord',
+  });
+
+  if (!result.success) {
+    if (result.cooldown) {
+      return interaction.editReply({
+        content: `⏳ **Bekleme Süresi Aktif!**\nÇok sık yardım çağrısı yapamazsınız. Yeniden çağrı yapabilmek için lütfen bekleyin: <t:${result.readyAt}:R>`,
+      });
+    }
+    return interaction.editReply({
+      content: `❌ ${result.message}`,
+    });
+  }
+
+  return interaction.editReply({
+    content:
+      `✅ **Acil yardım çağrınız başarıyla gönderildi!**\n` +
+      `• 📢 Bildirim <#${config.CHANNELS.HELP_ALERT}> kanalına **Roblox Profil Butonu** ile birlikte iletildi.\n` +
+      `• 📩 Şu anda aktif olan **${result.dmCount}** ekip üyemize özel **DM bildirimi** gönderildi.\n` +
+      `*(Bir sonraki yardım çağrısını 5 dakika sonra yapabilirsiniz.)*`,
+  });
+}
+
 module.exports = {
+  getRolePresenceStats,
+  getHelpStatus,
+  triggerHelpCall,
   createHelpPanelPayload,
   updateHelpPanelMessage,
   handleHelpRequest,
+  helpCooldowns,
 };

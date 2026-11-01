@@ -561,26 +561,59 @@ function buildProofPromptRow(warnId) {
 }
 
 /**
- * 3A. Adım: Sözlü Uyarı Modal Gönderimi
+ * Uyarı Hiyerarşisi Doğrulaması
+ * - Kimse kendine uyarı veremez.
+ * - Hedefin en yüksek rolü, işlemi yapanınkine eşit veya üstteyse reddet (403).
+ * - Developer > Yönetmenlik > diğerleri.
+ * - Developer istisna: kendisi dışında herkese verebilir.
  */
-async function handleVerbalWarnModalSubmit(interaction, targetUserId) {
-  if (!hasWarningAuthority(interaction.member)) {
-    return interaction.reply({
-      content: '❌ Yetkiniz bulunmuyor!',
-      ephemeral: true,
-    });
+function checkWarningHierarchy(actorMember, targetMember) {
+  if (!actorMember || !targetMember) {
+    return { allowed: false, status: 400, message: 'Geçersiz yetkili veya hedef üye.' };
   }
 
-  await interaction.deferReply({ ephemeral: true });
-
-  const reason = interaction.fields.getTextInputValue('warn_verbal_reason').trim();
-  const targetMember = await interaction.guild.members.fetch(targetUserId).catch(() => null);
-
-  if (!targetMember) {
-    return interaction.editReply({
-      content: '❌ Seçilen kullanıcı sunucuda bulunamadı!',
-    });
+  // 1. Kimse kendine uyarı veremez
+  if (actorMember.id === targetMember.id) {
+    return { allowed: false, status: 403, message: 'Kendinize uyarı veremezsiniz!' };
   }
+
+  const isActorDev = isDeveloper(actorMember);
+
+  // 2. Developer istisna: kendisi dışında herkese verebilir!
+  if (isActorDev) {
+    return { allowed: true };
+  }
+
+  // 3. Developer değilse en az Yönetmenlik olmalıdır
+  if (!hasWarningAuthority(actorMember)) {
+    return { allowed: false, status: 403, message: 'Uyarı verme yetkiniz bulunmuyor (Yönetmenlik veya Developer gereklidir)!' };
+  }
+
+  // Hedef Developer ise reddet
+  if (isDeveloper(targetMember)) {
+    return { allowed: false, status: 403, message: 'Developer rolündeki bir yetkiliye uyarı veremezsiniz!' };
+  }
+
+  // Hedef Yönetmenlik ise reddet (eşit yetki)
+  if (hasWarningAuthority(targetMember)) {
+    return { allowed: false, status: 403, message: 'Eşit veya daha üst yetkiye (Yönetmenlik) sahip bir yetkiliye uyarı veremezsiniz!' };
+  }
+
+  // Hedefin en yüksek rolü aktörünkine eşit veya üstteyse reddet
+  if (targetMember.roles.highest.position >= actorMember.roles.highest.position) {
+    return { allowed: false, status: 403, message: 'Sizden eşit veya daha yüksek roldeki bir üyeye uyarı veremezsiniz!' };
+  }
+
+  return { allowed: true };
+}
+
+/**
+ * Sözlü Uyarı Verir (Discord & Web API ortak çekirdek fonksiyon)
+ */
+async function executeVerbalWarning({ guild, targetMember, staffUser, staffMember, reason, source = 'discord' }) {
+  const targetUserId = targetMember.id;
+  const staffId = staffUser.id;
+  const staffTag = staffUser.tag || staffUser.username;
 
   const userStats = database.getUserWarningStats(targetUserId);
   const newTotalWarnings = (userStats.totalWarnings || 0) + 1;
@@ -596,7 +629,8 @@ async function handleVerbalWarnModalSubmit(interaction, targetUserId) {
     id: warnId,
     type: 'verbal',
     userId: targetUserId,
-    staffId: interaction.user.id,
+    staffId,
+    staffTag,
     ruleCode: 'SÖZLÜ',
     reason,
     reasonDisplay: `🗣️ Sözlü İhtar — ${reason}`,
@@ -617,6 +651,7 @@ async function handleVerbalWarnModalSubmit(interaction, targetUserId) {
     appliedBan: false,
     appliedSuspended: false,
     proofUrl: null,
+    source,
     logChannelId: config.CHANNELS.WARNING_LOG,
     logMessageId: null,
     createdAt: Date.now(),
@@ -624,11 +659,11 @@ async function handleVerbalWarnModalSubmit(interaction, targetUserId) {
 
   // Uyarı Log Kanalına Gönder
   const logChannel =
-    interaction.guild.channels.cache.get(config.CHANNELS.WARNING_LOG) ||
-    (await interaction.guild.channels.fetch(config.CHANNELS.WARNING_LOG).catch(() => null));
+    guild.channels.cache.get(config.CHANNELS.WARNING_LOG) ||
+    (await guild.channels.fetch(config.CHANNELS.WARNING_LOG).catch(() => null));
 
   if (logChannel) {
-    const payload = buildWarningLogPayload(interaction.guild, record, memberRolesText);
+    const payload = buildWarningLogPayload(guild, record, memberRolesText);
     const sentMsg = await logChannel.send(payload).catch(() => null);
     if (sentMsg) {
       database.updateWarningRecord(warnId, { logMessageId: sentMsg.id });
@@ -643,60 +678,42 @@ async function handleVerbalWarnModalSubmit(interaction, targetUserId) {
           .setTitle('🗣️ Sözlü Uyarı Aldınız')
           .setColor(config.COLORS.WARNING_ORANGE)
           .setDescription(
-            `**${interaction.guild.name}** sunucusunda yetkili <@${interaction.user.id}> tarafından sözlü olarak uyarıldınız.\n\n` +
+            `**${guild.name}** sunucusunda yetkili <@${staffId}> tarafından sözlü olarak uyarıldınız.\n\n` +
             `📝 **Sebep:** ${reason}\n` +
             `📌 **Uyarı ID:** \`#${warnId}\`\n\n` +
             `*Bu uyarı puan eklemez ancak sicilinize kaydedilmiştir. Lütfen kurallara özen gösterin.*`
           )
           .setTimestamp(),
       ],
-    });
+    }).catch(() => {});
   } catch (e) {}
 
-  return interaction.editReply({
-    content:
-      `✅ <@${targetUserId}> kullanıcısına **Sözlü Uyarı** (\`#${warnId}\`) başarıyla verildi ve <#${config.CHANNELS.WARNING_LOG}> kanalına kaydedildi!\n\n` +
-      `📎 **Bu uyarıya kanıt görseli (ekran görüntüsü) eklemek ister misiniz?**`,
-    components: [buildProofPromptRow(warnId)],
-  });
+  return {
+    success: true,
+    warnId,
+    record,
+    newStats: database.getUserWarningStats(targetUserId),
+  };
 }
 
 /**
- * 3B. Adım: Resmi Uyarı Modal Gönderimi (Madde Numarası ile)
+ * Resmi Uyarı Verir (Discord & Web API ortak çekirdek fonksiyon)
  */
-async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
-  if (!hasWarningAuthority(interaction.member)) {
-    return interaction.reply({
-      content: '❌ Yetkiniz bulunmuyor!',
-      ephemeral: true,
-    });
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  const rawCode = interaction.fields.getTextInputValue('warn_rule_code').trim();
-  const rule = resolveRuleCode(rawCode);
-
+async function executeOfficialWarning({ guild, targetMember, staffUser, staffMember, ruleCode, source = 'discord' }) {
+  const rule = resolveRuleCode(ruleCode);
   if (!rule) {
-    return interaction.editReply({
-      content:
-        `❌ **Geçersiz Madde Numarası (\`${rawCode}\`)!**\n` +
-        `Lütfen geçerli bir madde kodu girin:\n` +
-        `• **Katılımcı Maddeleri:** \`M1\` - \`M13\`, \`D1\` - \`D3\`\n` +
-        `• **Yetkili Maddeleri:** \`Y1\` - \`Y5\`\n` +
-        `*(Not: RM1-RM18 maddeleri sistemde bulunmamaktadır).*`,
-    });
+    return {
+      success: false,
+      error: 'Geçersiz madde numarası! Katılımcı: M1-M13, D1-D3 | Yetkili: Y1-Y5',
+    };
   }
 
-  const targetMember = await interaction.guild.members.fetch(targetUserId).catch(() => null);
-  if (!targetMember) {
-    return interaction.editReply({
-      content: '❌ Seçilen kullanıcı sunucuda bulunamadı!',
-    });
-  }
+  const targetUserId = targetMember.id;
+  const staffId = staffUser.id;
+  const staffTag = staffUser.tag || staffUser.username;
 
-  // Uyarı kademesi rollerinin sunucuda hazır olduğundan emin ol
-  const warningRoles = await ensureWarningRoles(interaction.guild);
+  // Uyarı kademesi rollerinin hazır olduğundan emin ol
+  const warningRoles = await ensureWarningRoles(guild);
   const memberRolesBefore = formatMemberRoles(targetMember);
   const userStats = database.getUserWarningStats(targetUserId);
 
@@ -720,9 +737,7 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
   let appliedBan = false;
   let appliedSuspended = false;
 
-  // ==========================================
   // A) YETKİLİ MADDELERİ (Y1 - Y5)
-  // ==========================================
   if (rule.category === 'staff') {
     warnType = 'staff';
 
@@ -748,7 +763,7 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
       if (rolesToStrip.length > 0) {
         strippedRoles.push(...rolesToStrip);
         await targetMember.roles
-          .remove(rolesToStrip, `Y1 İhlali: Yetkiler alındı (Yetkili: ${interaction.user.tag})`)
+          .remove(rolesToStrip, `Y1 İhlali: Yetkiler alındı (Yetkili: ${staffTag})`)
           .catch(() => {});
       }
       actionsList.push('Ağır yetki ihlali (Y1): Kullanıcının tüm yetki rolleri anında alındı.');
@@ -758,7 +773,6 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
       pointsDisplay = `+1 Yetkili Uyarı (Toplam: ${newStaffWarnings}/4)`;
       expiresAtText = 'Kalıcı';
 
-      // Mevcut yetkili uyarı rollerini temizle
       const existingStaffWarnRoles = targetMember.roles.cache
         .filter((r) => staffWarningRoleIds.includes(r.id))
         .map((r) => r.id);
@@ -775,7 +789,7 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
         if (rolesToStrip.length > 0) {
           strippedRoles.push(...rolesToStrip);
           await targetMember.roles
-            .remove(rolesToStrip, `4. Yetkili Uyarısı Sınır Aşımı (Yetkili: ${interaction.user.tag})`)
+            .remove(rolesToStrip, `4. Yetkili Uyarısı Sınır Aşımı (Yetkili: ${staffTag})`)
             .catch(() => {});
         }
         actionsList.push('4. Yetkili Uyarısı (Sınır Aşımı): Tüm yetki ve yönetim rolleri geri alındı!');
@@ -791,9 +805,7 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
       }
     }
   }
-  // ==========================================
   // B) KATILIMCI MADDELERİ (M1 - M13, D1 - D3)
-  // ==========================================
   else {
     warnType = 'participant';
 
@@ -805,10 +817,10 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
 
       try {
         await targetMember.user.send(
-          `🔨 **${interaction.guild.name}** sunucusundan **${rule.code} — ${rule.description}** sebebiyle kalıcı olarak yasaklandınız.`
+          `🔨 **${guild.name}** sunucusundan **${rule.code} — ${rule.description}** sebebiyle kalıcı olarak yasaklandınız.`
         ).catch(() => {});
         await targetMember.ban({
-          reason: `${rule.code}: ${rule.description} (Yetkili: ${interaction.user.tag})`,
+          reason: `${rule.code}: ${rule.description} (Yetkili: ${staffTag})`,
         });
         actionsList.push('Kullanıcı sunucudan kalıcı olarak yasaklandı (Permanent Ban).');
       } catch (banErr) {
@@ -821,7 +833,7 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
       expiresAtText = 'Kalıcı';
 
       const removableRoles = targetMember.roles.cache
-        .filter((r) => r.id !== interaction.guild.id && !r.managed)
+        .filter((r) => r.id !== guild.id && !r.managed)
         .map((r) => r.id);
 
       if (removableRoles.length > 0) {
@@ -851,7 +863,7 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
       try {
         await targetMember.timeout(
           timeoutMs,
-          `${rule.code}: ${rule.description} (Yetkili: ${interaction.user.tag})`
+          `${rule.code}: ${rule.description} (Yetkili: ${staffTag})`
         );
         appliedTimeout = true;
         actionsList.push(`Puan işletilmeden doğrudan ${days} Gün Timeout (Zaman Aşımı) uygulandı.`);
@@ -876,7 +888,6 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
         warningRoles.uyari5,
       ].filter(Boolean);
 
-      // Eski Uyarı 1-5 rollerini temizle ve yeni kademe rolünü ver
       if (newTier === 0) {
         actionsList.push(`Ceza puanı işlendi (${newPoints} Puan — Kademe 0, henüz uyarı rolü verilmedi).`);
       } else {
@@ -897,7 +908,7 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
         actionsList.push(`Uyarı ${newTier} rolü verildi.`);
       }
 
-      // 10 Puan Kritik Eşiği: Puan 10'a ulaştığında veya aştığında anında +3 Gün Timeout
+      // 10 Puan Kritik Eşiği: Otomatik +3 Gün Timeout
       if (newPoints >= 10 && previousPoints < 10) {
         const threeDaysMs = 3 * 24 * 60 * 60 * 1000;
         try {
@@ -912,13 +923,13 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
         }
       }
 
-      // 15+ Puan Eşiği: Uyarı 5 + 1 Hafta Süreli @Askıda (1563922256525000895) Rolü
+      // 15+ Puan Eşiği: Uyarı 5 + 1 Hafta @Askıda (1563922256525000895)
       if (newPoints >= 15) {
         const oneWeekMs = 7 * 24 * 60 * 60 * 1000;
         newSuspendedUntil = Date.now() + oneWeekMs;
         appliedSuspended = true;
 
-        if (config.ROLES.SUSPENDED && interaction.guild.roles.cache.has(config.ROLES.SUSPENDED)) {
+        if (config.ROLES.SUSPENDED && guild.roles.cache.has(config.ROLES.SUSPENDED)) {
           await targetMember.roles
             .add(
               config.ROLES.SUSPENDED,
@@ -948,7 +959,8 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
     id: warnId,
     type: warnType,
     userId: targetUserId,
-    staffId: interaction.user.id,
+    staffId,
+    staffTag,
     ruleCode: rule.code,
     reason: rule.description,
     reasonDisplay: `${rule.code} — ${rule.description}`,
@@ -970,18 +982,19 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
     appliedBan,
     appliedSuspended,
     proofUrl: null,
+    source,
     logChannelId: config.CHANNELS.WARNING_LOG,
     logMessageId: null,
     createdAt: Date.now(),
   });
 
-  // Uyarı Log Kanalına (1563923439121604720) Gönder
+  // Uyarı Log Kanalına Gönder
   const logChannel =
-    interaction.guild.channels.cache.get(config.CHANNELS.WARNING_LOG) ||
-    (await interaction.guild.channels.fetch(config.CHANNELS.WARNING_LOG).catch(() => null));
+    guild.channels.cache.get(config.CHANNELS.WARNING_LOG) ||
+    (await guild.channels.fetch(config.CHANNELS.WARNING_LOG).catch(() => null));
 
   if (logChannel) {
-    const payload = buildWarningLogPayload(interaction.guild, record, memberRolesBefore);
+    const payload = buildWarningLogPayload(guild, record, memberRolesBefore);
     const sentMsg = await logChannel.send(payload).catch(() => null);
     if (sentMsg) {
       database.updateWarningRecord(warnId, { logMessageId: sentMsg.id });
@@ -997,7 +1010,7 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
             .setTitle('⚠️ Sunucu Uyarısı Aldınız!')
             .setColor(config.COLORS.DANGER)
             .setDescription(
-              `**${interaction.guild.name}** sunucusunda kural ihlali nedeniyle resmi uyarı aldınız.\n\n` +
+              `**${guild.name}** sunucusunda kural ihlali nedeniyle resmi uyarı aldınız.\n\n` +
               `📌 **Uyarı ID:** \`#${warnId}\`\n` +
               `📝 **İhlal Edilen Madde:** ${rule.code} — ${rule.description}\n` +
               `🚨 **Ceza / Puan:** ${pointsDisplay}\n` +
@@ -1010,14 +1023,161 @@ async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
     } catch (e) {}
   }
 
+  return {
+    success: true,
+    warnId,
+    record,
+    rule,
+    actionTakenText,
+    newStats: database.getUserWarningStats(targetUserId),
+  };
+}
+
+/**
+ * Uyarıya Kanıt Görseli Ekler (Discord & Web API ortak çekirdek fonksiyon)
+ */
+async function attachEvidenceToWarning({ guild, warnId, evidenceUrl, staffUser = null, source = 'discord' }) {
+  const record = database.getWarningRecord(warnId);
+  if (!record) {
+    return { success: false, error: 'Uyarı kaydı bulunamadı!' };
+  }
+
+  record.proofUrl = evidenceUrl;
+  database.updateWarningRecord(warnId, { proofUrl: evidenceUrl });
+
+  // Log mesajı varsa embed'i güncelle
+  const logChannel =
+    guild.channels.cache.get(config.CHANNELS.WARNING_LOG) ||
+    (await guild.channels.fetch(config.CHANNELS.WARNING_LOG).catch(() => null));
+
+  if (logChannel && record.logMessageId) {
+    const logMsg = await logChannel.messages.fetch(record.logMessageId).catch(() => null);
+    if (logMsg) {
+      const updatedPayload = buildWarningLogPayload(guild, record, record.memberRolesSnapshot);
+      await logMsg.edit(updatedPayload).catch(() => {});
+    }
+  }
+
+  return {
+    success: true,
+    warnId: record.id,
+    proofUrl: evidenceUrl,
+    record,
+  };
+}
+
+/**
+ * 3A. Adım: Sözlü Uyarı Modal Gönderimi (Discord)
+ */
+async function handleVerbalWarnModalSubmit(interaction, targetUserId) {
+  if (!hasWarningAuthority(interaction.member)) {
+    return interaction.reply({
+      content: '❌ Yetkiniz bulunmuyor!',
+      ephemeral: true,
+    });
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetMember = await interaction.guild.members.fetch(targetUserId).catch(() => null);
+  if (!targetMember) {
+    return interaction.editReply({
+      content: '❌ Seçilen kullanıcı sunucuda bulunamadı!',
+    });
+  }
+
+  // Uyarı hiyerarşisi kontrolü
+  const hierarchy = checkWarningHierarchy(interaction.member, targetMember);
+  if (!hierarchy.allowed) {
+    return interaction.editReply({
+      content: `❌ ${hierarchy.message}`,
+    });
+  }
+
+  const reason = interaction.fields.getTextInputValue('warn_verbal_reason').trim();
+
+  const result = await executeVerbalWarning({
+    guild: interaction.guild,
+    targetMember,
+    staffUser: interaction.user,
+    staffMember: interaction.member,
+    reason,
+    source: 'discord',
+  });
+
   return interaction.editReply({
     content:
-      `✅ **Uyarı İşlemi Tamamlandı!** (\`#${warnId}\`)\n\n` +
+      `✅ <@${targetUserId}> kullanıcısına **Sözlü Uyarı** (\`#${result.warnId}\`) başarıyla verildi ve <#${config.CHANNELS.WARNING_LOG}> kanalına kaydedildi!\n\n` +
+      `📎 **Bu uyarıya kanıt görseli (ekran görüntüsü) eklemek ister misiniz?**`,
+    components: [buildProofPromptRow(result.warnId)],
+  });
+}
+
+/**
+ * 3B. Adım: Resmi Uyarı Modal Gönderimi (Madde Numarası ile) (Discord)
+ */
+async function handleOfficialWarnModalSubmit(interaction, targetUserId) {
+  if (!hasWarningAuthority(interaction.member)) {
+    return interaction.reply({
+      content: '❌ Yetkiniz bulunmuyor!',
+      ephemeral: true,
+    });
+  }
+
+  await interaction.deferReply({ ephemeral: true });
+
+  const targetMember = await interaction.guild.members.fetch(targetUserId).catch(() => null);
+  if (!targetMember) {
+    return interaction.editReply({
+      content: '❌ Seçilen kullanıcı sunucuda bulunamadı!',
+    });
+  }
+
+  // Uyarı hiyerarşisi kontrolü
+  const hierarchy = checkWarningHierarchy(interaction.member, targetMember);
+  if (!hierarchy.allowed) {
+    return interaction.editReply({
+      content: `❌ ${hierarchy.message}`,
+    });
+  }
+
+  const rawCode = interaction.fields.getTextInputValue('warn_rule_code').trim();
+  const rule = resolveRuleCode(rawCode);
+
+  if (!rule) {
+    return interaction.editReply({
+      content:
+        `❌ **Geçersiz Madde Numarası (\`${rawCode}\`)!**\n` +
+        `Lütfen geçerli bir madde kodu girin:\n` +
+        `• **Katılımcı Maddeleri:** \`M1\` - \`M13\`, \`D1\` - \`D3\`\n` +
+        `• **Yetkili Maddeleri:** \`Y1\` - \`Y5\`\n` +
+        `*(Not: RM1-RM18 maddeleri sistemde bulunmamaktadır).*`,
+    });
+  }
+
+  const result = await executeOfficialWarning({
+    guild: interaction.guild,
+    targetMember,
+    staffUser: interaction.user,
+    staffMember: interaction.member,
+    ruleCode: rawCode,
+    source: 'discord',
+  });
+
+  if (!result.success) {
+    return interaction.editReply({
+      content: `❌ ${result.error}`,
+    });
+  }
+
+  return interaction.editReply({
+    content:
+      `✅ **Uyarı İşlemi Tamamlandı!** (\`#${result.warnId}\`)\n\n` +
       `• **Ceza Alan:** <@${targetUserId}>\n` +
-      `• **Madde:** \`${rule.code}\` — ${rule.description}\n` +
-      `• **İşlem:** ${actionTakenText}\n\n` +
+      `• **Madde:** \`${result.rule.code}\` — ${result.rule.description}\n` +
+      `• **İşlem:** ${result.actionTakenText}\n\n` +
       `📎 **Kanıt görseli (ekran görüntüsü) yüklemek için aşağıdaki butonu kullanabilirsiniz (30 saniye):**`,
-    components: [buildProofPromptRow(warnId)],
+    components: [buildProofPromptRow(result.warnId)],
   });
 }
 
@@ -1470,6 +1630,10 @@ module.exports = {
   RULES,
   isDeveloper,
   hasWarningAuthority,
+  checkWarningHierarchy,
+  executeVerbalWarning,
+  executeOfficialWarning,
+  attachEvidenceToWarning,
   ensureWarningRoles,
   createWarningPanel,
   ensureWarningPanelMessage,

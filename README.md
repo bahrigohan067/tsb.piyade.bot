@@ -92,8 +92,62 @@ Bu bot, **Piyade Team | TSB** Discord sunucusu için geliştirilmiş, Roblox API
 | `/vs_talep_panel_kur` | Yönetici | VS Talep panelini ilgili kanala kurar. |
 | `/top10_guncelle` | Yönetici | Top 10 sıralama tablosunu anında yeniler. |
 | `/yardim_paneli_kur` | Yönetici | Acil Yardım ve Takviye Çağrısı panelini kurar. |
+| `/uyari-panel` | Developer & Yönetmenlik | Disiplin & Uyarı Verme Panelini kurar. |
+| `/uyari-iptal` | Developer & Yönetmenlik | Verilen bir uyarıyı ID'si ile iptal eder. |
+| `/form-iptal` | Yönetmenlik | Tryout seviye anketini iptal eder ve rolleri geri döndürür. |
+| `/renk_paneli_kur` | Yönetici | İsim rengi seçim panelini kurar. |
 | `!temizle [sayı]` / `/temizle` | Mesajları Yönet | Belirtilen miktarda mesajı kanaldan siler (1 - 300). |
 | `/rols` | Kurucu & Developer | Sunucudaki rolleri ve ID'lerini hiyerarşi sırasıyla listeler. |
+
+---
+
+## 🌐 Dahili Güvenli REST API Dokümantasyonu
+
+Bot aynı Node.js sürecinde Express ile çalışarak harici web sitelerine ve yönetim panellerine güvenli REST API hizmeti sunar.
+
+### 🔑 Güvenlik ve Kimlik Doğrulama
+- **Tüm `/api/*` endpoint'leri** (açık `/api/health` hariç) `Authorization: Bearer <API_SECRET>` başlığı gerektirir. Eksik veya geçersizse `401 Unauthorized` döner.
+- Kullanıcı adına işlem yapan veya yönetim işlemi gerektiren endpoint'lerde `X-Actor-Id: <Discord_User_ID>` başlığı gönderilir. Bot bu üyenin Discord rollerini bizzat doğrular.
+- **Yönetim Yetkisi:** `/api/admin/*` endpoint'leri sadece **Yönetmenlik** (`1559614111128490044`) veya **Developer** (`1561777507223601353`) rollerine sahip aktörler tarafından kullanılabilir. Aksi takdirde `403 Forbidden` döner.
+- **Uyarı Hiyerarşisi:**
+  - Kimse kendine uyarı veremez.
+  - Hedefin en yüksek rolü, işlemi yapan aktörünkine eşit veya üstteyse işlem `403` ile reddedilir.
+  - Hiyerarşi: Developer > Yönetmenlik > Diğerleri.
+  - **Developer İstisnası:** Developer kendisi dışında herkese uyarı verebilir.
+- **Denetim Logu:** Web sitesi paneli üzerinden yapılan her idari işlem (uyarı verme, kanıt yükleme vb.) bot tarafından `#uyari-log` kanalına anında denetim kartı olarak loglanır.
+
+### 📌 Endpoint Listesi
+
+| Metot | Endpoint | Açıklama | Yetki / Başlık |
+|---|---|---|---|
+| `GET` | `/api/health` | Bot ve API çalışma durumu (Healthcheck) | Şifresiz |
+| `GET` | `/api/member/:id/roles` | Rol listesi + türetilmiş seviye (`developer` / `yonetmenlik` / `member`) | Bearer |
+| `GET` | `/api/member/:id/profile` | Gerçek ad, Roblox profil, Tryout seviyesi, VS puan/kill, ceza puanı | Bearer |
+| `GET` | `/api/tryout/leaderboard` | 37 kademeli Tryout sıralama tablosu verisi | Bearer |
+| `GET` | `/api/vs/top10` | VS Top 10 sıralama tablosu verisi | Bearer |
+| `GET` | `/api/help/status` | Aktif kayıtlı üye sayısı ve çağrı bekleme (cooldown) durumu | Bearer (`X-Actor-Id` isteğe bağlı) |
+| `POST` | `/api/help/call` | Acil takviye çağrısı (5 dk cooldown, Roblox profil butonu, toplu DM) | Bearer + `X-Actor-Id` |
+| `POST` | `/api/register` | Web sitesi kayıt başvurusu (Roblox doğrulama, thread ve onay kartı) | Bearer |
+| `GET` | `/api/admin/members?query=` | Sunucu üyeleri arama (kullanıcı adı, nick, ID, Roblox nick) | Bearer + `X-Actor-Id` (Yönetim) |
+| `GET` | `/api/admin/members/:id` | Üye tam profili: Discord + Kayıt + Tryout + VS + Sicil / Uyarı geçmişi | Bearer + `X-Actor-Id` (Yönetim) |
+| `POST` | `/api/admin/warn` | Uyarı verme (`verbal` / `official`, M/D/Y kuralları, roller, timeout, ban) | Bearer + `X-Actor-Id` (Yönetim) |
+| `POST` | `/api/admin/warn/:id/evidence` | Önceden verilen uyarıya kanıt görseli bağlantısı ekleme | Bearer + `X-Actor-Id` (Yönetim) |
+
+---
+
+## ⚙️ Ortam Değişkenleri (Environment Variables)
+
+Railway veya `.env` dosyasında tanımlanması gereken değişkenler:
+
+| Değişken | Zorunlu mu? | Varsayılan | Açıklama |
+|---|---|---|---|
+| `TSB_TOKEN` / `DISCORD_TOKEN` | **Evet** | - | Discord Bot Tokeni |
+| `GUILD_ID` | Hayır | `1559313292651008040` | Piyade Team Sunucu ID'si |
+| `API_SECRET` | **Evet (API için)** | - | REST API Bearer kimlik doğrulama gizli anahtarı |
+| `PORT` | Hayır | `3000` | Express REST API dinleme portu (Railway otomatik atar) |
+| `DATA_DIR` | Hayır | `./data` | Kalıcı veritabanı klasörü (Railway Volume desteği) |
+| `GEMINI_API_KEY` | Hayır | - | Google Gemini Yapay Zeka API Anahtarı (Küfür filtresi) |
+| `GEMINI_MODEL` | Hayır | `gemini-3.8-flash` | Gemini model sürümü |
 
 ---
 

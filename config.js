@@ -7,6 +7,10 @@ module.exports = {
   // Sunucu (Guild) ID
   GUILD_ID: (process.env.GUILD_ID || '1559313292651008040').trim().replace(/^['"]+|['"]+$/g, ''),
 
+  // REST API Port ve Gizli Anahtar (Authorization: Bearer <API_SECRET>)
+  PORT: process.env.PORT || 3000,
+  API_SECRET: (process.env.API_SECRET || '').trim().replace(/^['"]+|['"]+$/g, ''),
+
   // Kanal ID'leri
   CHANNELS: {
     // Kayıt Paneli ve Başvuruların Yapıldığı Kanal

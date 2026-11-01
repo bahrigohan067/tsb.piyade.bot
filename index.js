@@ -59,6 +59,10 @@ process.on('uncaughtException', (err, origin) => {
   console.error('[HATA - Yakalanmamış Exception]:', err);
 });
 
+// REST API Sunucusunu Başlat (Bot ile aynı süreçte)
+const { startApiServer } = require('./src/api/server');
+startApiServer(client);
+
 // Botu Başlat
 if (!config.TOKEN) {
   console.error('========================================================================');
