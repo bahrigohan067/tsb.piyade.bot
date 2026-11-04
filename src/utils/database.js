@@ -24,6 +24,8 @@ class DatabaseManager {
       warningRoles: {},               // Otomatik oluşturulan Uyarı / Yetkili Uyarı rol ID'leri
       warningStats: {},               // { [userId]: { userId, points, tier, staffWarnings, totalWarnings, lastWarnedAt, suspendedUntil } }
       warnings: {},                   // { [warnId]: { id, type, userId, staffId, ruleCode, reason, ... } }
+      languagePrefs: {},              // { [userId]: 'tr' | 'en' }
+      englishRoleId: null,            // Otomatik veya tanımlı 🇬🇧 English rolü ID'si
     };
     this.init();
   }
@@ -52,6 +54,8 @@ class DatabaseManager {
           warningRoles: parsed.warningRoles || {},
           warningStats: parsed.warningStats || {},
           warnings: parsed.warnings || {},
+          languagePrefs: parsed.languagePrefs || {},
+          englishRoleId: parsed.englishRoleId || null,
         };
       } else {
         this.save();
@@ -546,6 +550,34 @@ class DatabaseManager {
     Object.assign(record, patch);
     this.save();
     return record;
+  }
+
+  // ==========================================
+  // DİL TERCİHİ (TR / EN) BÖLÜMÜ
+  // ==========================================
+
+  getUserLang(userId) {
+    if (!userId) return null;
+    return (this.data.languagePrefs && this.data.languagePrefs[String(userId)]) || null;
+  }
+
+  setUserLang(userId, lang) {
+    if (!userId) return null;
+    if (!this.data.languagePrefs) this.data.languagePrefs = {};
+    const clean = lang === 'en' ? 'en' : 'tr';
+    this.data.languagePrefs[String(userId)] = clean;
+    this.save();
+    return clean;
+  }
+
+  getEnglishRoleId() {
+    return this.data.englishRoleId || null;
+  }
+
+  setEnglishRoleId(roleId) {
+    this.data.englishRoleId = roleId;
+    this.save();
+    return roleId;
   }
 }
 

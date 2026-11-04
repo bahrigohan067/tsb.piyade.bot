@@ -8,6 +8,7 @@ const {
 const config = require('../../config');
 const database = require('./database');
 const robloxService = require('../services/roblox');
+const { resolveLang } = require('./i18n');
 
 // 5 dakikalık bekleme süresi (Cooldown: Map<userId, timestamp>)
 const helpCooldowns = new Map();
@@ -136,13 +137,47 @@ async function createHelpPanelPayload(guild) {
     new ButtonBuilder()
       .setCustomId('btn_acil_yardim')
       .setLabel('🚨 ACİL YARDIM ÇAĞIR')
-      .setStyle(ButtonStyle.Danger) // Kırmızı Buton
+      .setStyle(ButtonStyle.Danger), // Kırmızı Buton
+    new ButtonBuilder()
+      .setCustomId('btn_help_en_info')
+      .setLabel('🇬🇧 English Info')
+      .setStyle(ButtonStyle.Secondary)
   );
 
   return {
     embeds: [embed],
     components: [row],
   };
+}
+
+/**
+ * İngilizce Acil Yardım Rehberi Embed'ini Üretir (Ephemeral)
+ */
+function createEnglishHelpGuideEmbed() {
+  return new EmbedBuilder()
+    .setTitle('🚨 Piyade Team | TSB | Emergency Backup & Reinforcement Guide')
+    .setColor(0xED4245)
+    .setDescription(
+      `***\n\n` +
+      `## 🆘 What is Emergency Backup?\n\n` +
+      `While playing **The Strongest Battlegrounds (TSB)**, if you are:\n` +
+      `• Outnumbered against teamers (**1v2, 1v3, 1v4**),\n` +
+      `• Being targeted unfairly in a public server,\n` +
+      `• In need of immediate backup from your Piyade Team teammates!\n\n` +
+      `Click the red **"🚨 ACİL YARDIM ÇAĞIR"** (Call Emergency Backup) button on the panel to send an instant alert to <#${config.CHANNELS.HELP_ALERT}> and a **Direct Message (DM)** to all online team members!\n\n` +
+      `***\n\n` +
+      `## 📋 How It Works\n` +
+      `> **1️⃣ Step:** Press the red **"🚨 ACİL YARDIM ÇAĞIR"** button.\n` +
+      `> **2️⃣ Step:** The bot immediately posts an alert in <#${config.CHANNELS.HELP_ALERT}> and DMs all online/idle/DND members with a direct link to your **Roblox Profile**.\n` +
+      `> **3️⃣ Step:** Teammates click the button to open your Roblox profile and join your server!\n\n` +
+      `### ⚠️ Important Rules\n` +
+      `• **5-Minute Cooldown:** You can only trigger an emergency call once every **5 minutes**.\n` +
+      `• **No False Alarms:** Calling backup as a joke or spamming will result in disciplinary action.\n\n` +
+      `***`
+    )
+    .setFooter({
+      text: '🚨 Piyade Team Emergency Backup System • English Guide',
+    });
 }
 
 /**
@@ -343,17 +378,47 @@ async function triggerHelpCall({ guild, member, user, source = 'discord' }) {
         .setURL(sentAlertMsg.url)
     );
 
-    // Aktif üyelere paralel olarak DM gönder
+    const dmEmbedEn = new EmbedBuilder()
+      .setTitle('🚨 PİYADE TEAM | EMERGENCY BACKUP CALL!')
+      .setColor(0xED4245)
+      .setDescription(
+        `⚡ **A fellow team member needs urgent backup in TSB right now!**\n\n` +
+        `👤 **Fighter Requesting Backup:** <@${userId}> (\`${targetMember.displayName}\`)\n` +
+        `🎮 **Roblox Profile:** ${robloxInfo}\n` +
+        `📢 **Alert Channel:** <#${config.CHANNELS.HELP_ALERT}>\n` +
+        `⏰ **Call Time:** <t:${Math.floor(now / 1000)}:R>\n\n` +
+        `> 👇 **Click the button below to open their Roblox profile and join their server immediately!**`
+      )
+      .setFooter({
+        text: 'Piyade Team • Emergency Backup & DM Alert System',
+      })
+      .setTimestamp();
+
+    const dmButtonRowEn = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setLabel('🎮 Go to Roblox Profile & Join Server')
+        .setStyle(ButtonStyle.Link)
+        .setURL(robloxProfileUrl),
+      new ButtonBuilder()
+        .setLabel('📢 View Alert Message')
+        .setStyle(ButtonStyle.Link)
+        .setURL(sentAlertMsg.url)
+    );
+
+    // Aktif üyelere paralel olarak DM gönder (Üyenin dil tercihine göre TR veya EN)
     let dmSuccessCount = 0;
     if (dmTargets.length > 0) {
       const dmResults = await Promise.allSettled(
-        dmTargets.map((m) =>
-          m.user.send({
-            content: `🚨 **ACİL TAKVİYE ÇAĞRISI!** <@${userId}> oyunda destek bekliyor!`,
-            embeds: [dmEmbed],
-            components: [dmButtonRow],
-          })
-        )
+        dmTargets.map((m) => {
+          const isRecipientEn = resolveLang(m) === 'en';
+          return m.user.send({
+            content: isRecipientEn
+              ? `🚨 **EMERGENCY BACKUP CALL!** <@${userId}> needs backup in-game!`
+              : `🚨 **ACİL TAKVİYE ÇAĞRISI!** <@${userId}> oyunda destek bekliyor!`,
+            embeds: [isRecipientEn ? dmEmbedEn : dmEmbed],
+            components: [isRecipientEn ? dmButtonRowEn : dmButtonRow],
+          });
+        })
       );
       dmSuccessCount = dmResults.filter((r) => r.status === 'fulfilled').length;
     }
@@ -380,6 +445,7 @@ async function triggerHelpCall({ guild, member, user, source = 'discord' }) {
  */
 async function handleHelpRequest(interaction) {
   await interaction.deferReply({ ephemeral: true });
+  const isEn = resolveLang(interaction) === 'en';
 
   const result = await triggerHelpCall({
     guild: interaction.guild,
@@ -391,7 +457,9 @@ async function handleHelpRequest(interaction) {
   if (!result.success) {
     if (result.cooldown) {
       return interaction.editReply({
-        content: `⏳ **Bekleme Süresi Aktif!**\nÇok sık yardım çağrısı yapamazsınız. Yeniden çağrı yapabilmek için lütfen bekleyin: <t:${result.readyAt}:R>`,
+        content: isEn
+          ? `⏳ **Cooldown Active!**\nYou cannot call for backup this frequently. Please wait before calling again: <t:${result.readyAt}:R>`
+          : `⏳ **Bekleme Süresi Aktif!**\nÇok sık yardım çağrısı yapamazsınız. Yeniden çağrı yapabilmek için lütfen bekleyin: <t:${result.readyAt}:R>`,
       });
     }
     return interaction.editReply({
@@ -400,11 +468,15 @@ async function handleHelpRequest(interaction) {
   }
 
   return interaction.editReply({
-    content:
-      `✅ **Acil yardım çağrınız başarıyla gönderildi!**\n` +
-      `• 📢 Bildirim <#${config.CHANNELS.HELP_ALERT}> kanalına **Roblox Profil Butonu** ile birlikte iletildi.\n` +
-      `• 📩 Şu anda aktif olan **${result.dmCount}** ekip üyemize özel **DM bildirimi** gönderildi.\n` +
-      `*(Bir sonraki yardım çağrısını 5 dakika sonra yapabilirsiniz.)*`,
+    content: isEn
+      ? `✅ **Your emergency backup call has been sent!**\n` +
+        `• 📢 Alert posted in <#${config.CHANNELS.HELP_ALERT}> with your **Roblox Profile Button**.\n` +
+        `• 📩 Direct Message (DM) sent to **${result.dmCount}** active team members.\n` +
+        `*(You can call for backup again in 5 minutes.)*`
+      : `✅ **Acil yardım çağrınız başarıyla gönderildi!**\n` +
+        `• 📢 Bildirim <#${config.CHANNELS.HELP_ALERT}> kanalına **Roblox Profil Butonu** ile birlikte iletildi.\n` +
+        `• 📩 Şu anda aktif olan **${result.dmCount}** ekip üyemize özel **DM bildirimi** gönderildi.\n` +
+        `*(Bir sonraki yardım çağrısını 5 dakika sonra yapabilirsiniz.)*`,
   });
 }
 
@@ -413,6 +485,7 @@ module.exports = {
   getHelpStatus,
   triggerHelpCall,
   createHelpPanelPayload,
+  createEnglishHelpGuideEmbed,
   updateHelpPanelMessage,
   handleHelpRequest,
   helpCooldowns,

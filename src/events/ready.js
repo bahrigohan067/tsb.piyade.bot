@@ -4,6 +4,8 @@ const { checkVsDeadlines, updateTop10Message } = require('../utils/vsManager');
 const { updateHelpPanelMessage } = require('../utils/helpManager');
 const { updateTryoutLeaderboard } = require('../utils/tryoutManager');
 const { ensureColorPanelMessage } = require('../utils/colorManager');
+const { ensureRegisterPanelMessage } = require('../utils/panel');
+const { ensureEnglishRole } = require('../utils/i18n');
 const {
   ensureWarningPanelMessage,
   checkThirtyDayAmnesty,
@@ -44,8 +46,10 @@ module.exports = {
           await guild.commands.set(commandsData);
           console.log(`[SLASH KOMUTLAR] ${commandsData.length} komut '${guild.name}' sunucusuna başarıyla yüklendi.`);
           
-          // Sunucu açılışında Top 10, Tryout Sıralama tablosu, Renk Paneli ve Uyarı Panelini güncelle/kur
+          // Sunucu açılışında Top 10, Tryout Sıralama tablosu, Kayıt Paneli, Renk Paneli ve Uyarı Panelini güncelle/kur
           setTimeout(() => {
+            ensureEnglishRole(guild).catch(() => {});
+            ensureRegisterPanelMessage(guild).catch(() => {});
             updateTop10Message(guild).catch(() => {});
             updateTryoutLeaderboard(guild).catch(() => {});
             ensureColorPanelMessage(guild).catch(() => {});

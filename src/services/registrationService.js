@@ -9,6 +9,7 @@ const {
 const config = require('../../config');
 const database = require('../utils/database');
 const robloxService = require('./roblox');
+const { resolveLang, setMemberLanguage, parseGenderInput } = require('../utils/i18n');
 
 /**
  * Kayıt Başvurusunu Oluşturan Çekirdek Servis (Discord & Web API ortak)
@@ -21,17 +22,30 @@ async function createRegistrationApplication({
   gender,
   robloxInput,
   source = 'discord',
+  lang = null,
 }) {
   if (!guild || !member || !user) {
     return { success: false, code: 'INVALID_MEMBER', message: 'Geçersiz sunucu veya üye bilgisi.' };
   }
+
+  const userLang = resolveLang(member, lang);
+  const isEn = userLang === 'en';
+
+  if (lang === 'en') {
+    await setMemberLanguage(member, 'en').catch(() => {});
+  }
+
+  const parsedGender = parseGenderInput(gender);
+  const normalizedGender = parsedGender.tr;
 
   // 1. Zaten Kayıtlı mı?
   if (member.roles.cache.has(config.ROLES.REGISTERED_CHECK)) {
     return {
       success: false,
       code: 'ALREADY_REGISTERED',
-      message: 'Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
+      message: isEn
+        ? 'You are already registered on our server! You cannot submit another application.'
+        : 'Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
     };
   }
 
@@ -43,7 +57,9 @@ async function createRegistrationApplication({
       return {
         success: false,
         code: 'ACTIVE_APPLICATION',
-        message: `Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: <#${activeApp.threadId}>`,
+        message: isEn
+          ? `You already have an active registration application! Please check your registration thread: <#${activeApp.threadId}>`
+          : `Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: <#${activeApp.threadId}>`,
         threadId: activeApp.threadId,
       };
     } else {
@@ -58,38 +74,51 @@ async function createRegistrationApplication({
     if (robloxResult.error === 'NOT_FOUND') {
       try {
         await user.send(
-          `❌ **Piyade Team | Kayıt Başvurusu Reddedildi**\n\n` +
-          `**Sebep:** Belirtilen Roblox hesabı bulunamadı.\n` +
-          `📌 **Önemli Bilgi:** Lütfen Roblox'taki görünen adınızı (Display Name) değil, profilinizdeki asıl **@kullanıcı** adınızı, ID'nizi veya profil linkinizi yazarak tekrar başvurunuz.`
+          isEn
+            ? `❌ **Piyade Team | Registration Application Rejected**\n\n` +
+              `**Reason:** The specified Roblox account could not be found.\n` +
+              `📌 **Important:** Please enter your actual Roblox **@username**, User ID, or profile URL — **not** your Display Name.`
+            : `❌ **Piyade Team | Kayıt Başvurusu Reddedildi**\n\n` +
+              `**Sebep:** Belirtilen Roblox hesabı bulunamadı.\n` +
+              `📌 **Önemli Bilgi:** Lütfen Roblox'taki görünen adınızı (Display Name) değil, profilinizdeki asıl **@kullanıcı** adınızı, ID'nizi veya profil linkinizi yazarak tekrar başvurunuz.`
         ).catch(() => {});
       } catch (e) {}
 
       return {
         success: false,
         code: 'ROBLOX_NOT_FOUND',
-        message: 'Girilen Roblox hesabı bulunamadı! Lütfen profilinizdeki asıl @kullanıcı adınızı, ID\'nizi veya linkinizi giriniz.',
+        message: isEn
+          ? 'Roblox account not found! Please enter your actual @username, User ID, or profile link (not your Display Name).'
+          : 'Girilen Roblox hesabı bulunamadı! Lütfen profilinizdeki asıl @kullanıcı adınızı, ID\'nizi veya linkinizi giriniz.',
       };
     }
 
     if (robloxResult.error === 'BANNED') {
       try {
         await user.send(
-          `❌ **Piyade Team | Kayıt Başvurusu Reddedildi**\n\n` +
-          `**Sebep:** Belirtilen Roblox hesabı Roblox platformunda kalıcı olarak yasaklanmıştır (Banned). Yasaklı hesaplarla sunucumuza kayıt olunamaz.`
+          isEn
+            ? `❌ **Piyade Team | Registration Application Rejected**\n\n` +
+              `**Reason:** This Roblox account is permanently banned/terminated on Roblox. Banned accounts cannot register on our server.`
+            : `❌ **Piyade Team | Kayıt Başvurusu Reddedildi**\n\n` +
+              `**Sebep:** Belirtilen Roblox hesabı Roblox platformunda kalıcı olarak yasaklanmıştır (Banned). Yasaklı hesaplarla sunucumuza kayıt olunamaz.`
         ).catch(() => {});
       } catch (e) {}
 
       return {
         success: false,
         code: 'ROBLOX_BANNED',
-        message: 'Bu Roblox hesabı platform üzerinde kalıcı olarak yasaklanmıştır (Banned)!',
+        message: isEn
+          ? 'This Roblox account is permanently banned on the Roblox platform!'
+          : 'Bu Roblox hesabı platform üzerinde kalıcı olarak yasaklanmıştır (Banned)!',
       };
     }
 
     return {
       success: false,
       code: 'ROBLOX_ERROR',
-      message: robloxResult.message || 'Roblox doğrulaması yapılamadı.',
+      message: isEn
+        ? 'Could not verify your Roblox account at this time. Please try again.'
+        : robloxResult.message || 'Roblox doğrulaması yapılamadı.',
     };
   }
 
@@ -101,7 +130,9 @@ async function createRegistrationApplication({
     return {
       success: false,
       code: 'MULTI_ACCOUNT',
-      message: `Bu Roblox hesabı ([${robloxUser.name}](https://www.roblox.com/users/${robloxUser.id}/profile)) sunucumuzda başka bir Discord kullanıcısına (<@${existingReg.discordId}>) zaten kayıtlıdır!`,
+      message: isEn
+        ? `This Roblox account ([${robloxUser.name}](https://www.roblox.com/users/${robloxUser.id}/profile)) is already registered to another Discord user (<@${existingReg.discordId}>)!`
+        : `Bu Roblox hesabı ([${robloxUser.name}](https://www.roblox.com/users/${robloxUser.id}/profile)) sunucumuzda başka bir Discord kullanıcısına (<@${existingReg.discordId}>) zaten kayıtlıdır!`,
     };
   }
 
@@ -111,7 +142,7 @@ async function createRegistrationApplication({
     return {
       success: false,
       code: 'CHANNEL_NOT_FOUND',
-      message: 'Kayıt kanalı bulunamadı!',
+      message: isEn ? 'Registration channel not found!' : 'Kayıt kanalı bulunamadı!',
     };
   }
 
@@ -136,7 +167,9 @@ async function createRegistrationApplication({
       return {
         success: false,
         code: 'THREAD_CREATE_ERROR',
-        message: 'Özel kayıt odası oluşturulurken bir hata meydana geldi. Lütfen yetkililer ile iletişime geçiniz.',
+        message: isEn
+          ? 'An error occurred while creating your private registration thread. Please contact staff.'
+          : 'Özel kayıt odası oluşturulurken bir hata meydana geldi. Lütfen yetkililer ile iletişime geçiniz.',
       };
     }
   }
@@ -144,19 +177,32 @@ async function createRegistrationApplication({
   await thread.members.add(user.id).catch(() => {});
 
   const threadInfoEmbed = new EmbedBuilder()
-    .setTitle('🟡 Başvuru İnceleniyor...')
+    .setTitle(isEn ? '🟡 Application Under Review...' : '🟡 Başvuru İnceleniyor...')
     .setColor(config.COLORS.PENDING)
     .setDescription(
-      `👋 Hoş geldin <@${user.id}>!\n\n` +
-      `📋 **Kayıt İşleyişi Bilgilendirmesi:**\n` +
-      `• Bilgileriniz ve Roblox profiliniz başarıyla doğrulandı.\n` +
-      (source === 'site' ? `• Başvuru kaynağı: **Web Sitesi Kayıt Formu** 🌐\n` : '') +
-      `• Başvurunuz yetkili onay kanalına iletildi.\n` +
-      `• Yetkililerimiz onayladığında rolleriniz otomatik olarak tanımlanacak ve odanız silinecektir.\n` +
-      `• Başvurunuz reddedilirse, red sebebi bu odadan ve DM üzerinden size bildirilecektir.\n\n` +
-      `⏳ *Lütfen yetkili kararını sabırla bekleyiniz.*`
+      isEn
+        ? `👋 Welcome <@${user.id}>!\n\n` +
+          `📋 **Registration Process Information:**\n` +
+          `• Your details and Roblox profile have been successfully verified.\n` +
+          (source === 'site' ? `• Application source: **Website Registration Form** 🌐\n` : '') +
+          `• Your application has been forwarded to our staff approval channel.\n` +
+          `• Once approved by staff, your member roles will be assigned automatically and this thread will be closed.\n` +
+          `• If rejected, the reason will be sent here and via Direct Message (DM).\n\n` +
+          `⏳ *Please wait patiently for a staff member to review your application.*`
+        : `👋 Hoş geldin <@${user.id}>!\n\n` +
+          `📋 **Kayıt İşleyişi Bilgilendirmesi:**\n` +
+          `• Bilgileriniz ve Roblox profiliniz başarıyla doğrulandı.\n` +
+          (source === 'site' ? `• Başvuru kaynağı: **Web Sitesi Kayıt Formu** 🌐\n` : '') +
+          `• Başvurunuz yetkili onay kanalına iletildi.\n` +
+          `• Yetkililerimiz onayladığında rolleriniz otomatik olarak tanımlanacak ve odanız silinecektir.\n` +
+          `• Başvurunuz reddedilirse, red sebebi bu odadan ve DM üzerinden size bildirilecektir.\n\n` +
+          `⏳ *Lütfen yetkili kararını sabırla bekleyiniz.*`
     )
-    .setFooter({ text: `Piyade Team • Kayıt Sistemi${source === 'site' ? ' • Web Kayıt' : ''}` })
+    .setFooter({
+      text: isEn
+        ? `Piyade Team • Registration System${source === 'site' ? ' • Web Registration' : ''}`
+        : `Piyade Team • Kayıt Sistemi${source === 'site' ? ' • Web Kayıt' : ''}`,
+    })
     .setTimestamp();
 
   await thread.send({
@@ -177,7 +223,8 @@ async function createRegistrationApplication({
         { name: '👤 Discord Kullanıcısı', value: `<@${user.id}> (\`${user.tag}\`)`, inline: true },
         { name: '🆔 Discord ID', value: `\`${user.id}\``, inline: true },
         { name: '📝 Gerçek Adı', value: `${realName}`, inline: true },
-        { name: '🚻 Cinsiyet', value: `${gender}`, inline: true },
+        { name: '🚻 Cinsiyet', value: `${normalizedGender}`, inline: true },
+        { name: '🌐 Dil / Language', value: isEn ? '🇬🇧 `English`' : '🇹🇷 `Türkçe`', inline: true },
         {
           name: '📅 Discord Hesap Açılış Tarihi',
           value: `<t:${Math.floor(user.createdTimestamp / 1000)}:F> (<t:${Math.floor(user.createdTimestamp / 1000)}:R>)`,
@@ -229,7 +276,8 @@ async function createRegistrationApplication({
   database.setActiveApplication(user.id, {
     threadId: thread.id,
     realName,
-    gender,
+    gender: normalizedGender,
+    lang: userLang,
     robloxId: robloxUser.id,
     robloxUsername: robloxUser.name,
     robloxDisplayName: robloxUser.displayName,
@@ -240,7 +288,9 @@ async function createRegistrationApplication({
 
   return {
     success: true,
-    message: 'Başvurunuz başarıyla alındı! Size özel kayıt odası açıldı.',
+    message: isEn
+      ? 'Your registration application has been submitted! Your private registration thread has been created.'
+      : 'Başvurunuz başarıyla alındı! Size özel kayıt odası açıldı.',
     threadId: thread.id,
     threadUrl: thread.url,
     robloxUser: {

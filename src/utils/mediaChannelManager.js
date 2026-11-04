@@ -76,7 +76,7 @@ async function handleMediaChannel(message) {
   // Kullanıcıya etiketli geçici uyarı gönder
   try {
     const warnMsg = await message.channel.send({
-      content: `<@${message.author.id}> Bu kanal sadece medya içindir. Yazı yazamazsın!`,
+      content: `<@${message.author.id}> Bu kanal sadece medya içindir. Yazı yazamazsın! / This channel is for media only, text messages are not allowed!`,
     });
 
     // Kanal temizliği (delete_after=5): 5 saniye sonra uyarı mesajını otomatik sil

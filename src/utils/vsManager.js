@@ -48,13 +48,45 @@ function createVsPanel() {
     new ButtonBuilder()
       .setCustomId('btn_vs_talep_olustur')
       .setLabel('⚔️ VS Talep Oluştur')
-      .setStyle(ButtonStyle.Primary)
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('btn_vs_en_info')
+      .setLabel('🇬🇧 English Rules')
+      .setStyle(ButtonStyle.Secondary)
   );
 
   return {
     embeds: [embed],
     components: [row],
   };
+}
+
+/**
+ * İngilizce VS Kuralları ve Rehberi Embed'ini Üretir (Ephemeral)
+ */
+function createEnglishVsGuideEmbed() {
+  return new EmbedBuilder()
+    .setTitle('⚔️ Piyade Team | TSB | 1v1 (VS) Challenge Rules & Guide')
+    .setColor(config.COLORS.BLUE)
+    .setDescription(
+      `***\n\n` +
+      `## 📜 How to Start a 1v1 (VS) Match?\n\n` +
+      `Challenge other fighters on our server, prove your skills, and climb the **Top 10 Leaderboard**:\n\n` +
+      `> **1️⃣ Step:** Click the **"⚔️ VS Talep Oluştur"** (Create VS Request) button on the panel.\n` +
+      `> **2️⃣ Step:** Select your **Opponent** from the user dropdown menu.\n` +
+      `> **3️⃣ Step:** The bot will create a private VS match channel for you, your opponent, and the referees.\n` +
+      `> **4️⃣ Step:** Complete your 1v1 match in TSB and upload a **Video / Screen Recording (Proof)** to the VS channel.\n` +
+      `> **5️⃣ Step:** Our <@&${config.ROLES.VS_STAFF}> referees will review the proof and officially declare the winner!\n\n` +
+      `### ⚠️ Important Rules\n` +
+      `• **48-Hour Limit:** Every VS challenge must be completed within **48 hours (2 days)**, otherwise the channel is automatically cancelled.\n` +
+      `• **Video Proof Required:** Results will not be approved without a valid video recording or screenshot proof.\n` +
+      `• **1 Active Match Limit:** You can only have **1 open VS challenge** at a time.\n` +
+      `• **Fair Play:** Exploiting, cheating, or breaking TSB rules results in immediate disqualification.\n\n` +
+      `***`
+    )
+    .setFooter({
+      text: '⚔️ Piyade Team VS System • English Guide',
+    });
 }
 
 /**
@@ -65,20 +97,21 @@ function createVsRoomMessage(challengerMember, opponentMember) {
   const opponentName = opponentMember.displayName || opponentMember.user.username;
 
   const embed = new EmbedBuilder()
-    .setTitle('⚔️ Kapışma (VS) Başlatıldı!')
+    .setTitle('⚔️ Kapışma (VS) Başlatıldı! / 1v1 Match Started!')
     .setColor(config.COLORS.BLUE)
     .setDescription(
-      `Meydan okuma başarıyla oluşturuldu! Her iki oyuncuya da başarılar dileriz.\n\n` +
+      `Meydan okuma başarıyla oluşturuldu! Her iki oyuncuya da başarılar dileriz.\n` +
+      `*The 1v1 challenge has been created! Good luck to both fighters.*\n\n` +
       `***\n\n` +
-      `• **Meydan Okuyan:** <@${challengerMember.id}> (\`${challengerName}\`)\n` +
-      `• **Rakip (Mağdur):** <@${opponentMember.id}> (\`${opponentName}\`)\n` +
-      `• **Hakem Ekibi:** <@&${config.ROLES.VS_STAFF}>\n\n` +
-      `⏳ **Süre Sınırı:** Bu odanın geçerlilik süresi **48 saattir**.\n` +
-      `📹 **Kanıt Bildirimi:** Maç tamamlandığında kazanan taraf video kaydını bu odaya göndermelidir.\n\n` +
+      `• **Meydan Okuyan / Challenger:** <@${challengerMember.id}> (\`${challengerName}\`)\n` +
+      `• **Rakip / Opponent:** <@${opponentMember.id}> (\`${opponentName}\`)\n` +
+      `• **Hakem Ekibi / Referees:** <@&${config.ROLES.VS_STAFF}>\n\n` +
+      `⏳ **Süre Sınırı / Time Limit:** Bu odanın geçerlilik süresi **48 saattir** *(Valid for 48 hours)*.\n` +
+      `📹 **Kanıt Bildirimi / Proof:** Maç tamamlandığında kazanan taraf video kaydını bu odaya göndermelidir *(Winner must upload video proof here)*.\n\n` +
       `***`
     )
     .setFooter({
-      text: 'Sonuç sadece Kapışma Talep Yetkilisi tarafından belirlenebilir.',
+      text: 'Sonuç sadece Kapışma Talep Yetkilisi tarafından belirlenebilir. • Result is decided by VS Referees.',
     })
     .setTimestamp();
 
@@ -251,7 +284,10 @@ async function checkVsDeadlines(client) {
       if (elapsed >= FORTY_EIGHT_HOURS_MS) {
         try {
           await channel.send({
-            content: `⏰ **Süre doldu!** Bu VS talebi 2 gün (48 saat) içinde sonuçlandırılmadığı için otomatik olarak iptal ediliyor. Oda 5 saniye içinde silinecektir.`,
+            content:
+              `⏰ **Süre doldu! / Time is up!**\n` +
+              `🇹🇷 Bu VS talebi 2 gün (48 saat) içinde sonuçlandırılmadığı için otomatik olarak iptal ediliyor. Oda 5 saniye içinde silinecektir.\n` +
+              `🇬🇧 This VS challenge was not completed within 48 hours and is being automatically cancelled. The channel will be deleted in 5 seconds.`,
           });
         } catch (e) {}
 
@@ -271,7 +307,10 @@ async function checkVsDeadlines(client) {
       if (elapsed >= FORTY_THREE_HOURS_MS && !vs.warned5Hours) {
         try {
           await channel.send({
-            content: `⚠️ <@${vs.challengerId}> <@${vs.opponentId}> <@&${config.ROLES.VS_STAFF}>\n> **Dikkat!** Bu VS talebinin kapanmasına **5 saat** kaldı! Lütfen sonucu belirleyin, aksi takdirde talep otomatik iptal edilecektir.`,
+            content:
+              `⚠️ <@${vs.challengerId}> <@${vs.opponentId}> <@&${config.ROLES.VS_STAFF}>\n` +
+              `> 🇹🇷 **Dikkat!** Bu VS talebinin kapanmasına **5 saat** kaldı! Lütfen sonucu belirleyin, aksi takdirde talep otomatik iptal edilecektir.\n` +
+              `> 🇬🇧 **Warning!** Only **5 hours** remaining before this VS challenge expires! Please submit your match proof, otherwise it will be cancelled automatically.`,
           });
           vs.warned5Hours = true;
           database.setActiveVs(vs.channelId, vs);
@@ -306,6 +345,7 @@ function sanitizeChannelName(name) {
 
 module.exports = {
   createVsPanel,
+  createEnglishVsGuideEmbed,
   createVsRoomMessage,
   createVsResultAnnouncement,
   createTop10Embed,

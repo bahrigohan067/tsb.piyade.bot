@@ -3,6 +3,7 @@ const router = express.Router();
 const config = require('../../../config');
 const database = require('../../utils/database');
 const { createRegistrationApplication } = require('../../services/registrationService');
+const { parseGenderInput } = require('../../utils/i18n');
 
 /**
  * GET /api/register/status/:id
@@ -87,7 +88,7 @@ router.get('/:id', getApplicationStatus);
  * Mevcut Roblox doğrulaması, çift başvuru koruması, thread açma ve yetkili onay kartı akışı aynen çalışır.
  */
 router.post('/', async (req, res) => {
-  const { realName, gender, robloxInput } = req.body;
+  const { realName, gender, robloxInput, lang } = req.body;
   const discordId = req.body.discordId || req.headers['x-actor-id'];
 
   // 1. Girdi Doğrulama
@@ -103,12 +104,8 @@ router.post('/', async (req, res) => {
     });
   }
 
-  const cleanGender = String(gender || '').trim();
-  const isFemale =
-    cleanGender.toLowerCase().includes('kız') ||
-    cleanGender.toLowerCase().includes('kiz') ||
-    cleanGender.toLowerCase().includes('kadın');
-  const formattedGender = isFemale ? '👩 Kız' : '👨 Erkek';
+  const parsedGender = parseGenderInput(gender);
+  const formattedGender = parsedGender.tr;
 
   if (!robloxInput || typeof robloxInput !== 'string' || robloxInput.trim().length < 1) {
     return res.status(400).json({
@@ -132,6 +129,7 @@ router.post('/', async (req, res) => {
       gender: formattedGender,
       robloxInput: robloxInput.trim(),
       source: 'site',
+      lang: lang === 'en' ? 'en' : lang === 'tr' ? 'tr' : null,
     });
 
     if (!result.success) {

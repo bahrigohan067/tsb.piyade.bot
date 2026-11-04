@@ -11,6 +11,7 @@ const {
 
 const config = require('../../config');
 const database = require('./database');
+const { resolveLang } = require('./i18n');
 
 const LINE_DIVIDER = '────────────────────────────────────────────────────';
 
@@ -23,109 +24,135 @@ const RULES = {
     code: 'M1',
     category: 'participant',
     description: 'Sunucumuzda küfür/hakarete başvurmak. Bununla ilgili içerik paylaşmak.',
+    descriptionEn: 'Using profanity/insults on the server or sharing related content.',
     type: 'points',
     points: 2,
     penaltyLabel: '+2 Puan',
+    penaltyLabelEn: '+2 Points',
   },
   M2: {
     code: 'M2',
     category: 'participant',
     description: 'Reklam yapmak, hesap/oyun satışı gibi ticari faaliyetlerde bulunmak (Özel mesajda dahil).',
+    descriptionEn: 'Advertising or engaging in commercial activities such as account/game sales (including via DM).',
     type: 'ban',
     points: 0,
     penaltyLabel: 'Kalıcı Yasak (Permanent Ban)',
+    penaltyLabelEn: 'Permanent Ban',
   },
   M3: {
     code: 'M3',
     category: 'participant',
     description: 'Sunucumuzda düzenlenen etkinliklerde veya yapılacak olan kapışmalarda karşı taraf rahatsız olduğu halde kendini abartı şekilde övmek.',
+    descriptionEn: 'Excessive bragging/boasting during events or 1v1 matches when the opponent is uncomfortable.',
     type: 'points',
     points: 1,
     penaltyLabel: '+1 Puan',
+    penaltyLabelEn: '+1 Point',
   },
   M4: {
     code: 'M4',
     category: 'participant',
     description: 'Cinsiyet fark etmeksizin taciz içeren davranışlarda bulunmak.',
+    descriptionEn: 'Engaging in harassing behavior regardless of gender.',
     type: 'timeout',
     durationDays: 2,
     points: 0,
     penaltyLabel: '2 Gün Timeout',
+    penaltyLabelEn: '2 Days Timeout',
   },
   M5: {
     code: 'M5',
     category: 'participant',
     description: "Kanalları amacı dışında kullanmak (Örn: #bot-komut'da sohbet etmek).",
+    descriptionEn: 'Using channels outside their intended purpose (e.g., chatting in command channels).',
     type: 'points',
     points: 3,
     penaltyLabel: '+3 Puan',
+    penaltyLabelEn: '+3 Points',
   },
   M6: {
     code: 'M6',
     category: 'participant',
     description: 'Cinsel içerikli herhangi bir paylaşım (görsel, yazı, link) yapmak.',
+    descriptionEn: 'Sharing any sexually explicit content (images, text, or links).',
     type: 'points',
     points: 8,
     penaltyLabel: '+8 Puan',
+    penaltyLabelEn: '+8 Points',
   },
   M7: {
     code: 'M7',
     category: 'participant',
     description: 'Bir kişiye muhattap olmak istemediği sürece ya da kasten kavga ortamı yaratmak.',
+    descriptionEn: 'Forcing interaction with someone against their will or intentionally starting arguments/fights.',
     type: 'points',
     points: 4,
     penaltyLabel: '+4 Puan',
+    penaltyLabelEn: '+4 Points',
   },
   M8: {
     code: 'M8',
     category: 'participant',
     description: 'Zorbalık yapmak, başka bir üyeyi sunucudan soğutacak davranışlarda bulunmak.',
+    descriptionEn: 'Bullying or acting in a way that alienates another member from the server.',
     type: 'points',
     points: 5,
     penaltyLabel: '+5 Puan',
+    penaltyLabelEn: '+5 Points',
   },
   M9: {
     code: 'M9',
     category: 'participant',
     description: 'Yönetmenliği bilgisi dışında sunucu üyelerini kendi sunucunuza veya grubunuza davet etmek.',
+    descriptionEn: 'Inviting server members to your own server or group without management permission.',
     type: 'yasakli',
     points: 0,
     penaltyLabel: 'Doğrudan Yasaklı',
+    penaltyLabelEn: 'Direct Restricted Role (@Yasaklı)',
   },
   M10: {
     code: 'M10',
     category: 'participant',
     description: '+18, cinsel taciz, ırkçılık, cinsiyet/yaş ayrımcılığı içeren içerik paylaşmak.',
+    descriptionEn: 'Sharing NSFW/+18 content, sexual harassment, racism, or gender/age discrimination.',
     type: 'timeout',
     durationDays: 1,
     points: 0,
     penaltyLabel: '1 Gün Timeout',
+    penaltyLabelEn: '1 Day Timeout',
   },
   M11: {
     code: 'M11',
     category: 'participant',
     description: 'Irkçılık ve her türlü ayrımcılık yapmak.',
+    descriptionEn: 'Engaging in racism or any form of discrimination.',
     type: 'timeout',
     durationDays: 1,
     points: 0,
     penaltyLabel: '1 Gün Timeout',
+    penaltyLabelEn: '1 Day Timeout',
   },
   M12: {
     code: 'M12',
     category: 'participant',
     description: 'Sunucuda bulunan kişilerin piskolojisini etkileyecek argo, küçümseme ve dalga geçme gibi faliyetler yapmak.',
+    descriptionEn: 'Using toxic slang, belittling, or mocking members.',
     type: 'points',
     points: 2,
     penaltyLabel: '+2 Puan',
+    penaltyLabelEn: '+2 Points',
   },
   M13: {
     code: 'M13',
     category: 'participant',
     description: 'Sunucuda yapılan etkinliklerde ve kapışmalarda 3. Taraf yazılım kullanmak.',
+    descriptionEn: 'Using third-party software (exploits/cheats) in server events or 1v1 matches.',
     type: 'timeout',
     durationDays: 1,
     points: 0,
     penaltyLabel: '1 Gün Timeout',
+    penaltyLabelEn: '1 Day Timeout',
   },
 
   // Düzen / Kanal Maddeleri (D1 - D3)
@@ -133,25 +160,31 @@ const RULES = {
     code: 'D1',
     category: 'participant',
     description: 'Önemli kanallara (duyuru vb.) anlamsız, boş mesajlar atmak.',
+    descriptionEn: 'Sending meaningless or spam messages in important channels.',
     type: 'points',
     points: 3,
     penaltyLabel: '+3 Puan',
+    penaltyLabelEn: '+3 Points',
   },
   D2: {
     code: 'D2',
     category: 'participant',
     description: 'Ses kanallarında ses panelini veya sohbet kanallarında sohbeti gereksiz yere çağırmak (spawnlamak).',
+    descriptionEn: 'Spamming soundboard in voice channels or spamming text channels.',
     type: 'points',
     points: 3,
     penaltyLabel: '+3 Puan',
+    penaltyLabelEn: '+3 Points',
   },
   D3: {
     code: 'D3',
     category: 'participant',
     description: 'Önemli ses kanallarında sürekli yolculuk yaparak gereksiz bildirim yağmuruna sebep olmak.',
+    descriptionEn: 'Repeatedly joining and leaving voice channels to cause notification spam.',
     type: 'points',
     points: 3,
     penaltyLabel: '+3 Puan',
+    penaltyLabelEn: '+3 Points',
   },
 
   // Yetkili Maddeleri (Y1 - Y5)
@@ -672,16 +705,22 @@ async function executeVerbalWarning({ guild, targetMember, staffUser, staffMembe
 
   // Kullanıcıya DM Bildirimi
   try {
+    const isEn = resolveLang(targetMember) === 'en';
     await targetMember.user.send({
       embeds: [
         new EmbedBuilder()
-          .setTitle('🗣️ Sözlü Uyarı Aldınız')
+          .setTitle(isEn ? '🗣️ You Received a Verbal Warning' : '🗣️ Sözlü Uyarı Aldınız')
           .setColor(config.COLORS.WARNING_ORANGE)
           .setDescription(
-            `**${guild.name}** sunucusunda yetkili <@${staffId}> tarafından sözlü olarak uyarıldınız.\n\n` +
-            `📝 **Sebep:** ${reason}\n` +
-            `📌 **Uyarı ID:** \`#${warnId}\`\n\n` +
-            `*Bu uyarı puan eklemez ancak sicilinize kaydedilmiştir. Lütfen kurallara özen gösterin.*`
+            isEn
+              ? `You have received a verbal warning in **${guild.name}** from staff member <@${staffId}>.\n\n` +
+                `📝 **Reason:** ${reason}\n` +
+                `📌 **Warning ID:** \`#${warnId}\`\n\n` +
+                `*This verbal warning adds 0 penalty points, but it has been recorded in your history. Please follow the server rules.*`
+              : `**${guild.name}** sunucusunda yetkili <@${staffId}> tarafından sözlü olarak uyarıldınız.\n\n` +
+                `📝 **Sebep:** ${reason}\n` +
+                `📌 **Uyarı ID:** \`#${warnId}\`\n\n` +
+                `*Bu uyarı puan eklemez ancak sicilinize kaydedilmiştir. Lütfen kurallara özen gösterin.*`
           )
           .setTimestamp(),
       ],
@@ -816,8 +855,11 @@ async function executeOfficialWarning({ guild, targetMember, staffUser, staffMem
       appliedBan = true;
 
       try {
+        const isTargetEn = resolveLang(targetMember) === 'en';
         await targetMember.user.send(
-          `🔨 **${guild.name}** sunucusundan **${rule.code} — ${rule.description}** sebebiyle kalıcı olarak yasaklandınız.`
+          isTargetEn
+            ? `🔨 You have been permanently banned from **${guild.name}** for violating rule **${rule.code} — ${rule.descriptionEn || rule.description}**.`
+            : `🔨 **${guild.name}** sunucusundan **${rule.code} — ${rule.description}** sebebiyle kalıcı olarak yasaklandınız.`
         ).catch(() => {});
         await targetMember.ban({
           reason: `${rule.code}: ${rule.description} (Yetkili: ${staffTag})`,
@@ -1004,18 +1046,31 @@ async function executeOfficialWarning({ guild, targetMember, staffUser, staffMem
   // Kullanıcıya DM Bildirimi (Banlanmadıysa)
   if (!appliedBan) {
     try {
+      const isEn = resolveLang(targetMember) === 'en';
+      const pointsDisplayEn =
+        rule.type === 'points'
+          ? `+${rule.points} Points (Total: ${newPoints})`
+          : rule.penaltyLabelEn || pointsDisplay;
+
       await targetMember.user.send({
         embeds: [
           new EmbedBuilder()
-            .setTitle('⚠️ Sunucu Uyarısı Aldınız!')
+            .setTitle(isEn ? '⚠️ You Received an Official Server Warning!' : '⚠️ Sunucu Uyarısı Aldınız!')
             .setColor(config.COLORS.DANGER)
             .setDescription(
-              `**${guild.name}** sunucusunda kural ihlali nedeniyle resmi uyarı aldınız.\n\n` +
-              `📌 **Uyarı ID:** \`#${warnId}\`\n` +
-              `📝 **İhlal Edilen Madde:** ${rule.code} — ${rule.description}\n` +
-              `🚨 **Ceza / Puan:** ${pointsDisplay}\n` +
-              `⚡ **Uygulanan İşlem:** ${actionTakenText}\n` +
-              `📅 **Bitiş Tarihi:** ${expiresAtText}`
+              isEn
+                ? `You have received an official warning in **${guild.name}** for a rule violation.\n\n` +
+                  `📌 **Warning ID:** \`#${warnId}\`\n` +
+                  `📝 **Violated Rule:** ${rule.code} — ${rule.descriptionEn || rule.description}\n` +
+                  `🚨 **Penalty / Points:** ${pointsDisplayEn}\n` +
+                  `⚡ **Action Taken:** ${actionTakenText}\n` +
+                  `📅 **Expiration Date:** ${expiresAtText === 'Kalıcı' ? 'Permanent' : expiresAtText}`
+                : `**${guild.name}** sunucusunda kural ihlali nedeniyle resmi uyarı aldınız.\n\n` +
+                  `📌 **Uyarı ID:** \`#${warnId}\`\n` +
+                  `📝 **İhlal Edilen Madde:** ${rule.code} — ${rule.description}\n` +
+                  `🚨 **Ceza / Puan:** ${pointsDisplay}\n` +
+                  `⚡ **Uygulanan İşlem:** ${actionTakenText}\n` +
+                  `📅 **Bitiş Tarihi:** ${expiresAtText}`
             )
             .setTimestamp(),
         ],

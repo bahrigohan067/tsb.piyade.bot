@@ -8,6 +8,7 @@ const {
 const config = require('../../config');
 const database = require('./database');
 const { analyzeMessage } = require('./profanityFilter');
+const { resolveLang } = require('./i18n');
 
 // Kullanıcıya DM spam'ini önlemek için bekleme süresi (aynı kişiye en fazla 15 sn'de bir DM)
 const dmCooldowns = new Map();
@@ -34,44 +35,55 @@ function getTopRoles(member) {
  * Kullanıcıya gönderilen temiz uyarı DM'i (Turuncu)
  */
 function buildWarningDm(message, result, violationCount) {
+  const isEn = resolveLang(message) === 'en';
+
   const embed = new EmbedBuilder()
-    .setTitle('⚠️ Uyarı | Uygunsuz Dil Kullanımı')
+    .setTitle(isEn ? '⚠️ Warning | Inappropriate Language Detected' : '⚠️ Uyarı | Uygunsuz Dil Kullanımı')
     .setColor(config.COLORS.WARNING_ORANGE)
     .setDescription(
-      `Merhaba <@${message.author.id}>,\n\n` +
-      `**${message.guild.name}** sunucusunda yazdığın bir mesajda **uygunsuz ifade (küfür / argo)** tespit edildi.\n` +
-      `Hepimiz için daha keyifli bir ortam sağlamak adına lütfen sohbet kurallarına dikkat et. 🙏`
+      isEn
+        ? `Hello <@${message.author.id}>,\n\n` +
+          `Inappropriate language (**profanity / slang / insult**) was detected in a message you sent in **${message.guild.name}**.\n` +
+          `Please follow our chat rules to keep the community welcoming for everyone. 🙏`
+        : `Merhaba <@${message.author.id}>,\n\n` +
+          `**${message.guild.name}** sunucusunda yazdığın bir mesajda **uygunsuz ifade (küfür / argo)** tespit edildi.\n` +
+          `Hepimiz için daha keyifli bir ortam sağlamak adına lütfen sohbet kurallarına dikkat et. 🙏`
     )
     .addFields(
       {
-        name: '💬 Gönderdiğin Mesaj',
+        name: isEn ? '💬 Your Message' : '💬 Gönderdiğin Mesaj',
         value: toCodeBlock(message.content, 900),
         inline: false,
       },
       {
-        name: '📍 Kanal',
+        name: isEn ? '📍 Channel' : '📍 Kanal',
         value: `<#${message.channel.id}>`,
         inline: true,
       },
       {
-        name: '🕒 Zaman',
+        name: isEn ? '🕒 Time' : '🕒 Zaman',
         value: `<t:${Math.floor(message.createdTimestamp / 1000)}:F>`,
         inline: true,
       },
       {
-        name: '📌 Hatırlatma',
-        value:
-          `> Bu kez yalnızca bir uyarı yapılmıştır. Tekrarlanması hâlinde yetkililer tarafından ` +
-          `yaptırım uygulanabilir.\n> Toplam uyarı sayın: **${violationCount}**`,
+        name: isEn ? '📌 Reminder' : '📌 Hatırlatma',
+        value: isEn
+          ? `> This is an automated warning. Repeated violations may result in official penalties from our staff.\n> Total profanity warnings: **${violationCount}**`
+          : `> Bu kez yalnızca bir uyarı yapılmıştır. Tekrarlanması hâlinde yetkililer tarafından ` +
+            `yaptırım uygulanabilir.\n> Toplam uyarı sayın: **${violationCount}**`,
         inline: false,
       }
     )
-    .setFooter({ text: `Piyade Team • Otomatik Sohbet Koruma Sistemi` })
+    .setFooter({
+      text: isEn
+        ? 'Piyade Team • Automated Chat Protection System'
+        : 'Piyade Team • Otomatik Sohbet Koruma Sistemi',
+    })
     .setTimestamp();
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
-      .setLabel('Mesaja Git')
+      .setLabel(isEn ? 'Jump to Message' : 'Mesaja Git')
       .setEmoji('🔗')
       .setStyle(ButtonStyle.Link)
       .setURL(message.url)

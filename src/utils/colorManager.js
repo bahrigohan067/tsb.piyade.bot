@@ -6,12 +6,22 @@ const {
 } = require('discord.js');
 
 const config = require('../../config');
+const { resolveLang } = require('./i18n');
 
 // 12 adet mor çizgi emojisi
 const PURPLE_DIVIDER = Array(12).fill(config.EMOJIS.PURPLE_LINE).join('');
 
 // Tüm renk rolü ID'leri kümesi
 const COLOR_ROLE_IDS = new Set(config.COLOR_ROLES.map((c) => c.id));
+
+const COLOR_LABELS_EN = {
+  Siyah: 'Black',
+  Kırmızı: 'Red',
+  Sarı: 'Yellow',
+  Mavi: 'Blue',
+  Yeşil: 'Green',
+  Pembe: 'Pink',
+};
 
 // 10 saniyelik bekleme süresi (Cooldown: Map<userId, timestamp>)
 const colorCooldowns = new Map();
@@ -43,18 +53,19 @@ function createColorPanel() {
       `> 🗑️ **3️⃣ Rengi Kaldırma:** Üzerinizde bulunan rengin butonuna tekrar tıklarsanız renk rolünüz kaldırılır.\n` +
       `> ⏳ **4️⃣ Bekleme Süresi:** Spam yapılmasını önlemek adına renk butonlarını **10 saniye aralıklarla** kullanabilirsiniz.\n\n` +
       `${PURPLE_DIVIDER}\n\n` +
-      `## 🎨 Mevcut İsim Renklerimiz (Önizleme)\n\n` +
-      `> 🖤 <@&1559899395233808444> — **Siyah** *(Asil & Karanlık Tarz)*\n` +
-      `> ❤️ <@&1559926857472675910> — **Kırmızı** *(Ateşli & Keskin Tarz)*\n` +
-      `> 💛 <@&1559927000183873597> — **Sarı** *(Parlak & Enerjik Tarz)*\n` +
-      `> 💙 <@&1559926616535339010> — **Mavi** *(Soğukkanlı & Okyanus Tarzı)*\n` +
-      `> 💚 <@&1559926912338362379> — **Yeşil** *(Canlı & Zümrüt Tarzı)*\n` +
-      `> 🩷 <@&1559926687645311017> — **Pembe** *(Neon & Gösterişli Tarz)*\n\n` +
+      `## 🎨 Mevcut İsim Renklerimiz (Önizleme / Preview)\n\n` +
+      `> 🖤 <@&1559899395233808444> — **Siyah / Black** *(Asil & Karanlık Tarz)*\n` +
+      `> ❤️ <@&1559926857472675910> — **Kırmızı / Red** *(Ateşli & Keskin Tarz)*\n` +
+      `> 💛 <@&1559927000183873597> — **Sarı / Yellow** *(Parlak & Enerjik Tarz)*\n` +
+      `> 💙 <@&1559926616535339010> — **Mavi / Blue** *(Soğukkanlı & Okyanus Tarzı)*\n` +
+      `> 💚 <@&1559926912338362379> — **Yeşil / Green** *(Canlı & Zümrüt Tarzı)*\n` +
+      `> 🩷 <@&1559926687645311017> — **Pembe / Pink** *(Neon & Gösterişli Tarz)*\n\n` +
+      `🇬🇧 **English:** Click any button below to equip a name color (1 color max, click again to remove, 10s cooldown).\n\n` +
       `${PURPLE_DIVIDER}\n` +
       `-# ${config.EMOJIS.MODERATOR} Piyade Team | TSB • Kişiselleştirilebilir İsim Rengi Sistemi ✨`
     )
     .setFooter({
-      text: '🎨 Piyade Team • Sadece 1 renk seçilebilir • Bekleme süresi: 10 Saniye',
+      text: '🎨 Piyade Team • Sadece 1 renk seçilebilir (1 color max) • Bekleme süresi: 10sn',
     })
     .setTimestamp();
 
@@ -94,13 +105,16 @@ function createColorPanel() {
 async function handleColorButton(interaction, roleId) {
   const userId = interaction.user.id;
   const now = Date.now();
+  const isEn = resolveLang(interaction) === 'en';
 
   // 1. 10 Saniye Bekleme Süresi (Cooldown) Kontrolü
   const lastUsed = colorCooldowns.get(userId);
   if (lastUsed && now - lastUsed < COLOR_COOLDOWN_MS) {
     const remainingSec = Math.ceil((COLOR_COOLDOWN_MS - (now - lastUsed)) / 1000);
     return interaction.reply({
-      content: `⏳ **Çok Hızlı Tıklıyorsunuz!**\nRenk panelini **10 saniye** aralıklarla kullanabilirsiniz. Lütfen **${remainingSec} saniye** sonra tekrar deneyin! 🎨`,
+      content: isEn
+        ? `⏳ **Clicking Too Fast!**\nYou can use the color panel once every **10 seconds**. Please try again in **${remainingSec} seconds**! 🎨`
+        : `⏳ **Çok Hızlı Tıklıyorsunuz!**\nRenk panelini **10 saniye** aralıklarla kullanabilirsiniz. Lütfen **${remainingSec} saniye** sonra tekrar deneyin! 🎨`,
       ephemeral: true,
     });
   }
@@ -112,16 +126,19 @@ async function handleColorButton(interaction, roleId) {
   const colorInfo = config.COLOR_ROLES.find((c) => c.id === roleId);
   if (!colorInfo) {
     return interaction.editReply({
-      content: '❌ Geçersiz renk rolü seçildi!',
+      content: isEn ? '❌ Invalid color role selected!' : '❌ Geçersiz renk rolü seçildi!',
     });
   }
 
+  const colorLabelEn = COLOR_LABELS_EN[colorInfo.label] || colorInfo.label;
   const member = interaction.member;
   const guildRole = interaction.guild.roles.cache.get(roleId);
 
   if (!guildRole) {
     return interaction.editReply({
-      content: `❌ **${colorInfo.label}** renk rolü (\`${roleId}\`) sunucuda bulunamadı!`,
+      content: isEn
+        ? `❌ **${colorLabelEn}** color role (\`${roleId}\`) was not found on the server!`
+        : `❌ **${colorInfo.label}** renk rolü (\`${roleId}\`) sunucuda bulunamadı!`,
     });
   }
 
@@ -130,7 +147,9 @@ async function handleColorButton(interaction, roleId) {
     if (member.roles.cache.has(roleId)) {
       await member.roles.remove(roleId, 'İsim rengi kullanıcı tarafından kaldırıldı.');
       return interaction.editReply({
-        content: `🗑️ **İsim Rengi Kaldırıldı!**\nÜzerinizdeki ${colorInfo.emoji} <@&${roleId}> rengi başarıyla çıkarıldı. 10 saniye sonra yeni bir renk seçebilirsiniz! ✨`,
+        content: isEn
+          ? `🗑️ **Name Color Removed!**\nYour ${colorInfo.emoji} <@&${roleId}> (**${colorLabelEn}**) color role has been removed. You can pick a new color in 10 seconds! ✨`
+          : `🗑️ **İsim Rengi Kaldırıldı!**\nÜzerinizdeki ${colorInfo.emoji} <@&${roleId}> rengi başarıyla çıkarıldı. 10 saniye sonra yeni bir renk seçebilirsiniz! ✨`,
       });
     }
 
@@ -143,23 +162,31 @@ async function handleColorButton(interaction, roleId) {
     if (existingColorRoles.length > 0) {
       await member.roles.remove(existingColorRoles, 'Yeni isim rengi seçildiği için önceki renk rolü alındı.');
       const oldMentions = existingColorRoles.map((id) => `<@&${id}>`).join(', ');
-      previousRemovedText = `• **Alınan Önceki Renginiz:** ${oldMentions}\n`;
+      previousRemovedText = isEn
+        ? `• **Previous Color Removed:** ${oldMentions}\n`
+        : `• **Alınan Önceki Renginiz:** ${oldMentions}\n`;
     }
 
     // 3. Seçilen yeni renk rolünü ver
     await member.roles.add(roleId, `İsim rengi seçildi: ${colorInfo.label}`);
 
     return interaction.editReply({
-      content:
-        `🎨 **İsim Renginiz Başarıyla Güncellendi!** ✨\n\n` +
-        `${previousRemovedText}` +
-        `• **Yeni Renginiz:** ${colorInfo.emoji} <@&${roleId}> (**${colorInfo.label}**)\n` +
-        `• *Not: Aynı anda sadece 1 renk rolüne sahip olabilirsiniz. 10 saniye aralıklarla renginizi değiştirebilirsiniz!* 🌈`,
+      content: isEn
+        ? `🎨 **Name Color Updated Successfully!** ✨\n\n` +
+          `${previousRemovedText}` +
+          `• **New Color:** ${colorInfo.emoji} <@&${roleId}> (**${colorLabelEn}**)\n` +
+          `• *Note: You can only have 1 color role at a time. You can change your color every 10 seconds!* 🌈`
+        : `🎨 **İsim Renginiz Başarıyla Güncellendi!** ✨\n\n` +
+          `${previousRemovedText}` +
+          `• **Yeni Renginiz:** ${colorInfo.emoji} <@&${roleId}> (**${colorInfo.label}**)\n` +
+          `• *Not: Aynı anda sadece 1 renk rolüne sahip olabilirsiniz. 10 saniye aralıklarla renginizi değiştirebilirsiniz!* 🌈`,
     });
   } catch (err) {
     console.error('[RENK ROLÜ HATASI]:', err);
     return interaction.editReply({
-      content: `❌ Renk rolü verilirken bir yetki hatası oluştu! Lütfen botun rolünün renk rollerinin üzerinde olduğundan emin olun. (\`${err.message}\`)`,
+      content: isEn
+        ? `❌ A permission error occurred while assigning the color role! (\`${err.message}\`)`
+        : `❌ Renk rolü verilirken bir yetki hatası oluştu! Lütfen botun rolünün renk rollerinin üzerinde olduğundan emin olun. (\`${err.message}\`)`,
     });
   }
 }

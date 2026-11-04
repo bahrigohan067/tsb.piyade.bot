@@ -17,13 +17,15 @@ const {
 const config = require('../../config');
 const database = require('../utils/database');
 const robloxService = require('../services/roblox');
+const { createEnglishRegisterGuideEmbed } = require('../utils/panel');
 const {
   createVsRoomMessage,
+  createEnglishVsGuideEmbed,
   createVsResultAnnouncement,
   updateTop10Message,
   sanitizeChannelName,
 } = require('../utils/vsManager');
-const { handleHelpRequest } = require('../utils/helpManager');
+const { handleHelpRequest, createEnglishHelpGuideEmbed } = require('../utils/helpManager');
 const {
   handleTryoutStart,
   handleTryoutUserSelected,
@@ -38,6 +40,7 @@ const {
   handleProofButton,
 } = require('../utils/warningManager');
 const { createRegistrationApplication } = require('../services/registrationService');
+const { resolveLang, setMemberLanguage, parseGenderInput } = require('../utils/i18n');
 
 module.exports = {
   name: Events.InteractionCreate,
@@ -53,12 +56,20 @@ module.exports = {
 
       // 2. BUTON ETKİLEŞİMLERİ
       if (interaction.isButton()) {
-        // [A] "✅ Kayıt Ol" Paneli Butonu
-        if (interaction.customId === 'btn_kayit_ol') {
+        // [A] "✅ Kayıt Ol" ve "🇬🇧 Register (English)" Paneli Butonları
+        if (interaction.customId === 'btn_kayit_ol' || interaction.customId === 'btn_kayit_ol_en') {
+          const isEnClick = interaction.customId === 'btn_kayit_ol_en';
+          if (isEnClick) {
+            await setMemberLanguage(interaction.member, 'en').catch(() => {});
+          }
+          const isEn = isEnClick || resolveLang(interaction) === 'en';
+
           // Kontrol 1: Zaten Üye mi? (1559604702143062016 rolü var mı?)
           if (interaction.member.roles.cache.has(config.ROLES.REGISTERED_CHECK)) {
             return interaction.reply({
-              content: '❌ Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
+              content: isEn
+                ? '❌ You are already registered on our server! You cannot submit another application.'
+                : '❌ Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
               ephemeral: true,
             });
           }
@@ -69,7 +80,9 @@ module.exports = {
             const existingThread = await interaction.guild.channels.fetch(activeApp.threadId).catch(() => null);
             if (existingThread) {
               return interaction.reply({
-                content: `⚠️ Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: <#${activeApp.threadId}>`,
+                content: isEn
+                  ? `⚠️ You already have an active registration application! Please check your registration thread: <#${activeApp.threadId}>`
+                  : `⚠️ Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: <#${activeApp.threadId}>`,
                 ephemeral: true,
               });
             } else {
@@ -79,26 +92,54 @@ module.exports = {
 
           // Cinsiyet Seçimi (Açılır Menü / Select Menu) sunuluyor
           const genderSelect = new StringSelectMenuBuilder()
-            .setCustomId('select_gender')
-            .setPlaceholder('Lütfen Cinsiyetinizi Seçiniz...')
+            .setCustomId(isEn ? 'select_gender_en' : 'select_gender')
+            .setPlaceholder(isEn ? 'Please select your gender...' : 'Lütfen Cinsiyetinizi Seçiniz...')
             .addOptions(
               new StringSelectMenuOptionBuilder()
-                .setLabel('Erkek')
+                .setLabel(isEn ? 'Male' : 'Erkek')
                 .setEmoji('👨')
                 .setValue('gender_erkek')
-                .setDescription('Piyade Team bünyesine erkek üye olarak kayıt'),
+                .setDescription(
+                  isEn
+                    ? 'Register as a male member of Piyade Team'
+                    : 'Piyade Team bünyesine erkek üye olarak kayıt'
+                ),
               new StringSelectMenuOptionBuilder()
-                .setLabel('Kız')
+                .setLabel(isEn ? 'Female' : 'Kız')
                 .setEmoji('👩')
                 .setValue('gender_kiz')
-                .setDescription('Piyade Team bünyesine kadın üye olarak kayıt')
+                .setDescription(
+                  isEn
+                    ? 'Register as a female member of Piyade Team'
+                    : 'Piyade Team bünyesine kadın üye olarak kayıt'
+                )
             );
 
           const row = new ActionRowBuilder().addComponents(genderSelect);
 
           return interaction.reply({
-            content: `👋 Hoş geldin <@${interaction.user.id}>!\nKayıt formunu açmak için lütfen aşağıdan **Cinsiyetinizi** seçiniz:`,
+            content: isEn
+              ? `👋 Welcome <@${interaction.user.id}>!\nPlease read the guide below and select your **Gender** to open the registration form:`
+              : `👋 Hoş geldin <@${interaction.user.id}>!\nKayıt formunu açmak için lütfen aşağıdan **Cinsiyetinizi** seçiniz:`,
+            embeds: isEn ? [createEnglishRegisterGuideEmbed()] : [],
             components: [row],
+            ephemeral: true,
+          });
+        }
+
+        // [A2] VS & ACİL YARDIM İNGİLİZCE REHBER BUTONLARI
+        if (interaction.customId === 'btn_vs_en_info') {
+          await setMemberLanguage(interaction.member, 'en').catch(() => {});
+          return interaction.reply({
+            embeds: [createEnglishVsGuideEmbed()],
+            ephemeral: true,
+          });
+        }
+
+        if (interaction.customId === 'btn_help_en_info') {
+          await setMemberLanguage(interaction.member, 'en').catch(() => {});
+          return interaction.reply({
+            embeds: [createEnglishHelpGuideEmbed()],
             ephemeral: true,
           });
         }
@@ -168,18 +209,19 @@ module.exports = {
 
       // 3. AÇILIR MENÜ (STRING SELECT MENU) ETKİLEŞİMLERİ
       if (interaction.isStringSelectMenu()) {
-        if (interaction.customId === 'select_gender') {
+        if (interaction.customId === 'select_gender' || interaction.customId === 'select_gender_en') {
+          const isEn = interaction.customId === 'select_gender_en' || resolveLang(interaction) === 'en';
           const selectedGender = interaction.values[0]; // 'gender_erkek' veya 'gender_kiz'
 
           // Kayıt Formu (KayitModal) Açılıyor
           const modal = new ModalBuilder()
-            .setCustomId(`modal_kayit_${selectedGender}`)
-            .setTitle('Piyade Team | Kayıt Formu');
+            .setCustomId(isEn ? `modal_kayit_en_${selectedGender}` : `modal_kayit_${selectedGender}`)
+            .setTitle(isEn ? 'Piyade Team | Registration Form' : 'Piyade Team | Kayıt Formu');
 
           const nameInput = new TextInputBuilder()
             .setCustomId('modal_real_name')
-            .setLabel('Gerçek Adın Nedir?')
-            .setPlaceholder('Örn: Ahmet Yılmaz')
+            .setLabel(isEn ? 'What is your Real Name?' : 'Gerçek Adın Nedir?')
+            .setPlaceholder(isEn ? 'e.g. John' : 'Örn: Ahmet Yılmaz')
             .setStyle(TextInputStyle.Short)
             .setMinLength(2)
             .setMaxLength(32)
@@ -187,8 +229,8 @@ module.exports = {
 
           const robloxInput = new TextInputBuilder()
             .setCustomId('modal_roblox_input')
-            .setLabel('Roblox Adı, ID\'si veya Profil Linki')
-            .setPlaceholder('Örn: Builderman, 156 veya profil linki')
+            .setLabel(isEn ? 'Roblox Username, ID, or Profile Link' : 'Roblox Adı, ID\'si veya Profil Linki')
+            .setPlaceholder(isEn ? 'e.g. Builderman, 156, or profile link' : 'Örn: Builderman, 156 veya profil linki')
             .setStyle(TextInputStyle.Short)
             .setMinLength(1)
             .setMaxLength(120)
@@ -196,9 +238,13 @@ module.exports = {
 
           const genderInput = new TextInputBuilder()
             .setCustomId('modal_gender')
-            .setLabel('Cinsiyetiniz (Erkek / Kız)')
-            .setValue(selectedGender.includes('kiz') ? 'Kız' : 'Erkek')
-            .setPlaceholder('Erkek veya Kız')
+            .setLabel(isEn ? 'Your Gender (Male / Female)' : 'Cinsiyetiniz (Erkek / Kız)')
+            .setValue(
+              selectedGender.includes('kiz')
+                ? isEn ? 'Female' : 'Kız'
+                : isEn ? 'Male' : 'Erkek'
+            )
+            .setPlaceholder(isEn ? 'Male or Female' : 'Erkek veya Kız')
             .setStyle(TextInputStyle.Short)
             .setMinLength(1)
             .setMaxLength(15)
@@ -286,27 +332,20 @@ module.exports = {
 async function handleRegistrationModalSubmit(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
+  const isEnModal = interaction.customId.startsWith('modal_kayit_en_');
+  const isEn = isEnModal || resolveLang(interaction) === 'en';
+
   const realName = interaction.fields.getTextInputValue('modal_real_name').trim();
   const robloxInput = interaction.fields.getTextInputValue('modal_roblox_input').trim();
 
-  // Formda yazılan cinsiyet okunuyor
+  // Formda yazılan cinsiyet okunuyor (Türkçe ve İngilizce girdileri destekler)
   let inputGender = '';
   try {
     inputGender = interaction.fields.getTextInputValue('modal_gender')?.trim() || '';
   } catch (e) {}
 
-  if (!inputGender && interaction.customId.includes('gender_')) {
-    inputGender = interaction.customId.includes('kiz') ? 'Kız' : 'Erkek';
-  }
-
-  const isFemale =
-    inputGender.toLowerCase().includes('kız') ||
-    inputGender.toLowerCase().includes('kiz') ||
-    inputGender.toLowerCase().includes('kadın') ||
-    inputGender.toLowerCase() === 'k' ||
-    inputGender.toLowerCase().includes('bayan');
-
-  const gender = isFemale ? '👩 Kız' : '👨 Erkek';
+  const parsedGender = parseGenderInput(inputGender, interaction.customId);
+  const gender = parsedGender.tr;
 
   const result = await createRegistrationApplication({
     guild: interaction.guild,
@@ -316,6 +355,7 @@ async function handleRegistrationModalSubmit(interaction) {
     gender,
     robloxInput,
     source: 'discord',
+    lang: isEn ? 'en' : 'tr',
   });
 
   if (!result.success) {
@@ -325,7 +365,9 @@ async function handleRegistrationModalSubmit(interaction) {
   }
 
   return interaction.editReply({
-    content: `✅ Başvurunuz başarıyla alındı! Size özel oluşturulan kayıt odasını takip edebilirsiniz: <#${result.threadId}>`,
+    content: isEn
+      ? `✅ Your registration application has been submitted! You can follow your application in your private thread: <#${result.threadId}>`
+      : `✅ Başvurunuz başarıyla alındı! Size özel oluşturulan kayıt odasını takip edebilirsiniz: <#${result.threadId}>`,
   });
 }
 
@@ -364,12 +406,11 @@ async function handleApprove(interaction, applicantId) {
     }
 
     // 2. Cinsiyet Rolünü Tanımla (Erkek: 1559637360558350356 | Kız: 1559637300042797096)
-    const genderStr = (activeApp?.gender || '').toLowerCase();
-    const isFemale =
-      genderStr.includes('kız') ||
-      genderStr.includes('kiz') ||
-      genderStr.includes('kadın') ||
-      genderStr === 'k';
+    const { isFemale } = parseGenderInput(activeApp?.gender);
+    const isApplicantEn = activeApp?.lang === 'en' || resolveLang(applicantMember || applicantId) === 'en';
+    if (isApplicantEn) {
+      await setMemberLanguage(applicantMember, 'en').catch(() => {});
+    }
 
     const genderRoleId = isFemale ? config.ROLES.FEMALE : config.ROLES.MALE;
     if (genderRoleId && interaction.guild.roles.cache.has(genderRoleId)) {
@@ -431,7 +472,9 @@ async function handleApprove(interaction, applicantId) {
     // 7. Kullanıcıya DM Gönder
     try {
       await applicantMember.user.send(
-        `🎉 Tebrikler! **Piyade Team | TSB** sunucusundaki kayıt başvurunuz <@${interaction.user.id}> tarafından **onaylandı**.\nRolleriniz hesabınıza tanımlandı. İyi eğlenceler dileriz!`
+        isApplicantEn
+          ? `🎉 Congratulations! Your registration application in **Piyade Team | TSB** has been **approved** by <@${interaction.user.id}>.\nYour member roles have been assigned. Have fun!`
+          : `🎉 Tebrikler! **Piyade Team | TSB** sunucusundaki kayıt başvurunuz <@${interaction.user.id}> tarafından **onaylandı**.\nRolleriniz hesabınıza tanımlandı. İyi eğlenceler dileriz!`
       );
     } catch (e) {}
 
@@ -544,17 +587,24 @@ async function handleRejectModalSubmit(interaction, applicantId) {
   }
 
   // 2. Özel Kayıt Odasına Bilgilendirme Gönder ve 5 Dakika Sonra Sil
+  const isApplicantEn = activeApp?.lang === 'en' || resolveLang(applicantMember || applicantId) === 'en';
+
   if (activeApp && activeApp.threadId) {
     const threadRef = await interaction.guild.channels.fetch(activeApp.threadId).catch(() => null);
     if (threadRef) {
       const rejectedThreadEmbed = new EmbedBuilder()
-        .setTitle('✖️ Kayıt Başvurunuz Reddedildi')
+        .setTitle(isApplicantEn ? '✖️ Registration Application Rejected' : '✖️ Kayıt Başvurunuz Reddedildi')
         .setColor(config.COLORS.DANGER)
         .setDescription(
-          `❌ <@${applicantId}>, kayıt başvurunuz yetkili <@${interaction.user.id}> tarafından **REDDEDİLDİ**.\n\n` +
-          `**Red Sebebi:**\n> ${rejectReason}\n\n` +
-          `⚠️ **Dikkat:** Bu özel oda **5 dakika** içinde otomatik olarak silinecektir.\n` +
-          `Hatalarınızı düzelterek kayıt kanalındaki panelden tekrar başvurabilirsiniz.`
+          isApplicantEn
+            ? `❌ <@${applicantId}>, your registration application was **REJECTED** by staff member <@${interaction.user.id}>.\n\n` +
+              `**Reason:**\n> ${rejectReason}\n\n` +
+              `⚠️ **Notice:** This private thread will be automatically deleted in **5 minutes**.\n` +
+              `Please fix the issue above and submit a new application from the registration panel.`
+            : `❌ <@${applicantId}>, kayıt başvurunuz yetkili <@${interaction.user.id}> tarafından **REDDEDİLDİ**.\n\n` +
+              `**Red Sebebi:**\n> ${rejectReason}\n\n` +
+              `⚠️ **Dikkat:** Bu özel oda **5 dakika** içinde otomatik olarak silinecektir.\n` +
+              `Hatalarınızı düzelterek kayıt kanalındaki panelden tekrar başvurabilirsiniz.`
         )
         .setTimestamp();
 
@@ -563,7 +613,7 @@ async function handleRejectModalSubmit(interaction, applicantId) {
         embeds: [rejectedThreadEmbed],
       });
 
-      await threadRef.setName('✖️・reddedildi').catch(() => {});
+      await threadRef.setName(isApplicantEn ? '✖️・rejected' : '✖️・reddedildi').catch(() => {});
 
       setTimeout(async () => {
         try {
@@ -580,10 +630,15 @@ async function handleRejectModalSubmit(interaction, applicantId) {
   if (applicantMember) {
     try {
       await applicantMember.user.send(
-        `✖️ **Piyade Team | TSB** sunucusundaki kayıt başvurunuz reddedildi.\n\n` +
-        `**Reddeden Yetkili:** <@${interaction.user.id}>\n` +
-        `**Red Sebebi:**\n> ${rejectReason}\n\n` +
-        `Eksik veya hatalı bilgilerinizi düzelterek kayıt kanalındaki panelden tekrar başvurabilirsiniz.`
+        isApplicantEn
+          ? `✖️ Your registration application in **Piyade Team | TSB** was rejected.\n\n` +
+            `**Reviewed By:** <@${interaction.user.id}>\n` +
+            `**Reason:**\n> ${rejectReason}\n\n` +
+            `Please correct your information and re-apply using the registration panel.`
+          : `✖️ **Piyade Team | TSB** sunucusundaki kayıt başvurunuz reddedildi.\n\n` +
+            `**Reddeden Yetkili:** <@${interaction.user.id}>\n` +
+            `**Red Sebebi:**\n> ${rejectReason}\n\n` +
+            `Eksik veya hatalı bilgilerinizi düzelterek kayıt kanalındaki panelden tekrar başvurabilirsiniz.`
       );
     } catch (dmErr) {}
   }
@@ -601,13 +656,17 @@ async function handleRejectModalSubmit(interaction, applicantId) {
  * Kullanıcı "⚔️ VS Talep Oluştur" butonuna bastığında çalışan fonksiyon.
  */
 async function handleVsRequestStart(interaction) {
+  const isEn = resolveLang(interaction) === 'en';
+
   // Aktif Talep Kontrolü: Oyuncunun açık VS kanalı var mı?
   const existingVs = database.getActiveVsByUser(interaction.user.id);
   if (existingVs) {
     const existingChannel = await interaction.guild.channels.fetch(existingVs.channelId).catch(() => null);
     if (existingChannel) {
       return interaction.reply({
-        content: `❌ Zaten açık bir VS talebiniz bulunuyor: <#${existingVs.channelId}>`,
+        content: isEn
+          ? `❌ You already have an open VS challenge channel: <#${existingVs.channelId}>`
+          : `❌ Zaten açık bir VS talebiniz bulunuyor: <#${existingVs.channelId}>`,
         ephemeral: true,
       });
     } else {
@@ -618,14 +677,16 @@ async function handleVsRequestStart(interaction) {
   // Rakip Seçimi için UserSelectMenu
   const userSelect = new UserSelectMenuBuilder()
     .setCustomId('select_vs_opponent')
-    .setPlaceholder('Kapışmak istediğin rakibini seç...')
+    .setPlaceholder(isEn ? 'Select the opponent you want to 1v1...' : 'Kapışmak istediğin rakibini seç...')
     .setMinValues(1)
     .setMaxValues(1);
 
   const row = new ActionRowBuilder().addComponents(userSelect);
 
   return interaction.reply({
-    content: `⚔️ **VS Talep Başlatma**\nLütfen aşağıdan kapışmak istediğiniz rakibi seçiniz:`,
+    content: isEn
+      ? `⚔️ **Start a 1v1 (VS) Challenge**\nPlease select the opponent you want to challenge from the menu below:`
+      : `⚔️ **VS Talep Başlatma**\nLütfen aşağıdan kapışmak istediğiniz rakibi seçiniz:`,
     components: [row],
     ephemeral: true,
   });
@@ -636,13 +697,14 @@ async function handleVsRequestStart(interaction) {
  */
 async function handleVsOpponentSelected(interaction) {
   await interaction.deferReply({ ephemeral: true });
+  const isEn = resolveLang(interaction) === 'en';
 
   const opponentId = interaction.values[0];
 
   // Kontrol 1: Kendisiyle kapışamaz
   if (opponentId === interaction.user.id) {
     return interaction.editReply({
-      content: '❌ Kendinle kapışamazsın!',
+      content: isEn ? '❌ You cannot challenge yourself!' : '❌ Kendinle kapışamazsın!',
     });
   }
 
@@ -650,7 +712,9 @@ async function handleVsOpponentSelected(interaction) {
   const opponentMember = await interaction.guild.members.fetch(opponentId).catch(() => null);
   if (!opponentMember || opponentMember.user.bot) {
     return interaction.editReply({
-      content: '❌ Bir bot veya sunucuda bulunmayan bir kullanıcı ile kapışamazsınız!',
+      content: isEn
+        ? '❌ You cannot challenge a bot or a user who is not in the server!'
+        : '❌ Bir bot veya sunucuda bulunmayan bir kullanıcı ile kapışamazsınız!',
     });
   }
 
@@ -658,7 +722,9 @@ async function handleVsOpponentSelected(interaction) {
   const challengerActive = database.getActiveVsByUser(interaction.user.id);
   if (challengerActive) {
     return interaction.editReply({
-      content: `❌ Zaten açık bir VS talebiniz bulunuyor: <#${challengerActive.channelId}>`,
+      content: isEn
+        ? `❌ You already have an open VS challenge channel: <#${challengerActive.channelId}>`
+        : `❌ Zaten açık bir VS talebiniz bulunuyor: <#${challengerActive.channelId}>`,
     });
   }
 
@@ -666,7 +732,9 @@ async function handleVsOpponentSelected(interaction) {
   const opponentActive = database.getActiveVsByUser(opponentId);
   if (opponentActive) {
     return interaction.editReply({
-      content: `❌ Seçtiğiniz kullanıcının (<@${opponentId}>) halihazırda devam eden açık bir VS maçı bulunuyor!`,
+      content: isEn
+        ? `❌ Your selected opponent (<@${opponentId}>) already has an active VS match in progress!`
+        : `❌ Seçtiğiniz kullanıcının (<@${opponentId}>) halihazırda devam eden açık bir VS maçı bulunuyor!`,
     });
   }
 
@@ -754,12 +822,16 @@ async function handleVsOpponentSelected(interaction) {
     });
 
     return interaction.editReply({
-      content: `✅ VS odanız başarıyla açıldı! Maç kanalına gitmek için tıklayın: <#${vsChannel.id}>`,
+      content: isEn
+        ? `✅ Your VS match channel has been created! Click here to go to the match channel: <#${vsChannel.id}>`
+        : `✅ VS odanız başarıyla açıldı! Maç kanalına gitmek için tıklayın: <#${vsChannel.id}>`,
     });
   } catch (err) {
     console.error('[VS ODA AÇMA HATASI]:', err);
     return interaction.editReply({
-      content: `❌ VS kanalı oluşturulurken bir hata meydana geldi: ${err.message}`,
+      content: isEn
+        ? `❌ An error occurred while creating the VS channel: ${err.message}`
+        : `❌ VS kanalı oluşturulurken bir hata meydana geldi: ${err.message}`,
     });
   }
 }

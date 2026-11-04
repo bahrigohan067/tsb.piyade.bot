@@ -35,7 +35,11 @@ function createRegisterPanel() {
     new ButtonBuilder()
       .setCustomId('btn_kayit_ol')
       .setLabel('✅ Kayıt Ol')
-      .setStyle(ButtonStyle.Primary) // Mavi Discord Butonu
+      .setStyle(ButtonStyle.Primary), // Mavi Discord Butonu
+    new ButtonBuilder()
+      .setCustomId('btn_kayit_ol_en')
+      .setLabel('🇬🇧 Register (English)')
+      .setStyle(ButtonStyle.Secondary)
   );
 
   return {
@@ -44,6 +48,66 @@ function createRegisterPanel() {
   };
 }
 
+/**
+ * İngilizce Kayıt Rehberi Embed'ini Üretir (Ephemeral)
+ */
+function createEnglishRegisterGuideEmbed() {
+  return new EmbedBuilder()
+    .setTitle('🛡️ Piyade Team | TSB | Registration Guide (EN)')
+    .setColor(config.COLORS.BLUE)
+    .setDescription(
+      `***\n\n` +
+      `## 📋 How to Register?\n\n` +
+      `Welcome to **Piyade Team | TSB**! Follow these steps to verify your account and unlock member channels:\n\n` +
+      `> **1️⃣ Step:** Select your **Gender** (**👨 Male** or **👩 Female**) from the dropdown menu below.\n` +
+      `> **2️⃣ Step:** Fill out the registration form with your **Real Name** and **Roblox Info** (\`@username\`, User ID, or Profile Link).\n` +
+      `> **3️⃣ Step:** Our system will automatically verify your Roblox account and open a private registration thread for you.\n` +
+      `> **4️⃣ Step:** Once our staff approves your application, your member roles and the **🇬🇧 English** role will be assigned automatically!\n\n` +
+      `### ⚠️ Important Rules\n` +
+      `• **Exact Username:** Please enter your actual Roblox **\`@username\`**, User ID, or profile URL — **not** your Display Name.\n` +
+      `• **One Account Rule:** **1 Discord Account = 1 Roblox Account**. Accounts already linked to another member will be rejected.\n` +
+      `• **Banned Accounts:** Terminated/banned Roblox accounts cannot register.\n\n` +
+      `***`
+    )
+    .setFooter({
+      text: '🛡️ Piyade Team & TSB Registration System • English Support',
+    });
+}
+
+/**
+ * Sunucu açılışında kayıt kanalındaki mevcut kayıt panelini yeni butonlarla günceller
+ */
+async function ensureRegisterPanelMessage(guild) {
+  if (!guild) return;
+
+  const channel =
+    guild.channels.cache.get(config.CHANNELS.REGISTER) ||
+    (await guild.channels.fetch(config.CHANNELS.REGISTER).catch(() => null));
+
+  if (!channel) return;
+
+  try {
+    const messages = await channel.messages.fetch({ limit: 15 }).catch(() => null);
+    if (!messages) return;
+
+    const existingBotPanel = messages.find(
+      (m) =>
+        m.author.id === guild.client.user.id &&
+        m.embeds.length > 0 &&
+        m.embeds[0].title &&
+        m.embeds[0].title.includes('Kayıt Sistemi')
+    );
+
+    if (existingBotPanel) {
+      await existingBotPanel.edit(createRegisterPanel());
+    }
+  } catch (err) {
+    console.warn('[KAYIT PANELİ GÜNCELLEME HATASI]:', err.message);
+  }
+}
+
 module.exports = {
   createRegisterPanel,
+  createEnglishRegisterGuideEmbed,
+  ensureRegisterPanelMessage,
 };
