@@ -1,6 +1,7 @@
 {
   "registrations": [],
   "activeApplications": {},
+  "rejectedApplications": {},
   "vsStats": {},
   "activeVs": {},
   "top10MessageId": null,
@@ -11,5 +12,8 @@
   "profanityStats": {},
   "warningRoles": {},
   "warningStats": {},
-  "warnings": {}
+  "warnings": {},
+  "languagePrefs": {},
+  "englishRoleId": null,
+  "lockedChannels": {}
 }

@@ -102,6 +102,13 @@ module.exports = {
       '1559614111128490044', // Yönetmenlik
       '1561777507223601353', // Kurucu / Developer
     ],
+
+    // Kanal Kilitleme (!lock / !unlock) Komutunu Kullanabilen ve Kilitli Kanalda Yazabilen Roller
+    LOCK_AUTHORITIES: [
+      '1559614111128490044', // Yönetmenlik
+      '1561777507223601353', // Developer
+      '1559604770396967022', // Üst Yetkili
+    ],
   },
 
   // Özel Kullanıcı ID'leri

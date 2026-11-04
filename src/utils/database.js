@@ -26,6 +26,7 @@ class DatabaseManager {
       warnings: {},                   // { [warnId]: { id, type, userId, staffId, ruleCode, reason, ... } }
       languagePrefs: {},              // { [userId]: 'tr' | 'en' }
       englishRoleId: null,            // Otomatik veya tanımlı 🇬🇧 English rolü ID'si
+      lockedChannels: {},             // { [channelId]: { channelId, lockedBy, lockedAt, overwrites: [...] } }
     };
     this.init();
   }
@@ -56,6 +57,7 @@ class DatabaseManager {
           warnings: parsed.warnings || {},
           languagePrefs: parsed.languagePrefs || {},
           englishRoleId: parsed.englishRoleId || null,
+          lockedChannels: parsed.lockedChannels || {},
         };
       } else {
         this.save();
@@ -578,6 +580,35 @@ class DatabaseManager {
     this.data.englishRoleId = roleId;
     this.save();
     return roleId;
+  }
+
+  // ==========================================
+  // KANAL KİLİTLEME (!lock / !unlock) BÖLÜMÜ
+  // ==========================================
+
+  getLockedChannel(channelId) {
+    if (!channelId) return null;
+    return (this.data.lockedChannels && this.data.lockedChannels[String(channelId)]) || null;
+  }
+
+  setLockedChannel(channelId, data) {
+    if (!channelId) return null;
+    if (!this.data.lockedChannels) this.data.lockedChannels = {};
+    this.data.lockedChannels[String(channelId)] = {
+      ...data,
+      channelId: String(channelId),
+      lockedAt: data.lockedAt || Date.now(),
+    };
+    this.save();
+    return this.data.lockedChannels[String(channelId)];
+  }
+
+  removeLockedChannel(channelId) {
+    if (!channelId || !this.data.lockedChannels) return;
+    if (this.data.lockedChannels[String(channelId)]) {
+      delete this.data.lockedChannels[String(channelId)];
+      this.save();
+    }
   }
 }
 

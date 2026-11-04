@@ -2,12 +2,39 @@ const { Events, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const config = require('../../config');
 const { moderateMessage } = require('../utils/moderationManager');
 const { handleMediaChannel } = require('../utils/mediaChannelManager');
+const {
+  enforceLockedChannelMessage,
+  handleLockCommand,
+  handleUnlockCommand,
+} = require('../utils/lockManager');
 
 module.exports = {
   name: Events.MessageCreate,
   async execute(message) {
     // Botların mesajlarını ve DM'leri yoksay
     if (message.author.bot || !message.guild) return;
+
+    // 0. Kilitli Kanal Denetimi (Kanal kilitliyse ve 3 yetkili rolden biri yoksa mesajı anında sil)
+    try {
+      const isLockedBlocked = await enforceLockedChannelMessage(message);
+      if (isLockedBlocked) return;
+    } catch (err) {
+      console.error('[KİLİTLİ KANAL DENETİM HATASI]:', err.message);
+    }
+
+    const content = message.content.trim();
+    const lowerContent = content.toLowerCase();
+
+    // !lock ve !unlock komutları
+    if (lowerContent === '!lock' || lowerContent.startsWith('!lock ')) {
+      await handleLockCommand(message);
+      return;
+    }
+
+    if (lowerContent === '!unlock' || lowerContent.startsWith('!unlock ')) {
+      await handleUnlockCommand(message);
+      return;
+    }
 
     // 1. Sadece Medya Kanalı Denetimi (Hedef kanalda düz metinleri siler ve uyarır)
     try {
@@ -22,10 +49,8 @@ module.exports = {
       console.error('[KÜFÜR FİLTRESİ HATASI]:', err.message)
     );
 
-    const content = message.content.trim();
-
     // !temizle komutu kontrolü
-    if (content.toLowerCase().startsWith('!temizle')) {
+    if (lowerContent.startsWith('!temizle')) {
       // Yetki Kontrolü (Mesajları Yönet, Yönetici veya Yetkili Rolleri)
       const hasPermission =
         message.member.permissions.has(PermissionFlagsBits.ManageMessages) ||
