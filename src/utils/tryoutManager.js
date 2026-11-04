@@ -277,7 +277,7 @@ function createTryoutPanel() {
  */
 function createTryoutLeaderboardEmbed() {
   const allLeaderboard = database.getTryoutLeaderboard();
-  const leaderboard = allLeaderboard.slice(0, 17);
+  const leaderboard = allLeaderboard.slice(0, 100);
 
   const rankEmojis = [
     config.EMOJIS.MEDAL_1,      // 1. Sıra
@@ -299,43 +299,92 @@ function createTryoutLeaderboardEmbed() {
     config.EMOJIS.RANK_17,      // 17. Sıra
   ];
 
-  let rowsText = '';
-
-  if (!leaderboard || leaderboard.length === 0) {
-    rowsText = `*Henüz değerlendirmeye alınan bir klan üyesi bulunmamaktadır.*`;
-  } else {
-    leaderboard.forEach((entry, index) => {
-      const emoji = rankEmojis[index] || `**#${index + 1}**`;
-      const isLast = index === leaderboard.length - 1;
-      const golemSuffix = isLast ? ` ${config.EMOJIS.GOLEM}` : '';
-
-      rowsText += `${emoji} <@${entry.userId}> <@&${entry.roleId}> **[ ${entry.formCount} Form ]**${golemSuffix}\n`;
-
-      // İlk 3 sıradan sonra şablondaki gibi boşluk bırak
-      if (index === 2 && leaderboard.length > 3) {
-        rowsText += `\n`;
-      }
-    });
-  }
-
-  const description =
+  const headerBlock =
     `# ${config.EMOJIS.KING} Piyade Team | TSB | Tryout Değerlendirmesi ${config.EMOJIS.KING}\n\n` +
     `${PURPLE_DIVIDER}\n` +
-    `${config.EMOJIS.ADMIN_BADGE} <@&${config.ROLES.TRYOUT_STAFF}> | <@${config.USERS.TRYOUT_HEADER_USER}> ${config.EMOJIS.ADMIN_BADGE}\n\n` +
-    `${rowsText}\n` +
-    `${PURPLE_DIVIDER}\n` +
+    `${config.EMOJIS.ADMIN_BADGE} <@&${config.ROLES.TRYOUT_STAFF}> | <@${config.USERS.TRYOUT_HEADER_USER}> ${config.EMOJIS.ADMIN_BADGE}\n\n`;
+
+  const footerBlock =
+    `\n${PURPLE_DIVIDER}\n` +
     `-# ${config.EMOJIS.MODERATOR} Piyade Team | Tryout Değerlendirmesi`;
 
-  const embed = new EmbedBuilder()
-    .setColor(config.COLORS.NAVY)
-    .setDescription(description)
-    .setFooter({
-      text: `Piyade Team | TSB • Toplam Değerlendirilen Üye: ${leaderboard.length}`,
-    })
-    .setTimestamp();
+  if (!leaderboard || leaderboard.length === 0) {
+    const emptyDesc =
+      headerBlock +
+      `*Henüz değerlendirmeye alınan bir klan üyesi bulunmamaktadır.*\n` +
+      footerBlock;
+
+    const embed = new EmbedBuilder()
+      .setColor(config.COLORS.NAVY)
+      .setDescription(emptyDesc)
+      .setFooter({
+        text: `Piyade Team | TSB • Toplam Değerlendirilen Üye: 0`,
+      })
+      .setTimestamp();
+
+    return { embeds: [embed] };
+  }
+
+  // Satırları oluştur (18-100 arası için **#18** formatı kullanılır)
+  const rowLines = [];
+  leaderboard.forEach((entry, index) => {
+    const emoji = rankEmojis[index] || `**#${index + 1}**`;
+    const isLast = index === leaderboard.length - 1;
+    const golemSuffix = isLast ? ` ${config.EMOJIS.GOLEM}` : '';
+
+    let line = `${emoji} <@${entry.userId}> <@&${entry.roleId}> **[ ${entry.formCount} Form ]**${golemSuffix}\n`;
+
+    // İlk 3 sıradan sonra şablondaki gibi boşluk bırak
+    if (index === 2 && leaderboard.length > 3) {
+      line += `\n`;
+    }
+    rowLines.push(line);
+  });
+
+  // Discord'un tek embed 4096 karakter sınırını aşmamak için satırları güvenli parçalara böl
+  const chunks = [];
+  let currentChunk = '';
+  const firstChunkMax = 4000 - headerBlock.length - footerBlock.length;
+  const nextChunkMax = 4000 - footerBlock.length;
+
+  for (const line of rowLines) {
+    const maxAllowed = chunks.length === 0 ? firstChunkMax : nextChunkMax;
+    if (currentChunk.length + line.length > maxAllowed && currentChunk.length > 0) {
+      chunks.push(currentChunk);
+      currentChunk = line;
+    } else {
+      currentChunk += line;
+    }
+  }
+  if (currentChunk.length > 0) {
+    chunks.push(currentChunk);
+  }
+
+  const embeds = chunks.map((chunkText, idx) => {
+    const isFirst = idx === 0;
+    const isLastChunk = idx === chunks.length - 1;
+
+    const desc =
+      (isFirst ? headerBlock : '') +
+      chunkText +
+      (isLastChunk ? footerBlock : '');
+
+    const emb = new EmbedBuilder()
+      .setColor(config.COLORS.NAVY)
+      .setDescription(desc);
+
+    if (isLastChunk) {
+      emb
+        .setFooter({
+          text: `Piyade Team | TSB • Toplam Değerlendirilen Üye: ${leaderboard.length}`,
+        })
+        .setTimestamp();
+    }
+    return emb;
+  });
 
   return {
-    embeds: [embed],
+    embeds,
   };
 }
 
