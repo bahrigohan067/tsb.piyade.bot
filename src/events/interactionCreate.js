@@ -408,6 +408,7 @@ async function handleApprove(interaction, applicantId) {
 
     // Aktif başvurudan kaldır
     database.removeActiveApplication(applicantId);
+    database.clearRejectedApplication(applicantId);
 
     // 6. Yetkili Kartını Yeşile Çevir ve Güncelle
     if (interaction.message) {
@@ -502,6 +503,11 @@ async function handleRejectModalSubmit(interaction, applicantId) {
   const applicantMember = await interaction.guild.members.fetch(applicantId).catch(() => null);
 
   database.removeActiveApplication(applicantId);
+  database.setRejectedApplication(applicantId, {
+    reason: rejectReason,
+    rejectedBy: interaction.user.id,
+    robloxUsername: activeApp ? activeApp.robloxUsername : null,
+  });
 
   // 1. Yetkili Kartını Kırmızıya Çevir ve Sebebi Ekle
   try {

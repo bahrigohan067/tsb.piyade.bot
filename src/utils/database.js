@@ -12,6 +12,7 @@ class DatabaseManager {
     this.data = {
       registrations: [],
       activeApplications: {},
+      rejectedApplications: {},
       vsStats: {},                    // { [userId]: { kills: number, wins: number, losses: number, lastUpdated: number } }
       activeVs: {},                   // { [channelId]: { channelId, challengerId, opponentId, createdAt, warned5Hours: boolean } }
       top10MessageId: null,           // Top 10 paneli mesaj ID'si
@@ -39,6 +40,7 @@ class DatabaseManager {
         this.data = {
           registrations: parsed.registrations || [],
           activeApplications: parsed.activeApplications || {},
+          rejectedApplications: parsed.rejectedApplications || {},
           vsStats: parsed.vsStats || {},
           activeVs: parsed.activeVs || {},
           top10MessageId: parsed.top10MessageId || null,
@@ -126,6 +128,27 @@ class DatabaseManager {
   removeActiveApplication(discordId) {
     if (this.data.activeApplications[String(discordId)]) {
       delete this.data.activeApplications[String(discordId)];
+      this.save();
+    }
+  }
+
+  getRejectedApplication(discordId) {
+    if (!discordId) return null;
+    return (this.data.rejectedApplications && this.data.rejectedApplications[String(discordId)]) || null;
+  }
+
+  setRejectedApplication(discordId, data) {
+    if (!this.data.rejectedApplications) this.data.rejectedApplications = {};
+    this.data.rejectedApplications[String(discordId)] = {
+      ...data,
+      rejectedAt: Date.now(),
+    };
+    this.save();
+  }
+
+  clearRejectedApplication(discordId) {
+    if (this.data.rejectedApplications && this.data.rejectedApplications[String(discordId)]) {
+      delete this.data.rejectedApplications[String(discordId)];
       this.save();
     }
   }

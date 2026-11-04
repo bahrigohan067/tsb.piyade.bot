@@ -276,19 +276,27 @@ function createTryoutPanel() {
  * Tryout Sıralama Tablosu Embedini Üretir (1563212550332612700 kanalı için)
  */
 function createTryoutLeaderboardEmbed() {
-  const leaderboard = database.getTryoutLeaderboard();
+  const allLeaderboard = database.getTryoutLeaderboard();
+  const leaderboard = allLeaderboard.slice(0, 17);
 
   const rankEmojis = [
-    config.EMOJIS.MEDAL_1, // 1. Sıra
-    config.EMOJIS.MEDAL_2, // 2. Sıra
-    config.EMOJIS.MEDAL_3, // 3. Sıra
-    config.EMOJIS.RANK_4,  // 4. Sıra
-    config.EMOJIS.RANK_5,  // 5. Sıra
-    config.EMOJIS.RANK_6,  // 6. Sıra
-    config.EMOJIS.RANK_7,  // 7. Sıra
-    config.EMOJIS.RANK_8,  // 8. Sıra
-    config.EMOJIS.RANK_9,  // 9. Sıra
-    config.EMOJIS.RANK_10, // 10. Sıra
+    config.EMOJIS.MEDAL_1,      // 1. Sıra
+    config.EMOJIS.MEDAL_2,      // 2. Sıra
+    config.EMOJIS.MEDAL_3,      // 3. Sıra
+    config.EMOJIS.RANK_4,       // 4. Sıra
+    config.EMOJIS.RANK_5,       // 5. Sıra
+    config.EMOJIS.RANK_6,       // 6. Sıra
+    config.EMOJIS.RANK_7,       // 7. Sıra
+    config.EMOJIS.RANK_8,       // 8. Sıra
+    config.EMOJIS.RANK_9,       // 9. Sıra
+    config.EMOJIS.RANK_10_PINK, // 10. Sıra
+    config.EMOJIS.RANK_11,      // 11. Sıra
+    config.EMOJIS.RANK_12,      // 12. Sıra
+    config.EMOJIS.RANK_13,      // 13. Sıra
+    config.EMOJIS.RANK_14,      // 14. Sıra
+    config.EMOJIS.RANK_15,      // 15. Sıra
+    config.EMOJIS.RANK_16,      // 16. Sıra
+    config.EMOJIS.RANK_17,      // 17. Sıra
   ];
 
   let rowsText = '';
