@@ -2,7 +2,7 @@ const { Events, ActivityType } = require('discord.js');
 const config = require('../../config');
 const { checkVsDeadlines, updateTop10Message } = require('../utils/vsManager');
 const { updateHelpPanelMessage } = require('../utils/helpManager');
-const { updateTryoutLeaderboard } = require('../utils/tryoutManager');
+const { updateTryoutLeaderboard, ensureTryoutMessagesUpdated } = require('../utils/tryoutManager');
 const { ensureColorPanelMessage } = require('../utils/colorManager');
 const { ensureRegisterPanelMessage } = require('../utils/panel');
 const { ensureEnglishRole } = require('../utils/i18n');
@@ -52,6 +52,7 @@ module.exports = {
             ensureRegisterPanelMessage(guild).catch(() => {});
             updateTop10Message(guild).catch(() => {});
             updateTryoutLeaderboard(guild).catch(() => {});
+            ensureTryoutMessagesUpdated(guild).catch(() => {});
             ensureColorPanelMessage(guild).catch(() => {});
             ensureWarningPanelMessage(guild).catch(() => {});
           }, 5000);

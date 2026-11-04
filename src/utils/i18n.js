@@ -141,9 +141,60 @@ function parseGenderInput(rawInput, fallbackCustomId = '') {
 
   return {
     isFemale,
+    tr: isFemale ? '👩 Kız' : '👨 Erkek',
+    en: isFemale ? '👩 Female' : '👨 Male',
     genderTr: isFemale ? '👩 Kız' : '👨 Erkek',
     genderEn: isFemale ? '👩 Female' : '👨 Male',
   };
+}
+
+// Çeviri önbelleği (Aynı metnin tekrar tekrar çevrilmesini önler)
+const translationCache = new Map();
+
+/**
+ * Türkçe serbest metinleri (Örn: Tryout değerlendirme açıklaması) İngilizceye çevirir.
+ * @param {string} text
+ * @returns {Promise<string>}
+ */
+async function translateToEnglish(text) {
+  const clean = String(text || '').trim();
+  if (!clean) return 'Not specified.';
+
+  if (translationCache.has(clean)) {
+    return translationCache.get(clean);
+  }
+
+  try {
+    const url =
+      `https://translate.googleapis.com/translate_a/single?client=gtx&sl=tr&tl=en&dt=t&q=` +
+      encodeURIComponent(clean.slice(0, 1800));
+
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(4000),
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && Array.isArray(data[0])) {
+        const translated = data[0]
+          .map((part) => (Array.isArray(part) ? part[0] : ''))
+          .join('')
+          .trim();
+
+        if (translated) {
+          translationCache.set(clean, translated);
+          if (translationCache.size > 300) {
+            translationCache.delete(translationCache.keys().next().value);
+          }
+          return translated;
+        }
+      }
+    }
+  } catch (err) {
+    // Çeviri servisine ulaşılamazsa orijinal metni koru
+  }
+
+  return clean;
 }
 
 module.exports = {
@@ -151,4 +202,5 @@ module.exports = {
   setMemberLanguage,
   resolveLang,
   parseGenderInput,
+  translateToEnglish,
 };

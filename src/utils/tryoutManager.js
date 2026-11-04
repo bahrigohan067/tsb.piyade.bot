@@ -12,6 +12,7 @@ const {
 
 const config = require('../../config');
 const database = require('./database');
+const { setMemberLanguage, translateToEnglish } = require('./i18n');
 
 // 12 adet mor çizgi emojisi
 const PURPLE_DIVIDER = Array(12).fill(config.EMOJIS.PURPLE_LINE).join('');
@@ -263,13 +264,44 @@ function createTryoutPanel() {
       .setCustomId('btn_tryout_degerlendir')
       .setLabel('Kullanıcı Değerlendir')
       .setEmoji('📋')
-      .setStyle(ButtonStyle.Primary)
+      .setStyle(ButtonStyle.Primary),
+    new ButtonBuilder()
+      .setCustomId('btn_tryout_panel_en')
+      .setLabel('🇬🇧 English')
+      .setStyle(ButtonStyle.Secondary)
   );
 
   return {
     embeds: [embed],
     components: [row],
   };
+}
+
+/**
+ * İngilizce Tryout Paneli Rehberi Embed'ini Üretir (Ephemeral)
+ */
+function createEnglishTryoutPanelEmbed() {
+  return new EmbedBuilder()
+    .setTitle(`${config.EMOJIS.KING} Piyade Team | TSB | Tier Evaluation (Tryout) System (EN)`)
+    .setColor(config.COLORS.NAVY)
+    .setDescription(
+      `${PURPLE_DIVIDER}\n\n` +
+      `## 🛡️ TSB Clan Tier & Ranking System\n` +
+      `This system evaluates the in-game performance of **Piyade Team | TSB (The Strongest Battlegrounds)** clan members, assigns progressive tier roles (1 to 37), and updates the official Tryout Leaderboard.\n\n` +
+      `### 📊 Progressive Tier Hierarchy (Lowest to Highest — 37 Tiers)\n` +
+      `• 🥉 **Low Division:** \`Low weak 4\` ➔ \`Low stable 4\` ➔ \`Low strong 4\` ... \`Low strong 1\`\n` +
+      `• 🥈 **Mid Division:** \`Mid weak 4\` ➔ \`Mid stable 4\` ➔ \`Mid strong 4\` ... \`Mid strong 1\`\n` +
+      `• 🥇 **High Division:** \`High weak 4\` ➔ \`High stable 4\` ➔ \`High strong 4\` ... \`High strong 1\`\n` +
+      `• 👑 **Peak Division:** \`High Strong 0\` *(Highest Tier — 37/37)*\n\n` +
+      `### 📌 How It Works\n` +
+      `• Evaluations are conducted by <@&${config.ROLES.TRYOUT_STAFF}> staff.\n` +
+      `• After your tryout match, your old tier role is automatically replaced with your new tier role, your detailed report is posted in <#${config.CHANNELS.TRYOUT_RESULT}>, and the <#${config.CHANNELS.TRYOUT_LEADERBOARD}> leaderboard is updated!\n\n` +
+      `${PURPLE_DIVIDER}`
+    )
+    .setFooter({
+      text: 'Piyade Team | TSB • Professional Tier Evaluation System (English Guide)',
+    })
+    .setTimestamp();
 }
 
 /**
@@ -308,6 +340,13 @@ function createTryoutLeaderboardEmbed() {
     `\n${PURPLE_DIVIDER}\n` +
     `-# ${config.EMOJIS.MODERATOR} Piyade Team | Tryout Değerlendirmesi`;
 
+  const enButtonRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('btn_tryout_leaderboard_en')
+      .setLabel('🇬🇧 English')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
   if (!leaderboard || leaderboard.length === 0) {
     const emptyDesc =
       headerBlock +
@@ -322,7 +361,7 @@ function createTryoutLeaderboardEmbed() {
       })
       .setTimestamp();
 
-    return { embeds: [embed] };
+    return { embeds: [embed], components: [enButtonRow] };
   }
 
   // Satırları oluştur (18-100 arası için **#18** formatı kullanılır)
@@ -385,7 +424,82 @@ function createTryoutLeaderboardEmbed() {
 
   return {
     embeds,
+    components: [enButtonRow],
   };
+}
+
+/**
+ * Tryout Sıralama Tablosunun İngilizce Versiyonunu Üretir (Ephemeral)
+ */
+function createEnglishTryoutLeaderboardEmbed() {
+  const allLeaderboard = database.getTryoutLeaderboard();
+  const leaderboard = allLeaderboard.slice(0, 100);
+
+  const rankEmojis = [
+    config.EMOJIS.MEDAL_1,
+    config.EMOJIS.MEDAL_2,
+    config.EMOJIS.MEDAL_3,
+    config.EMOJIS.RANK_4,
+    config.EMOJIS.RANK_5,
+    config.EMOJIS.RANK_6,
+    config.EMOJIS.RANK_7,
+    config.EMOJIS.RANK_8,
+    config.EMOJIS.RANK_9,
+    config.EMOJIS.RANK_10_PINK,
+    config.EMOJIS.RANK_11,
+    config.EMOJIS.RANK_12,
+    config.EMOJIS.RANK_13,
+    config.EMOJIS.RANK_14,
+    config.EMOJIS.RANK_15,
+    config.EMOJIS.RANK_16,
+    config.EMOJIS.RANK_17,
+  ];
+
+  const headerBlock =
+    `# ${config.EMOJIS.KING} Piyade Team | TSB | Tryout Evaluation Leaderboard (EN) ${config.EMOJIS.KING}\n\n` +
+    `${PURPLE_DIVIDER}\n` +
+    `${config.EMOJIS.ADMIN_BADGE} **Evaluators:** <@&${config.ROLES.TRYOUT_STAFF}> | <@${config.USERS.TRYOUT_HEADER_USER}> ${config.EMOJIS.ADMIN_BADGE}\n` +
+    `-# 📊 **Tier Order (Lowest ➔ Highest):** \`Low 4..1\` ➔ \`Mid 4..1\` ➔ \`High 4..1\` ➔ \`High Strong 0\` (\`weak < stable < strong\`)\n\n`;
+
+  const footerBlock =
+    `\n${PURPLE_DIVIDER}\n` +
+    `-# ${config.EMOJIS.MODERATOR} Piyade Team | Tryout Evaluation Leaderboard`;
+
+  if (!leaderboard || leaderboard.length === 0) {
+    const emb = new EmbedBuilder()
+      .setColor(config.COLORS.NAVY)
+      .setDescription(
+        headerBlock +
+        `*No clan members have been evaluated yet.*\n` +
+        footerBlock
+      )
+      .setFooter({ text: 'Piyade Team | TSB • Total Evaluated Members: 0' })
+      .setTimestamp();
+    return { embeds: [emb] };
+  }
+
+  let listText = '';
+  leaderboard.slice(0, 35).forEach((entry, index) => {
+    const emoji = rankEmojis[index] || `**#${index + 1}**`;
+    const isLast = index === leaderboard.length - 1;
+    const golemSuffix = isLast ? ` ${config.EMOJIS.GOLEM}` : '';
+    const evalLabel = entry.formCount === 1 ? '1 Evaluation' : `${entry.formCount} Evaluations`;
+
+    listText += `${emoji} <@${entry.userId}> <@&${entry.roleId}> **[ ${evalLabel} ]**${golemSuffix}\n`;
+    if (index === 2 && leaderboard.length > 3) {
+      listText += `\n`;
+    }
+  });
+
+  const emb = new EmbedBuilder()
+    .setColor(config.COLORS.NAVY)
+    .setDescription(headerBlock + listText + footerBlock)
+    .setFooter({
+      text: `Piyade Team | TSB • Total Evaluated Members: ${leaderboard.length}`,
+    })
+    .setTimestamp();
+
+  return { embeds: [emb] };
 }
 
 /**
@@ -719,11 +833,19 @@ async function handleTryoutModalSubmit(interaction, targetUserId) {
     })
     .setTimestamp();
 
+  const reportButtonRow = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`btn_tryout_report_en_${formCode}`)
+      .setLabel('🇬🇧 English')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
   if (resultChannel) {
     try {
       const sentResultMsg = await resultChannel.send({
         content: `<@${targetUserId}>`,
         embeds: [resultEmbed],
+        components: [reportButtonRow],
       });
 
       // Mesaj ID'sini forma kaydet (İptal edilirse silinebilmesi için)
@@ -940,14 +1062,214 @@ async function handleCancelFormCommand(interaction, rawFormCode) {
   });
 }
 
+/**
+ * Tryout Değerlendirme Raporunun altındaki "🇬🇧 English" butonuna basıldığında
+ * raporu ve yetkilinin yazdığı açıklamaları İngilizceye çevirerek kullanıcıya gösterir.
+ */
+async function handleTryoutReportEnglishButton(interaction, rawFormCode) {
+  await interaction.deferReply({ ephemeral: true });
+  await setMemberLanguage(interaction.member, 'en').catch(() => {});
+
+  const msgEmbed = interaction.message?.embeds?.[0];
+
+  // Form kodunu buton ID'sinden veya embed footer'ından çözümle
+  let formCode = rawFormCode && rawFormCode !== 'auto' ? rawFormCode : null;
+  if (!formCode && msgEmbed?.footer?.text) {
+    const match = msgEmbed.footer.text.match(/TRY-[A-Z0-9]+/i);
+    if (match) formCode = match[0].toUpperCase();
+  }
+
+  const form = formCode ? database.getTryoutForm(formCode) : null;
+
+  if (form) {
+    const resolvedRole = getLevelRoleById(form.newRoleId);
+    const previousRole = form.previousRoleId ? getLevelRoleById(form.previousRoleId) : null;
+    const newLevel = resolvedRole ? resolvedRole.level : form.newLevel || 0;
+    const prevLevel = previousRole ? previousRole.level : form.previousLevel || 0;
+
+    let statusDiffTextEn = '🆕 **Initial Tier Placement**';
+    if (form.previousRoleId) {
+      if (newLevel > prevLevel) {
+        statusDiffTextEn = `📈 **Promoted!** (<@&${form.previousRoleId}> ➔ <@&${form.newRoleId}>)`;
+      } else if (newLevel < prevLevel) {
+        statusDiffTextEn = `📉 **Tier Decreased** (<@&${form.previousRoleId}> ➔ <@&${form.newRoleId}>)`;
+      } else {
+        statusDiffTextEn = `⚖️ **Tier Maintained** (<@&${form.newRoleId}>)`;
+      }
+    }
+
+    const [translatedDesc, translatedImp] = await Promise.all([
+      translateToEnglish(form.description),
+      translateToEnglish(form.improvements),
+    ]);
+
+    const descFieldsEn = createChunkedFields('📝 Evaluation Notes (Translated)', translatedDesc);
+    const impFieldsEn = createChunkedFields('🎯 Areas for Improvement (Translated)', translatedImp);
+
+    const enEmbed = new EmbedBuilder()
+      .setTitle(`${config.EMOJIS.KING} Piyade Team | TSB | Tryout Evaluation Report (EN)`)
+      .setColor(config.COLORS.NAVY)
+      .setDescription(
+        `${PURPLE_DIVIDER}\n` +
+        `👤 **Evaluated Player:** <@${form.userId}>\n` +
+        `👮 **Evaluator Staff:** <@${form.staffId}>\n` +
+        `🏅 **Assigned Tier Role:** <@&${form.newRoleId}> \`[Tier: ${newLevel}/37]\`\n` +
+        `📊 **Evaluation Status:** ${statusDiffTextEn}\n` +
+        `📋 **Total Evaluations:** \`#${form.formNumberForUser || 1}\`\n` +
+        `${PURPLE_DIVIDER}`
+      )
+      .addFields(...descFieldsEn, ...impFieldsEn, {
+        name: '🔖 Form Info & Code',
+        value: `-# <:240274moderator:1559920704009408622> **Form Code:** \`${form.formCode}\``,
+        inline: false,
+      })
+      .setFooter({
+        text: `Form Code: ${form.formCode} • Piyade Team | Tryout Evaluation (English)`,
+      })
+      .setTimestamp(form.createdAt || Date.now());
+
+    if (msgEmbed?.thumbnail?.url) {
+      enEmbed.setThumbnail(msgEmbed.thumbnail.url);
+    }
+
+    return interaction.editReply({ embeds: [enEmbed] });
+  }
+
+  // Veritabanında form kaydı bulunamazsa mevcut mesajın embed içeriğinden çevir
+  if (!msgEmbed) {
+    return interaction.editReply({
+      content: '❌ Could not find the evaluation report details.',
+    });
+  }
+
+  const rawDesc = (msgEmbed.description || '')
+    .replace('👤 **Değerlendirilen Oyuncu:**', '👤 **Evaluated Player:**')
+    .replace('👮 **Değerlendiren Yetkili:**', '👮 **Evaluator Staff:**')
+    .replace('🏅 **Verilen Seviye Rolü:**', '🏅 **Assigned Tier Role:**')
+    .replace(/\[Kademe:\s*(\d+\/\d+)\]/g, '[Tier: $1]')
+    .replace('📊 **Değerlendirme Durumu:**', '📊 **Evaluation Status:**')
+    .replace('🆕 **İlk Seviye Belirlemesi**', '🆕 **Initial Tier Placement**')
+    .replace('📈 **Seviye Atladı!**', '📈 **Promoted!**')
+    .replace('📉 **Seviye Düştü**', '📉 **Tier Decreased**')
+    .replace('⚖️ **Seviye Korundu**', '⚖️ **Tier Maintained**')
+    .replace('📋 **Toplam Değerlendirme Sayısı:**', '📋 **Total Evaluations:**')
+    .replace(/(\d+)\.\s*Form/g, 'Evaluation #$1');
+
+  const translatedFields = [];
+  for (const field of msgEmbed.fields || []) {
+    if (field.name.includes('Form Bilgisi')) {
+      translatedFields.push({
+        name: '🔖 Form Info & Code',
+        value: field.value.replace('Form Kodu:', 'Form Code:').replace(/•\s*\*Hatalıysa.*\*/, ''),
+        inline: false,
+      });
+    } else {
+      const cleanVal = field.value.replace(/^>>>\s*/, '');
+      const trVal = await translateToEnglish(cleanVal);
+      const enName = field.name
+        .replace('📝 Değerlendirme Açıklaması', '📝 Evaluation Notes (Translated)')
+        .replace('🎯 Geliştirilmesi Gereken Yönler', '🎯 Areas for Improvement (Translated)')
+        .replace('Devamı', 'Part');
+      translatedFields.push({
+        name: enName,
+        value: `>>> ${trVal}`,
+        inline: false,
+      });
+    }
+  }
+
+  const fallbackEmbed = new EmbedBuilder()
+    .setTitle(`${config.EMOJIS.KING} Piyade Team | TSB | Tryout Evaluation Report (EN)`)
+    .setColor(config.COLORS.NAVY)
+    .setDescription(rawDesc)
+    .addFields(...translatedFields)
+    .setFooter({
+      text: (msgEmbed.footer?.text || 'Piyade Team | Tryout Evaluation').replace('Form Kodu:', 'Form Code:').replace('Tryout Değerlendirmesi', 'Tryout Evaluation (EN)'),
+    });
+
+  if (msgEmbed.thumbnail?.url) {
+    fallbackEmbed.setThumbnail(msgEmbed.thumbnail.url);
+  }
+
+  return interaction.editReply({ embeds: [fallbackEmbed] });
+}
+
+/**
+ * Sunucu açılışında Tryout Paneli ve Tryout Sonuç Kanalındaki mevcut raporlara "🇬🇧 English" butonunu ekler
+ */
+async function ensureTryoutMessagesUpdated(guild) {
+  if (!guild) return;
+
+  // 1. Tryout Paneli Kanalını (1562459282040029225) güncelle
+  const panelChannel =
+    guild.channels.cache.get(config.CHANNELS.TRYOUT_PANEL) ||
+    (await guild.channels.fetch(config.CHANNELS.TRYOUT_PANEL).catch(() => null));
+
+  if (panelChannel) {
+    try {
+      const messages = await panelChannel.messages.fetch({ limit: 15 }).catch(() => null);
+      if (messages) {
+        const botPanel = messages.find(
+          (m) =>
+            m.author.id === guild.client.user.id &&
+            m.embeds.length > 0 &&
+            m.embeds[0].title &&
+            m.embeds[0].title.includes('Seviye Değerlendirme (Tryout) Paneli')
+        );
+        if (botPanel) {
+          await botPanel.edit(createTryoutPanel()).catch(() => {});
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 2. Tryout Rapor Kanalındaki (1563218527584788560) son raporlara "🇬🇧 English" butonu ekle
+  const resultChannel =
+    guild.channels.cache.get(config.CHANNELS.TRYOUT_RESULT) ||
+    (await guild.channels.fetch(config.CHANNELS.TRYOUT_RESULT).catch(() => null));
+
+  if (resultChannel) {
+    try {
+      const messages = await resultChannel.messages.fetch({ limit: 25 }).catch(() => null);
+      if (messages) {
+        for (const msg of messages.values()) {
+          if (
+            msg.author.id === guild.client.user.id &&
+            msg.embeds.length > 0 &&
+            msg.embeds[0].title &&
+            msg.embeds[0].title.includes('Tryout Değerlendirme Raporu') &&
+            (!msg.components || msg.components.length === 0)
+          ) {
+            const footerText = msg.embeds[0].footer?.text || '';
+            const codeMatch = footerText.match(/TRY-[A-Z0-9]+/i);
+            const code = codeMatch ? codeMatch[0].toUpperCase() : 'auto';
+
+            const row = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`btn_tryout_report_en_${code}`)
+                .setLabel('🇬🇧 English')
+                .setStyle(ButtonStyle.Secondary)
+            );
+            await msg.edit({ components: [row] }).catch(() => {});
+          }
+        }
+      }
+    } catch (e) {}
+  }
+}
+
 module.exports = {
   resolveLevelRole,
   getLevelRoleById,
   createTryoutPanel,
+  createEnglishTryoutPanelEmbed,
   createTryoutLeaderboardEmbed,
+  createEnglishTryoutLeaderboardEmbed,
   updateTryoutLeaderboard,
+  ensureTryoutMessagesUpdated,
   handleTryoutStart,
   handleTryoutUserSelected,
   handleTryoutModalSubmit,
+  handleTryoutReportEnglishButton,
   handleCancelFormCommand,
 };

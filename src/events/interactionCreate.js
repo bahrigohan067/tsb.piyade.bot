@@ -30,8 +30,11 @@ const {
   handleTryoutStart,
   handleTryoutUserSelected,
   handleTryoutModalSubmit,
+  createEnglishTryoutPanelEmbed,
+  createEnglishTryoutLeaderboardEmbed,
+  handleTryoutReportEnglishButton,
 } = require('../utils/tryoutManager');
-const { handleColorButton } = require('../utils/colorManager');
+const { handleColorButton, createEnglishColorGuideEmbed } = require('../utils/colorManager');
 const {
   handleWarningButton,
   handleWarningUserSelected,
@@ -142,6 +145,36 @@ module.exports = {
             embeds: [createEnglishHelpGuideEmbed()],
             ephemeral: true,
           });
+        }
+
+        if (interaction.customId === 'btn_color_en_info') {
+          await setMemberLanguage(interaction.member, 'en').catch(() => {});
+          return interaction.reply({
+            embeds: [createEnglishColorGuideEmbed()],
+            ephemeral: true,
+          });
+        }
+
+        if (interaction.customId === 'btn_tryout_panel_en') {
+          await setMemberLanguage(interaction.member, 'en').catch(() => {});
+          return interaction.reply({
+            embeds: [createEnglishTryoutPanelEmbed()],
+            ephemeral: true,
+          });
+        }
+
+        if (interaction.customId === 'btn_tryout_leaderboard_en') {
+          await setMemberLanguage(interaction.member, 'en').catch(() => {});
+          const payload = createEnglishTryoutLeaderboardEmbed();
+          return interaction.reply({
+            ...payload,
+            ephemeral: true,
+          });
+        }
+
+        if (interaction.customId.startsWith('btn_tryout_report_en_')) {
+          const formCode = interaction.customId.replace('btn_tryout_report_en_', '');
+          return handleTryoutReportEnglishButton(interaction, formCode);
         }
 
         // [B] YETKİLİ KART BUTONU: ✅ ONAYLA

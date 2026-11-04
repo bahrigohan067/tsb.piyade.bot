@@ -93,10 +93,53 @@ function createColorPanel() {
     );
   });
 
+  // 3. Satır Butonu (İngilizce Rehber Butonu)
+  const row3 = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('btn_color_en_info')
+      .setLabel('🇬🇧 English')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
   return {
     embeds: [embed],
-    components: [row1, row2],
+    components: [row1, row2, row3],
   };
+}
+
+/**
+ * İngilizce İsim Rengi Seçim Paneli Rehberi Embed'ini Üretir (Ephemeral)
+ */
+function createEnglishColorGuideEmbed() {
+  return new EmbedBuilder()
+    .setTitle(`${config.EMOJIS.KING} Piyade Team | TSB | Name Color Selection Panel (EN) 🎨✨`)
+    .setColor(0x9B59B6)
+    .setDescription(
+      `${PURPLE_DIVIDER}\n\n` +
+      `## 🌈 What is the Name Color System?\n` +
+      `Would you like your display name to stand out with a **custom color** while chatting, appearing on the member list, and hanging out in voice channels? 💎✨\n\n` +
+      `With this panel, you can equip or change your favorite color role **with a single click** — no staff needed! 🎭🔥\n\n` +
+      `${PURPLE_DIVIDER}\n\n` +
+      `## 📋 How to Use & Rules\n` +
+      `> 🖱️ **1️⃣ Choose a Color:** Click any color button on the panel to equip that color role instantly!\n` +
+      `> 🎨 **2️⃣ Single Color Rule:** You can only have **1 color role** at a time. Clicking a new color **automatically removes your previous color** and assigns the new one!\n` +
+      `> 🗑️ **3️⃣ Remove Color:** Click the button of the color you currently have equipped to remove your color role.\n` +
+      `> ⏳ **4️⃣ Cooldown:** To prevent spam, color buttons have a **10-second cooldown**.\n\n` +
+      `${PURPLE_DIVIDER}\n\n` +
+      `## 🎨 Available Name Colors (Preview)\n\n` +
+      `> 🖤 <@&1559899395233808444> — **Black** *(Siyah — Noble & Dark Style)*\n` +
+      `> ❤️ <@&1559926857472675910> — **Red** *(Kırmızı — Fiery & Sharp Style)*\n` +
+      `> 💛 <@&1559927000183873597> — **Yellow** *(Sarı — Bright & Energetic Style)*\n` +
+      `> 💙 <@&1559926616535339010> — **Blue** *(Mavi — Cool & Ocean Style)*\n` +
+      `> 💚 <@&1559926912338362379> — **Green** *(Yeşil — Vibrant & Emerald Style)*\n` +
+      `> 🩷 <@&1559926687645311017> — **Pink** *(Pembe — Neon & Flashy Style)*\n\n` +
+      `${PURPLE_DIVIDER}\n` +
+      `-# ${config.EMOJIS.MODERATOR} Piyade Team | TSB • Customizable Name Color System ✨`
+    )
+    .setFooter({
+      text: '🎨 Piyade Team • Only 1 color allowed at a time • Cooldown: 10 Seconds',
+    })
+    .setTimestamp();
 }
 
 /**
@@ -232,6 +275,7 @@ async function ensureColorPanelMessage(guild) {
 
 module.exports = {
   createColorPanel,
+  createEnglishColorGuideEmbed,
   handleColorButton,
   ensureColorPanelMessage,
 };

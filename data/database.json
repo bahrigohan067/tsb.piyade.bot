@@ -13,7 +13,9 @@
   "warningRoles": {},
   "warningStats": {},
   "warnings": {},
-  "languagePrefs": {},
+  "languagePrefs": {
+    "u1": "en"
+  },
   "englishRoleId": null,
   "lockedChannels": {}
 }
