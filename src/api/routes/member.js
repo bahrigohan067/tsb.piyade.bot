@@ -75,14 +75,10 @@ router.get('/:id/profile', async (req, res) => {
       tryoutRole = getLevelRoleById(tryout.roleId);
     }
 
-    // 3. VS İstatistikleri & Puan
-    const vsStats = database.getVsStats(id);
-    const vsPoints = Math.max(0, (vsStats.wins || 0) * 25 - (vsStats.losses || 0) * 15);
-
-    // 4. Ceza & Uyarı Bilgileri
+    // 3. Ceza & Uyarı Bilgileri
     const warnStats = database.getUserWarningStats(id);
 
-    // 5. Yetki Seviyesi
+    // 4. Yetki Seviyesi
     const level = getMemberLevel(member, req.guild);
 
     return res.json({
@@ -112,12 +108,6 @@ router.get('/:id/profile', async (req, res) => {
         canonical: tryoutRole?.canonical || null,
         formCount: tryout?.formCount || 0,
         lastUpdated: tryout?.lastUpdated || null,
-      },
-      vs: {
-        kills: vsStats.kills || 0,
-        wins: vsStats.wins || 0,
-        losses: vsStats.losses || 0,
-        points: vsPoints,
       },
       warnings: {
         points: warnStats.points || 0,

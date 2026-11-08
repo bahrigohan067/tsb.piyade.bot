@@ -13,9 +13,6 @@ class DatabaseManager {
       registrations: [],
       activeApplications: {},
       rejectedApplications: {},
-      vsStats: {},                    // { [userId]: { kills: number, wins: number, losses: number, lastUpdated: number } }
-      activeVs: {},                   // { [channelId]: { channelId, challengerId, opponentId, createdAt, warned5Hours: boolean } }
-      top10MessageId: null,           // Top 10 paneli mesaj ID'si
       helpPanelMessageId: null,       // Acil yardım paneli mesaj ID'si
       tryoutStats: {},                // { [userId]: { userId, roleId, level, formCount, lastUpdated } }
       tryoutForms: {},                // { [formCode]: { formCode, userId, staffId, previousRoleId, previousLevel, newRoleId, newLevel, description, improvements, resultMessageId, resultChannelId, createdAt, cancelled } }
@@ -44,9 +41,6 @@ class DatabaseManager {
           registrations: parsed.registrations || [],
           activeApplications: parsed.activeApplications || {},
           rejectedApplications: parsed.rejectedApplications || {},
-          vsStats: parsed.vsStats || {},
-          activeVs: parsed.activeVs || {},
-          top10MessageId: parsed.top10MessageId || null,
           helpPanelMessageId: parsed.helpPanelMessageId || null,
           tryoutStats: parsed.tryoutStats || {},
           tryoutForms: parsed.tryoutForms || {},
@@ -161,110 +155,6 @@ class DatabaseManager {
 
   getAllRegistrations() {
     return this.data.registrations;
-  }
-
-  // ==========================================
-  // VS (KAPIŞMA) & TOP 10 SİSTEMİ BÖLÜMÜ
-  // ==========================================
-
-  // Kullanıcının VS istatistiklerini getirir
-  getVsStats(userId) {
-    const defaultStats = { kills: 0, wins: 0, losses: 0 };
-    if (!userId) return defaultStats;
-    return this.data.vsStats[String(userId)] || defaultStats;
-  }
-
-  // Kazanan kişiye kill ve win ekler
-  addVsWin(userId) {
-    const id = String(userId);
-    if (!this.data.vsStats[id]) {
-      this.data.vsStats[id] = { kills: 0, wins: 0, losses: 0, lastUpdated: Date.now() };
-    }
-    this.data.vsStats[id].kills += 1;
-    this.data.vsStats[id].wins += 1;
-    this.data.vsStats[id].lastUpdated = Date.now();
-    this.save();
-    return this.data.vsStats[id];
-  }
-
-  // Kaybeden kişiye loss ekler
-  addVsLoss(userId) {
-    const id = String(userId);
-    if (!this.data.vsStats[id]) {
-      this.data.vsStats[id] = { kills: 0, wins: 0, losses: 0, lastUpdated: Date.now() };
-    }
-    this.data.vsStats[id].losses += 1;
-    this.data.vsStats[id].lastUpdated = Date.now();
-    this.save();
-    return this.data.vsStats[id];
-  }
-
-  // Top 10 listesi getir (En çok kill alan en üstte, 0 kill olanlar dahil edilmez)
-  getTop10() {
-    const entries = Object.entries(this.data.vsStats)
-      .map(([userId, stats]) => ({
-        userId,
-        kills: stats.kills || 0,
-        wins: stats.wins || 0,
-        losses: stats.losses || 0,
-        lastUpdated: stats.lastUpdated || 0,
-      }))
-      .filter((entry) => entry.kills > 0); // 0 kill olanlar sıralamada yer almaz
-
-    // Kill sayısına göre çoktan aza sırala
-    entries.sort((a, b) => {
-      if (b.kills !== a.kills) {
-        return b.kills - a.kills;
-      }
-      return b.wins - a.wins;
-    });
-
-    return entries.slice(0, 10);
-  }
-
-  // Aktif VS Talebi Yönetimi
-  setActiveVs(channelId, data) {
-    this.data.activeVs[String(channelId)] = {
-      ...data,
-      channelId: String(channelId),
-      createdAt: data.createdAt || Date.now(),
-      warned5Hours: data.warned5Hours || false,
-    };
-    this.save();
-  }
-
-  getActiveVsByChannel(channelId) {
-    if (!channelId) return null;
-    return this.data.activeVs[String(channelId)] || null;
-  }
-
-  getActiveVsByUser(userId) {
-    if (!userId) return null;
-    const uid = String(userId);
-    return Object.values(this.data.activeVs).find(
-      (vs) => String(vs.challengerId) === uid || String(vs.opponentId) === uid
-    ) || null;
-  }
-
-  removeActiveVs(channelId) {
-    if (this.data.activeVs[String(channelId)]) {
-      delete this.data.activeVs[String(channelId)];
-      this.save();
-    }
-  }
-
-  getAllActiveVs() {
-    return Object.values(this.data.activeVs);
-  }
-
-  // Top 10 mesaj ID'si
-  getTop10MessageId() {
-    return this.data.top10MessageId || null;
-  }
-
-  setTop10MessageId(msgId) {
-    this.data.top10MessageId = msgId;
-    this.save();
   }
 
   // Acil Yardım Paneli mesaj ID'si

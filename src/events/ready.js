@@ -1,6 +1,5 @@
 const { Events, ActivityType } = require('discord.js');
 const config = require('../../config');
-const { checkVsDeadlines, updateTop10Message } = require('../utils/vsManager');
 const { updateHelpPanelMessage } = require('../utils/helpManager');
 const { updateTryoutLeaderboard, ensureTryoutMessagesUpdated } = require('../utils/tryoutManager');
 const { ensureColorPanelMessage } = require('../utils/colorManager');
@@ -26,7 +25,7 @@ module.exports = {
     client.user.setPresence({
       activities: [
         {
-          name: 'Piyade Team | Kayıt & VS Sistemi',
+          name: 'Piyade Team | TSB',
           type: ActivityType.Watching,
         },
       ],
@@ -46,11 +45,10 @@ module.exports = {
           await guild.commands.set(commandsData);
           console.log(`[SLASH KOMUTLAR] ${commandsData.length} komut '${guild.name}' sunucusuna başarıyla yüklendi.`);
           
-          // Sunucu açılışında Top 10, Tryout Sıralama tablosu, Kayıt Paneli, Renk Paneli ve Uyarı Panelini güncelle/kur
+          // Sunucu açılışında Tryout Sıralama tablosu, Kayıt Paneli, Renk Paneli ve Uyarı Panelini güncelle/kur
           setTimeout(() => {
             ensureEnglishRole(guild).catch(() => {});
             ensureRegisterPanelMessage(guild).catch(() => {});
-            updateTop10Message(guild).catch(() => {});
             updateTryoutLeaderboard(guild).catch(() => {});
             ensureTryoutMessagesUpdated(guild).catch(() => {});
             ensureColorPanelMessage(guild).catch(() => {});
@@ -67,19 +65,6 @@ module.exports = {
     } catch (err) {
       console.error('[SLASH KOMUTLAR] Komutlar yüklenirken hata oluştu:', err);
     }
-
-    // Arka Planda Çalışan 48 Saat / 5 Saat VS Kontrol Döngüsü (vs_deadline_check)
-    // İlk kontrol 10 saniye sonra, ardından her 30 dakikada bir çalışır
-    setTimeout(() => {
-      checkVsDeadlines(client).catch(() => {});
-    }, 10000);
-
-    setInterval(() => {
-      console.log('[VS DEADLINE CHECK] Aktif VS süreleri denetleniyor...');
-      checkVsDeadlines(client).catch((err) => {
-        console.error('[VS DEADLINE INTERVAL HATASI]:', err);
-      });
-    }, 30 * 60 * 1000); // 30 dakikada bir
 
     // Acil Yardım Paneli 30 Saniyelik Aktiflik Güncelleme Döngüsü
     setTimeout(() => {

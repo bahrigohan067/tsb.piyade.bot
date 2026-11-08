@@ -134,17 +134,13 @@ router.get('/members/:id', async (req, res) => {
       .filter((f) => String(f.userId) === id)
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
-    // 4. VS İstatistikleri
-    const vsStats = database.getVsStats(id);
-    const vsPoints = Math.max(0, (vsStats.wins || 0) * 25 - (vsStats.losses || 0) * 15);
-
-    // 5. Uyarı / Disiplin Geçmişi
+    // 4. Uyarı / Disiplin Geçmişi
     const warnStats = database.getUserWarningStats(id);
     const warningHistory = Object.values(database.data.warnings || {})
       .filter((w) => String(w.userId) === id)
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
-    // 6. Küfür / Argo İhlal Sayısı
+    // 5. Küfür / Argo İhlal Sayısı
     const profanityCount = database.getProfanityCount(id);
 
     const level = getMemberLevel(member, req.guild);
@@ -180,12 +176,6 @@ router.get('/members/:id', async (req, res) => {
           lastUpdated: tryoutStats?.lastUpdated || null,
         },
         forms: tryoutForms,
-      },
-      vs: {
-        kills: vsStats.kills || 0,
-        wins: vsStats.wins || 0,
-        losses: vsStats.losses || 0,
-        points: vsPoints,
       },
       warnings: {
         stats: {

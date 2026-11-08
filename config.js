@@ -17,12 +17,6 @@ module.exports = {
     REGISTER: '1559605626198302741',
     // Yetkililerin Başvuruları Onaylayıp/Reddettiği Kanal
     STAFF_APPROVAL: '1559621928187199488',
-    // VS Talep Paneli Kanalı
-    VS_PANEL: '1559317566617554975',
-    // VS Sonuç Duyuru Kanalı
-    VS_RESULT: '1559317757294546975',
-    // Top 10 Sıralama Kanalı
-    TOP10: '1559318329775104020',
     // Acil Takviye / Yardım Paneli Kanalı
     HELP_PANEL: '1559323174594945104',
     // Yardım Çağrılarının Düşeceği Bildirim Kanalı
