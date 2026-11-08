@@ -11,7 +11,7 @@ const {
 
 const config = require('../../config');
 const database = require('./database');
-const { resolveLang } = require('./i18n');
+const { resolveLang, setMemberLanguage, translateToEnglish } = require('./i18n');
 
 const LINE_DIVIDER = '────────────────────────────────────────────────────';
 
@@ -192,41 +192,51 @@ const RULES = {
     code: 'Y1',
     category: 'staff',
     description: 'Yetkisini kendi lehine kullanmak.',
+    descriptionEn: 'Using staff permissions for personal advantage.',
     type: 'staff_strip',
     points: 0,
     penaltyLabel: 'Direkt Yetkiler Alınır',
+    penaltyLabelEn: 'Immediate Removal of All Staff Roles',
   },
   Y2: {
     code: 'Y2',
     category: 'staff',
     description: 'Sunucudaki katılımcıyı yanlış yönlendirmek.',
+    descriptionEn: 'Misleading a server participant/member.',
     type: 'staff_warn',
     points: 0,
     penaltyLabel: '+1 Yetkili Uyarı',
+    penaltyLabelEn: '+1 Staff Warning',
   },
   Y3: {
     code: 'Y3',
     category: 'staff',
     description: 'Yanlış işlem yapmak. (Örn: Yanlış uyarı vermek)',
+    descriptionEn: 'Performing an incorrect moderation action (e.g., issuing a false warning).',
     type: 'staff_warn',
     points: 0,
     penaltyLabel: '+1 Yetkili Uyarı',
+    penaltyLabelEn: '+1 Staff Warning',
   },
   Y4: {
     code: 'Y4',
     category: 'staff',
     description: 'Sunucuda kendini üstün görmek.',
+    descriptionEn: 'Acting superior to other members on the server.',
     type: 'staff_warn',
     points: 0,
     penaltyLabel: '+1 Yetkili Uyarı',
+    penaltyLabelEn: '+1 Staff Warning',
   },
   Y5: {
     code: 'Y5',
     category: 'staff',
     description: 'Kendinden üst kademeli yetkililerin yönlendirmesini dinlememek/takmamak.',
+    descriptionEn: 'Ignoring or disobeying instructions from higher-ranking staff.',
     type: 'staff_warn',
     points: 0,
     penaltyLabel: '+1 Yetkili Uyarı',
+    penaltyLabelEn: '+1 Staff Warning',
   },
 };
 
@@ -472,9 +482,17 @@ function buildWarningLogPayload(guild, record, memberRolesText) {
     embed.setImage(record.proofUrl);
   }
 
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`btn_warn_log_en_${record.id}`)
+      .setLabel('🇬🇧 English')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
   return {
     content: `<@${record.userId}>`,
     embeds: [embed],
+    components: [row],
   };
 }
 
@@ -1545,7 +1563,14 @@ async function handleCancelWarningCommand(interaction, rawWarnId) {
             text: `Uyarı ID: #${record.id} • ${interaction.user.tag} tarafından iptal edildi`,
           });
 
-        await logMsg.edit({ embeds: [cancelledEmbed] }).catch(() => {});
+        const enRow = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`btn_warn_log_en_${record.id}`)
+            .setLabel('🇬🇧 English')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
+        await logMsg.edit({ embeds: [cancelledEmbed], components: [enRow] }).catch(() => {});
       }
     }
   }
@@ -1641,13 +1666,353 @@ async function checkSuspendedExpirations(client) {
 }
 
 /**
- * Sunucu açılışında 1563923294602666125 kanalında uyarı paneli yoksa otomatik kurar veya günceller
+ * Türkçe ceza puanı / yaptırım özetini İngilizceye çevirir
+ */
+function translatePointsDisplay(pointsDisplay) {
+  if (!pointsDisplay) return '0 Points';
+  return String(pointsDisplay)
+    .replace(/(\+?\d+)\s*Puan\s*\(Toplam:\s*(\d+)\)/gi, '$1 Points (Total: $2)')
+    .replace(/0 Puan\s*\(Doğrudan\s*(\d+)\s*Gün Timeout\)/gi, '0 Points (Direct $1-Day Timeout)')
+    .replace(/Özel Yaptırım\s*\(Kalıcı Ban\)/gi, 'Special Sanction (Permanent Ban)')
+    .replace(/Özel Yaptırım\s*\(Doğrudan Yasaklı\)/gi, 'Special Sanction (Direct Restricted Role)')
+    .replace(/Ağır Yetki İhlali\s*\(Y1\)/gi, 'Severe Staff Violation (Y1)')
+    .replace(/\+1 Yetkili Uyarı\s*\(Toplam:\s*(\d+\/\d+)\)/gi, '+1 Staff Warning (Total: $1)')
+    .replace(/Puan/gi, 'Points')
+    .replace(/Toplam/gi, 'Total');
+}
+
+/**
+ * Türkçe bitiş tarihi metnini İngilizceye çevirir
+ */
+function translateExpiresAt(expiresAtText) {
+  if (!expiresAtText) return 'Permanent';
+  return String(expiresAtText)
+    .replace(/Sözlü İhtar\s*\(Puansız\)/gi, 'Verbal Warning (0 Points)')
+    .replace(/^Kalıcı$/i, 'Permanent');
+}
+
+/**
+ * Türkçe uygulanan işlem metnini İngilizceye çevirir
+ */
+async function translateActionTakenText(actionTaken) {
+  if (!actionTaken) return 'Warning recorded.';
+  let text = String(actionTaken)
+    .replace(
+      'Sözlü uyarı sicile işlendi (0 Puan, Rolsüz).',
+      'Verbal warning recorded in user history (0 Points, No Role).'
+    )
+    .replace(
+      'Ağır yetki ihlali (Y1): Kullanıcının tüm yetki rolleri anında alındı.',
+      'Severe staff violation (Y1): All staff roles were immediately removed.'
+    )
+    .replace(
+      '4. Yetkili Uyarısı (Sınır Aşımı): Tüm yetki ve yönetim rolleri geri alındı!',
+      '4th Staff Warning (Limit Reached): All staff and management roles were revoked!'
+    )
+    .replace(/Yetkili Uyarı (\d+) rolü verildi\./gi, 'Staff Warning $1 role assigned.')
+    .replace(
+      'Kullanıcı sunucudan kalıcı olarak yasaklandı (Permanent Ban).',
+      'User was permanently banned from the server.'
+    )
+    .replace(
+      'Kullanıcının tüm rolleri alındı ve @Yasaklı rolü verilerek izole edildi.',
+      'All user roles were removed and the @Yasaklı (Restricted) role was assigned.'
+    )
+    .replace(
+      /Puan işletilmeden doğrudan (\d+) Gün Timeout \(Zaman Aşımı\) uygulandı\./gi,
+      'Direct $1-Day Timeout applied without adding penalty points.'
+    )
+    .replace(
+      /Ceza puanı işlendi \((\d+) Puan — Kademe 0, henüz uyarı rolü verilmedi\)\./gi,
+      'Penalty points recorded ($1 Points — Tier 0, no warning role assigned yet).'
+    )
+    .replace(/Uyarı (\d+) rolü verildi\./gi, 'Warning $1 role assigned.')
+    .replace(
+      '10 Puan Kritik Eşiği: Otomatik +3 Gün Zaman Aşımı (Timeout) uygulandı.',
+      '10-Point Critical Threshold: Automatic +3 Days Timeout applied.'
+    )
+    .replace(
+      '15+ Puan Eşiği: @Askıda (Jail) rolü tanımlandı (1 Hafta Karantina).',
+      '15+ Points Threshold: @Askıda (Quarantine/Jail) role assigned for 1 Week.'
+    )
+    .replace('Uyarı kaydı işlendi.', 'Warning record processed.');
+
+  // İçinde hâlâ Türkçe hata mesajı veya özel metin kaldıysa çevir
+  if (/[ğüşıöçĞÜŞİÖÇ]/.test(text)) {
+    text = await translateToEnglish(text);
+  }
+  return text;
+}
+
+/**
+ * 1563923439121604720 (WARNING_LOG) Kanalındaki Uyarı Loglarının Altındaki
+ * "🇬🇧 English" Butonuna Basıldığında Çevrilmiş Log Kartını Gösterir
+ */
+async function handleWarningLogEnglishButton(interaction, rawWarnId) {
+  await interaction.deferReply({ ephemeral: true });
+  await setMemberLanguage(interaction.member, 'en').catch(() => {});
+
+  const msgEmbed = interaction.message?.embeds?.[0];
+
+  // Uyarı ID'sini buton ID'sinden veya embed içinden çözümle
+  let warnId =
+    rawWarnId && rawWarnId !== 'auto' && rawWarnId !== 'audit' ? rawWarnId : null;
+  if (!warnId && msgEmbed) {
+    const footerMatch = (msgEmbed.footer?.text || '').match(/#([A-Z0-9]{4})/i);
+    const descMatch = (msgEmbed.description || '').match(/#([A-Z0-9]{4})/i);
+    if (footerMatch) warnId = footerMatch[1].toUpperCase();
+    else if (descMatch) warnId = descMatch[1].toUpperCase();
+  }
+
+  const record = warnId ? database.getWarningRecord(warnId) : null;
+
+  // 1. Durum: Veritabanında uyarı kaydı mevcutsa (Tam yapılandırılmış İngilizce kart)
+  if (record && rawWarnId !== 'audit' && !(msgEmbed?.title || '').includes('Web Paneli Denetim Logu')) {
+    let embedColor = config.COLORS.DANGER;
+    if (record.cancelled) {
+      embedColor = config.COLORS.SUCCESS;
+    } else if (record.type === 'verbal') {
+      embedColor = config.COLORS.WARNING_ORANGE;
+    } else if (record.type === 'staff') {
+      embedColor = config.COLORS.DARK_RED;
+    }
+
+    const liveImageUrl = msgEmbed?.image?.url || record.proofUrl || null;
+    const proofFieldTextEn = liveImageUrl
+      ? `[View Image](${liveImageUrl})`
+      : 'Not attached';
+
+    let reasonEn = '';
+    if (record.type === 'verbal') {
+      const trReason = await translateToEnglish(record.reason);
+      reasonEn = `🗣️ Verbal Warning — ${trReason}`;
+    } else if (record.ruleCode && RULES[record.ruleCode]) {
+      const rule = RULES[record.ruleCode];
+      reasonEn = `${rule.code} — ${rule.descriptionEn || (await translateToEnglish(rule.description))}`;
+    } else {
+      reasonEn = await translateToEnglish(record.reasonDisplay || record.reason || 'Rule violation');
+    }
+
+    const pointsDisplayEn = translatePointsDisplay(record.pointsDisplay);
+    const expiresAtEn = translateExpiresAt(record.expiresAtText);
+    const actionTakenEn = await translateActionTakenText(record.actionTaken);
+    const rolesTextEn =
+      !record.memberRolesSnapshot || record.memberRolesSnapshot === '`Rol bulunmuyor`'
+        ? '`No roles`'
+        : record.memberRolesSnapshot;
+
+    const descriptionEn =
+      `👤 **Parties**\n` +
+      `**Penalized Member:** <@${record.userId}>\n` +
+      `**Staff Member:** <@${record.staffId}>\n\n` +
+      `${LINE_DIVIDER}\n\n` +
+      `📌 **Record Summary**\n` +
+      `**Warning ID:** \`#${record.id}\`\n` +
+      `**Staff Member:** <@${record.staffId}>\n` +
+      `**Penalized Member:** <@${record.userId}>\n` +
+      `**Expiration Date:** ${expiresAtEn}\n` +
+      `**Total Warnings:** ${record.totalWarnings}\n\n` +
+      `${LINE_DIVIDER}\n\n` +
+      `🚨 **Warning Points / Penalty:**\n` +
+      `${pointsDisplayEn}\n\n` +
+      `${LINE_DIVIDER}\n\n` +
+      `📝 **Warning Reason:**\n` +
+      `${reasonEn}\n\n` +
+      `${LINE_DIVIDER}\n\n` +
+      `🏷️ **Roles:**\n` +
+      `${rolesTextEn}\n\n` +
+      `${LINE_DIVIDER}\n\n` +
+      `📎 **Evidence**\n` +
+      `**Visual Proof:** ${proofFieldTextEn}\n\n` +
+      `\`\`\`\n⚡ Action Taken\n${actionTakenEn}\n\`\`\``;
+
+    const enEmbed = new EmbedBuilder()
+      .setTitle(
+        record.cancelled
+          ? `↩️ Warning Cancelled (#${record.id}) (EN)`
+          : '⚠️ Server Warning Issued! (EN)'
+      )
+      .setColor(embedColor)
+      .setDescription(descriptionEn)
+      .setFooter({
+        text: record.cancelled
+          ? `Warning ID: #${record.id} • Cancelled • © ${new Date().getFullYear()} Piyade Team`
+          : `Warning ID: #${record.id} • © ${new Date().getFullYear()} Piyade Team (English)`,
+      })
+      .setTimestamp(record.createdAt || Date.now());
+
+    if (msgEmbed?.thumbnail?.url) {
+      enEmbed.setThumbnail(msgEmbed.thumbnail.url);
+    } else if (interaction.guild && interaction.guild.iconURL()) {
+      enEmbed.setThumbnail(interaction.guild.iconURL({ size: 256 }));
+    }
+
+    if (liveImageUrl) {
+      enEmbed.setImage(liveImageUrl);
+    }
+
+    return interaction.editReply({ embeds: [enEmbed] });
+  }
+
+  // 2. Durum: Eski uyarı mesajları veya Web Paneli Denetim Logu için doğrudan Embed çevirisi
+  if (!msgEmbed) {
+    return interaction.editReply({
+      content: '❌ Warning log details could not be found.',
+    });
+  }
+
+  let rawDesc = msgEmbed.description || '';
+
+  // Bilinen başlık ve etiketleri çevir, serbest metin kısımlarını da Google Translate ile çevir
+  const reasonBlockMatch = rawDesc.match(/📝 \*\*Uyarı Sebebi:\*\*\n([\s\S]*?)\n\n───/);
+  let translatedReasonBlock = null;
+  if (reasonBlockMatch && reasonBlockMatch[1]) {
+    const rawReasonLine = reasonBlockMatch[1].trim();
+    const codeMatch = rawReasonLine.match(/^([MDY]\d{1,2})\s*—\s*/i);
+    if (codeMatch && RULES[codeMatch[1].toUpperCase()]?.descriptionEn) {
+      const ruleObj = RULES[codeMatch[1].toUpperCase()];
+      translatedReasonBlock = `${ruleObj.code} — ${ruleObj.descriptionEn}`;
+    } else {
+      translatedReasonBlock = await translateToEnglish(
+        rawReasonLine.replace('🗣️ Sözlü İhtar —', '🗣️ Verbal Warning —')
+      );
+    }
+  }
+
+  const actionBlockMatch = rawDesc.match(/\`\`\`\n⚡ Uygulanan İşlem\n([\s\S]*?)\n\`\`\`/);
+  let translatedActionBlock = null;
+  if (actionBlockMatch && actionBlockMatch[1]) {
+    translatedActionBlock = await translateActionTakenText(actionBlockMatch[1].trim());
+  }
+
+  if (translatedReasonBlock) {
+    rawDesc = rawDesc.replace(
+      /📝 \*\*Uyarı Sebebi:\*\*\n[\s\S]*?\n\n───/,
+      `📝 **Warning Reason:**\n${translatedReasonBlock}\n\n───`
+    );
+  }
+  if (translatedActionBlock) {
+    rawDesc = rawDesc.replace(
+      /\`\`\`\n⚡ Uygulanan İşlem\n[\s\S]*?\n\`\`\`/,
+      `\`\`\`\n⚡ Action Taken\n${translatedActionBlock}\n\`\`\``
+    );
+  }
+
+  let translatedDesc = rawDesc
+    .replace('👤 **Taraflar**', '👤 **Parties**')
+    .replace(/\*\*Ceza Yiyen Kişi:\*\*/g, '**Penalized Member:**')
+    .replace(/\*\*Yetkili:\*\*/g, '**Staff Member:**')
+    .replace('📌 **Kayıt Özet**', '📌 **Record Summary**')
+    .replace('**Uyarı ID:**', '**Warning ID:**')
+    .replace('**Uyarı Bitiş Tarihi:**', '**Expiration Date:**')
+    .replace('Sözlü İhtar (Puansız)', 'Verbal Warning (0 Points)')
+    .replace(/\*\*Uyarı Bitiş Tarihi:\*\* Kalıcı/g, '**Expiration Date:** Permanent')
+    .replace('**Toplam Uyarı:**', '**Total Warnings:**')
+    .replace('🚨 **Verilen Uyarı Puanı:**', '🚨 **Warning Points / Penalty:**')
+    .replace(/(\+?\d+)\s*Puan\s*\(Toplam:\s*(\d+)\)/gi, '$1 Points (Total: $2)')
+    .replace(/0 Puan\s*\(Doğrudan\s*(\d+)\s*Gün Timeout\)/gi, '0 Points (Direct $1-Day Timeout)')
+    .replace('Özel Yaptırım (Kalıcı Ban)', 'Special Sanction (Permanent Ban)')
+    .replace('Özel Yaptırım (Doğrudan Yasaklı)', 'Special Sanction (Direct Restricted Role)')
+    .replace('Ağır Yetki İhlali (Y1)', 'Severe Staff Violation (Y1)')
+    .replace(/\+1 Yetkili Uyarı\s*\(Toplam:\s*(\d+\/\d+)\)/gi, '+1 Staff Warning (Total: $1)')
+    .replace('📝 **Uyarı Sebebi:**', '📝 **Warning Reason:**')
+    .replace('🏷️ **Rolleri:**', '🏷️ **Roles:**')
+    .replace('`Rol bulunmuyor`', '`No roles`')
+    .replace('📎 **Kanıt**', '📎 **Evidence**')
+    .replace('**Görsel Kanıtı:**', '**Visual Proof:**')
+    .replace('[Görseli Görüntüle]', '[View Image]')
+    .replace('Eklenmedi', 'Not attached')
+    .replace(
+      'Web yönetim paneli üzerinden yeni bir idari işlem gerçekleştirildi.',
+      'A new administrative action was performed via the Web Management Panel.'
+    )
+    .replace('• **İşlemi Yapan Yetkili:**', '• **Staff Member:**')
+    .replace('• **Hedef Kullanıcı:**', '• **Target Member:**')
+    .replace('• **Yapılan İşlem:**', '• **Action:**')
+    .replace('• **Zaman:**', '• **Timestamp:**')
+    .replace('>>> **Detaylar:**', '>>> **Details:**');
+
+  if ((msgEmbed.title || '').includes('Web Paneli Denetim Logu')) {
+    translatedDesc = await translateToEnglish(translatedDesc);
+  }
+
+  const oldTitle = msgEmbed.title || '⚠️ Uyarı Var!!!';
+  let newTitle = '⚠️ Server Warning Issued! (EN)';
+  if (oldTitle.includes('İptal Edildi')) {
+    newTitle = oldTitle.replace('Uyarı İptal Edildi', 'Warning Cancelled') + ' (EN)';
+  } else if (oldTitle.includes('Web Paneli Denetim Logu')) {
+    newTitle = '🌐 Web Panel Audit Log (EN)';
+  }
+
+  const fallbackEmbed = new EmbedBuilder()
+    .setTitle(newTitle)
+    .setColor(msgEmbed.color || config.COLORS.DANGER)
+    .setDescription(translatedDesc)
+    .setFooter({
+      text: (msgEmbed.footer?.text || 'Piyade Team | Warning System')
+        .replace('Uyarı ID:', 'Warning ID:')
+        .replace('tarafından iptal edildi', 'cancelled by staff'),
+    });
+
+  if (msgEmbed.thumbnail?.url) {
+    fallbackEmbed.setThumbnail(msgEmbed.thumbnail.url);
+  }
+  if (msgEmbed.image?.url) {
+    fallbackEmbed.setImage(msgEmbed.image.url);
+  }
+
+  return interaction.editReply({ embeds: [fallbackEmbed] });
+}
+
+/**
+ * Sunucu açılışında 1563923294602666125 kanalında uyarı paneli yoksa otomatik kurar veya günceller,
+ * ayrıca 1563923439121604720 (WARNING_LOG) kanalındaki mevcut uyarı loglarına "🇬🇧 English" butonunu ekler.
  */
 async function ensureWarningPanelMessage(guild) {
   if (!guild) return;
 
   await ensureWarningRoles(guild).catch(() => {});
 
+  // 1. Uyarı Log Kanalındaki (1563923439121604720) mevcut log mesajlarına "🇬🇧 English" butonu ekle
+  const logChannel =
+    guild.channels.cache.get(config.CHANNELS.WARNING_LOG) ||
+    (await guild.channels.fetch(config.CHANNELS.WARNING_LOG).catch(() => null));
+
+  if (logChannel) {
+    try {
+      const logMessages = await logChannel.messages.fetch({ limit: 35 }).catch(() => null);
+      if (logMessages) {
+        for (const msg of logMessages.values()) {
+          if (
+            msg.author.id === guild.client.user.id &&
+            msg.embeds.length > 0 &&
+            (!msg.components || msg.components.length === 0)
+          ) {
+            const emb = msg.embeds[0];
+            const footerMatch = (emb.footer?.text || '').match(/#([A-Z0-9]{4})/i);
+            const descMatch = (emb.description || '').match(/#([A-Z0-9]{4})/i);
+            const warnCode = footerMatch
+              ? footerMatch[1].toUpperCase()
+              : descMatch
+                ? descMatch[1].toUpperCase()
+                : (emb.title || '').includes('Web Paneli')
+                  ? 'audit'
+                  : 'auto';
+
+            const row = new ActionRowBuilder().addComponents(
+              new ButtonBuilder()
+                .setCustomId(`btn_warn_log_en_${warnCode}`)
+                .setLabel('🇬🇧 English')
+                .setStyle(ButtonStyle.Secondary)
+            );
+            await msg.edit({ components: [row] }).catch(() => {});
+          }
+        }
+      }
+    } catch (e) {}
+  }
+
+  // 2. Uyarı Paneli Kanalını (1563923294602666125) kontrol et ve güncelle
   const channel =
     guild.channels.cache.get(config.CHANNELS.WARNING_PANEL) ||
     (await guild.channels.fetch(config.CHANNELS.WARNING_PANEL).catch(() => null));
@@ -1698,6 +2063,7 @@ module.exports = {
   handleOfficialWarnModalSubmit,
   handleProofButton,
   handleCancelWarningCommand,
+  handleWarningLogEnglishButton,
   checkThirtyDayAmnesty,
   checkSuspendedExpirations,
 };

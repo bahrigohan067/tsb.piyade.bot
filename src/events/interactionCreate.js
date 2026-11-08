@@ -34,6 +34,7 @@ const {
   handleVerbalWarnModalSubmit,
   handleOfficialWarnModalSubmit,
   handleProofButton,
+  handleWarningLogEnglishButton,
 } = require('../utils/warningManager');
 const { createRegistrationApplication } = require('../services/registrationService');
 const { resolveLang, setMemberLanguage, parseGenderInput } = require('../utils/i18n');
@@ -206,6 +207,12 @@ module.exports = {
         if (interaction.customId.startsWith('btn_warn_proof_skip_')) {
           const warnId = interaction.customId.replace('btn_warn_proof_skip_', '');
           return handleProofButton(interaction, 'skip', warnId);
+        }
+
+        // [L] UYARI LOG KANALINDAKİ "🇬🇧 English" ÇEVİRİ BUTONU (1563923439121604720)
+        if (interaction.customId.startsWith('btn_warn_log_en_')) {
+          const warnId = interaction.customId.replace('btn_warn_log_en_', '');
+          return handleWarningLogEnglishButton(interaction, warnId);
         }
       }
 

@@ -1,4 +1,4 @@
-const { EmbedBuilder } = require('discord.js');
+const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const config = require('../../../config');
 
 /**
@@ -40,8 +40,15 @@ async function sendWebAuditLog(guild, { actor, target = null, action, details = 
     embed.addFields(extraFields);
   }
 
+  const row = new ActionRowBuilder().addComponents(
+    new ButtonBuilder()
+      .setCustomId('btn_warn_log_en_audit')
+      .setLabel('🇬🇧 English')
+      .setStyle(ButtonStyle.Secondary)
+  );
+
   try {
-    await logChannel.send({ embeds: [embed] });
+    await logChannel.send({ embeds: [embed], components: [row] });
   } catch (err) {
     console.error('[WEB AUDIT LOG HATASI]:', err.message);
   }
