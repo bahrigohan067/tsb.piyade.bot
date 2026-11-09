@@ -1109,16 +1109,26 @@ async function executeOfficialWarning({ guild, targetMember, staffUser, staffMem
 /**
  * Uyarıya Kanıt Görseli Ekler (Discord & Web API ortak çekirdek fonksiyon)
  */
-async function attachEvidenceToWarning({ guild, warnId, evidenceUrl, staffUser = null, source = 'discord' }) {
+async function attachEvidenceToWarning({
+  guild,
+  warnId,
+  evidenceUrl = null,
+  fileBuffer = null,
+  fileName = null,
+  staffUser = null,
+  source = 'discord',
+}) {
   const record = database.getWarningRecord(warnId);
   if (!record) {
     return { success: false, error: 'Uyarı kaydı bulunamadı!' };
   }
 
-  record.proofUrl = evidenceUrl;
-  database.updateWarningRecord(warnId, { proofUrl: evidenceUrl });
+  const safeFileName = fileName || `kanit_${record.id}.png`;
+  if (evidenceUrl) {
+    record.proofUrl = evidenceUrl;
+  }
 
-  // Log mesajı varsa embed'i güncelle
+  // Log mesajı varsa embed'i güncelle (fileBuffer varsa doğrudan Discord'a yükle)
   const logChannel =
     guild.channels.cache.get(config.CHANNELS.WARNING_LOG) ||
     (await guild.channels.fetch(config.CHANNELS.WARNING_LOG).catch(() => null));
@@ -1126,15 +1136,30 @@ async function attachEvidenceToWarning({ guild, warnId, evidenceUrl, staffUser =
   if (logChannel && record.logMessageId) {
     const logMsg = await logChannel.messages.fetch(record.logMessageId).catch(() => null);
     if (logMsg) {
-      const updatedPayload = buildWarningLogPayload(guild, record, record.memberRolesSnapshot);
-      await logMsg.edit(updatedPayload).catch(() => {});
+      if (fileBuffer && Buffer.isBuffer(fileBuffer)) {
+        record.proofAttachmentName = safeFileName;
+        const updatedPayload = buildWarningLogPayload(guild, record, record.memberRolesSnapshot);
+        updatedPayload.files = [{ attachment: fileBuffer, name: safeFileName }];
+        const edited = await logMsg.edit(updatedPayload).catch(() => null);
+        if (edited && edited.embeds[0]?.image?.url) {
+          record.proofUrl = edited.embeds[0].image.url;
+        }
+      } else {
+        const updatedPayload = buildWarningLogPayload(guild, record, record.memberRolesSnapshot);
+        await logMsg.edit(updatedPayload).catch(() => {});
+      }
     }
   }
+
+  database.updateWarningRecord(warnId, {
+    proofUrl: record.proofUrl || null,
+    proofAttachmentName: record.proofAttachmentName || null,
+  });
 
   return {
     success: true,
     warnId: record.id,
-    proofUrl: evidenceUrl,
+    proofUrl: record.proofUrl,
     record,
   };
 }

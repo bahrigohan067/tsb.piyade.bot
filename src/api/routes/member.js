@@ -34,6 +34,7 @@ router.get('/:id/roles', async (req, res) => {
       }));
 
     const level = getMemberLevel(member, req.guild);
+    const highestRolePosition = member.roles?.highest?.position || 0;
 
     return res.json({
       userId: member.id,
@@ -41,6 +42,7 @@ router.get('/:id/roles', async (req, res) => {
       displayName: member.displayName,
       avatarUrl: member.user.displayAvatarURL({ dynamic: true }),
       level,
+      highestRolePosition,
       roles,
     });
   } catch (err) {
@@ -108,6 +110,12 @@ router.get('/:id/profile', async (req, res) => {
         canonical: tryoutRole?.canonical || null,
         formCount: tryout?.formCount || 0,
         lastUpdated: tryout?.lastUpdated || null,
+      },
+      vs: {
+        points: 0,
+        wins: 0,
+        losses: 0,
+        kills: 0,
       },
       warnings: {
         points: warnStats.points || 0,

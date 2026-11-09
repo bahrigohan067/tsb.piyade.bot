@@ -145,6 +145,19 @@ router.get('/members/:id', async (req, res) => {
 
     const level = getMemberLevel(member, req.guild);
 
+    // 6. Denetim Logu (Üye Bilgileri / Sicil Görüntüleme)
+    if (req.query.audit === '1' && req.actorUser) {
+      console.log(
+        `[DENETİM LOGU] Yetkili ${req.actorUser.tag || req.actorUser.username} (${req.actorUser.id}), ${member.displayName} (${member.id}) üyesinin detaylarını görüntüledi. Zaman: ${new Date().toISOString()}`
+      );
+      sendWebAuditLog(req.guild, {
+        actor: req.actorUser,
+        target: member.user,
+        action: '🔍 Üye Bilgileri / Sicil Görüntülendi',
+        details: `**İncelenen Üye:** <@${member.id}> (\`${member.id}\`)\n**Zaman:** <t:${Math.floor(Date.now() / 1000)}:F>`,
+      }).catch(() => {});
+    }
+
     return res.json({
       discord: {
         id: member.id,
@@ -176,6 +189,12 @@ router.get('/members/:id', async (req, res) => {
           lastUpdated: tryoutStats?.lastUpdated || null,
         },
         forms: tryoutForms,
+      },
+      vs: {
+        points: 0,
+        wins: 0,
+        losses: 0,
+        kills: 0,
       },
       warnings: {
         stats: {
@@ -321,25 +340,38 @@ router.post('/warn', async (req, res) => {
 
 /**
  * POST /api/admin/warn/:id/evidence
- * Önceden verilmiş bir uyarıya kanıt görseli (URL) ekler ve uyarı log kartını günceller.
+ * Önceden verilmiş bir uyarıya kanıt görseli (bellekten Buffer veya URL) ekler ve uyarı log kartını günceller.
  */
 router.post('/warn/:id/evidence', async (req, res) => {
   const warnId = req.params.id;
-  const { evidenceUrl } = req.body;
+  const { evidenceUrl, evidenceBase64, fileName } = req.body;
 
   if (!warnId) {
     return res.status(400).json({ error: 'Uyarı ID parametresi zorunludur.' });
   }
 
-  if (!evidenceUrl || !/^https?:\/\/\S+/i.test(String(evidenceUrl))) {
-    return res.status(400).json({ error: 'Geçersiz kanıt görseli bağlantısı ("evidenceUrl" http:// veya https:// ile başlamalıdır).' });
+  let fileBuffer = null;
+  let safeFileName = null;
+
+  if (evidenceBase64 && typeof evidenceBase64 === 'string') {
+    fileBuffer = Buffer.from(evidenceBase64, 'base64');
+    if (fileBuffer.length === 0 || fileBuffer.length > 5 * 1024 * 1024) {
+      return res.status(400).json({ error: 'Kanıt görseli boyutu 0 ile 5 MB arasında olmalıdır.' });
+    }
+    safeFileName = String(fileName || `kanit_${warnId}.png`).replace(/[^a-zA-Z0-9._-]/g, '_');
+  } else if (!evidenceUrl || !/^https?:\/\/\S+/i.test(String(evidenceUrl))) {
+    return res.status(400).json({
+      error: 'Geçerli bir kanıt görseli dosyası ("evidenceBase64") veya bağlantısı ("evidenceUrl") gönderilmelidir.',
+    });
   }
 
   try {
     const result = await attachEvidenceToWarning({
       guild: req.guild,
       warnId,
-      evidenceUrl: evidenceUrl.trim(),
+      evidenceUrl: evidenceUrl ? String(evidenceUrl).trim() : null,
+      fileBuffer,
+      fileName: safeFileName,
       staffUser: req.actorUser,
       staffMember: req.actorMember,
       source: 'site',
@@ -351,11 +383,12 @@ router.post('/warn/:id/evidence', async (req, res) => {
 
     // Web Yönetim Paneli Denetim Logu
     const targetUser = { id: result.record.userId };
+    const finalUrl = result.proofUrl || evidenceUrl || 'Discord Eki';
     await sendWebAuditLog(req.guild, {
       actor: req.actorUser,
       target: targetUser,
       action: '📎 Uyarıya Kanıt Görseli Eklendi',
-      details: `**Eklenen Kanıt Bağlantısı:** [Görseli Aç](${evidenceUrl})\n**İlgili Uyarı:** #${warnId} (${result.record.reasonDisplay || result.record.ruleCode})`,
+      details: `**Eklenen Kanıt:** ${/^https?:\/\//i.test(finalUrl) ? `[Görseli Aç](${finalUrl})` : finalUrl}\n**İlgili Uyarı:** #${warnId} (${result.record.reasonDisplay || result.record.ruleCode})`,
       warnId: result.warnId,
     });
 
