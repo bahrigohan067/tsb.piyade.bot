@@ -37,6 +37,8 @@ module.exports = {
     WARNING_PANEL: '1563923294602666125',
     // Uyarıların Düşeceği Bildirim / Log Kanalı
     WARNING_LOG: '1563923439121604720',
+    // Web Paneli Denetim Loglarının Gönderileceği Kanal
+    WEB_AUDIT_LOG: (process.env.WEB_AUDIT_LOG_CHANNEL_ID || '1570045724580913152').trim(),
     // Sadece Medya Paylaşım Kanalı
     MEDIA: '1559316020227739806',
   },

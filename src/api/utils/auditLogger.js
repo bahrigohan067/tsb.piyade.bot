@@ -2,17 +2,18 @@ const { EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('
 const config = require('../../../config');
 
 /**
- * Web sitesi paneli üzerinden yapılan yönetim işlemlerini WARNING_LOG kanalına denetim logu olarak gönderir.
+ * Web sitesi paneli üzerinden yapılan yönetim işlemlerini WEB_AUDIT_LOG kanalına denetim logu olarak gönderir.
  */
 async function sendWebAuditLog(guild, { actor, target = null, action, details = '', warnId = null, extraFields = [] }) {
   if (!guild) return;
 
+  const targetChannelId = config.CHANNELS.WEB_AUDIT_LOG || config.CHANNELS.WARNING_LOG;
   const logChannel =
-    guild.channels.cache.get(config.CHANNELS.WARNING_LOG) ||
-    (await guild.channels.fetch(config.CHANNELS.WARNING_LOG).catch(() => null));
+    guild.channels.cache.get(targetChannelId) ||
+    (await guild.channels.fetch(targetChannelId).catch(() => null));
 
   if (!logChannel) {
-    console.warn('[WEB AUDIT LOG] Uyarı log kanalı bulunamadı!');
+    console.warn(`[WEB AUDIT LOG] Denetim log kanalı bulunamadı! (Kanal ID: ${targetChannelId})`);
     return;
   }
 
