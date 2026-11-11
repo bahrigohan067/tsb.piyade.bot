@@ -11,6 +11,9 @@ module.exports = {
   PORT: process.env.PORT || 3000,
   API_SECRET: (process.env.API_SECRET || '').trim().replace(/^['"]+|['"]+$/g, ''),
 
+  // Web Sitesi Geri Bildirim Kanalı ID'si (https://discord.com/channels/1559313292651008040/1570061735665078392)
+  FEEDBACK_CHANNEL_ID: (process.env.FEEDBACK_CHANNEL_ID || '1570061735665078392').trim().replace(/^['"]+|['"]+$/g, ''),
+
   // Kanal ID'leri
   CHANNELS: {
     // Kayıt Paneli ve Başvuruların Yapıldığı Kanal
@@ -39,6 +42,8 @@ module.exports = {
     WARNING_LOG: '1563923439121604720',
     // Web Paneli Denetim Loglarının Gönderileceği Kanal
     WEB_AUDIT_LOG: (process.env.WEB_AUDIT_LOG_CHANNEL_ID || '1570045724580913152').trim(),
+    // Web Sitesi Geri Bildirim (Feedback Pill) Kanalı
+    FEEDBACK_CHANNEL: (process.env.FEEDBACK_CHANNEL_ID || '1570061735665078392').trim(),
     // Sadece Medya Paylaşım Kanalı
     MEDIA: '1559316020227739806',
   },

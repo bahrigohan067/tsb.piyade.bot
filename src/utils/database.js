@@ -24,6 +24,7 @@ class DatabaseManager {
       languagePrefs: {},              // { [userId]: 'tr' | 'en' }
       englishRoleId: null,            // Otomatik veya tanımlı 🇬🇧 English rolü ID'si
       lockedChannels: {},             // { [channelId]: { channelId, lockedBy, lockedAt, overwrites: [...] } }
+      feedback: [],                   // [{ id, userId, usernameSnapshot, message, page, lang, createdAt, status, channelId, messageId }]
     };
     this.init();
   }
@@ -52,6 +53,7 @@ class DatabaseManager {
           languagePrefs: parsed.languagePrefs || {},
           englishRoleId: parsed.englishRoleId || null,
           lockedChannels: parsed.lockedChannels || {},
+          feedback: Array.isArray(parsed.feedback) ? parsed.feedback : [],
         };
       } else {
         this.save();
@@ -499,6 +501,71 @@ class DatabaseManager {
       delete this.data.lockedChannels[String(channelId)];
       this.save();
     }
+  }
+
+  // ==========================================
+  // GERİ BİLDİRİM (FEEDBACK) BÖLÜMÜ
+  // ==========================================
+
+  /**
+   * 6 karakterli benzersiz harf-rakam geri bildirim ID'si üretir
+   */
+  generateFeedbackId() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+    if (!Array.isArray(this.data.feedback)) {
+      this.data.feedback = [];
+    }
+    const existingIds = new Set(this.data.feedback.map((item) => item.id));
+    let id = '';
+    do {
+      id = '';
+      for (let i = 0; i < 6; i++) {
+        id += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+    } while (existingIds.has(id));
+    return id;
+  }
+
+  getFeedbackList() {
+    return Array.isArray(this.data.feedback) ? this.data.feedback : [];
+  }
+
+  addFeedback(record) {
+    if (!Array.isArray(this.data.feedback)) {
+      this.data.feedback = [];
+    }
+
+    const entry = {
+      id: record.id || this.generateFeedbackId(),
+      userId: String(record.userId),
+      usernameSnapshot: String(record.usernameSnapshot || ''),
+      message: String(record.message),
+      page: String(record.page || '/'),
+      lang: record.lang === 'en' ? 'en' : 'tr',
+      createdAt: record.createdAt || Date.now(),
+      status: record.status || 'new',
+      channelId: record.channelId || null,
+      messageId: record.messageId || null,
+    };
+
+    this.data.feedback.push(entry);
+
+    // En fazla 2000 kayıt sakla, en eskileri sil
+    if (this.data.feedback.length > 2000) {
+      this.data.feedback = this.data.feedback.slice(this.data.feedback.length - 2000);
+    }
+
+    this.save();
+    return entry;
+  }
+
+  updateFeedback(id, patch) {
+    if (!Array.isArray(this.data.feedback)) return null;
+    const entry = this.data.feedback.find((item) => item.id === id);
+    if (!entry) return null;
+    Object.assign(entry, patch);
+    this.save();
+    return entry;
   }
 }
 

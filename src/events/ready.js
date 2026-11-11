@@ -5,6 +5,7 @@ const { updateTryoutLeaderboard, ensureTryoutMessagesUpdated } = require('../uti
 const { ensureColorPanelMessage } = require('../utils/colorManager');
 const { ensureRegisterPanelMessage } = require('../utils/panel');
 const { ensureEnglishRole } = require('../utils/i18n');
+const { checkFeedbackChannelOnStartup } = require('../utils/feedbackManager');
 const {
   ensureWarningPanelMessage,
   checkThirtyDayAmnesty,
@@ -53,14 +54,17 @@ module.exports = {
             ensureTryoutMessagesUpdated(guild).catch(() => {});
             ensureColorPanelMessage(guild).catch(() => {});
             ensureWarningPanelMessage(guild).catch(() => {});
+            checkFeedbackChannelOnStartup(guild).catch(() => {});
           }, 5000);
         } else {
           console.warn(`[SLASH KOMUTLAR] Guild ID (${config.GUILD_ID}) önbellekte bulunamadı. Genel (Global) olarak kaydediliyor...`);
           await client.application.commands.set(commandsData);
+          checkFeedbackChannelOnStartup(null).catch(() => {});
         }
       } else {
         await client.application.commands.set(commandsData);
         console.log(`[SLASH KOMUTLAR] ${commandsData.length} komut genel olarak kaydedildi.`);
+        checkFeedbackChannelOnStartup(null).catch(() => {});
       }
     } catch (err) {
       console.error('[SLASH KOMUTLAR] Komutlar yüklenirken hata oluştu:', err);

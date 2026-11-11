@@ -10,6 +10,7 @@ const tryoutRoutes = require('./routes/tryout');
 const helpRoutes = require('./routes/help');
 const registerRoutes = require('./routes/register');
 const adminRoutes = require('./routes/admin');
+const feedbackRoutes = require('./routes/feedback');
 
 function createApp(client) {
   const app = express();
@@ -51,6 +52,7 @@ function createApp(client) {
   app.use('/api/help', helpRoutes);
   app.use('/api/register', registerRoutes);
   app.use('/api/admin', adminRoutes);
+  app.use('/api/feedback', feedbackRoutes);
 
   // 404 Yakalayıcı (Tüm eşleşmeyen /api rotaları için)
   app.use('/api', (req, res) => {

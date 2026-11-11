@@ -128,10 +128,22 @@ Bot aynı Node.js sürecinde Express ile çalışarak harici web sitelerine ve y
 | `GET` | `/api/help/status` | Aktif kayıtlı üye sayısı ve çağrı bekleme (cooldown) durumu | Bearer (`X-Actor-Id` isteğe bağlı) |
 | `POST` | `/api/help/call` | Acil takviye çağrısı (5 dk cooldown, Roblox profil butonu, toplu DM) | Bearer + `X-Actor-Id` |
 | `POST` | `/api/register` | Web sitesi kayıt başvurusu (Roblox doğrulama, thread ve onay kartı) | Bearer |
+| `POST` | `/api/feedback` | Web sitesi geri bildirimi (Doğrulama, hız sınırı, DB kayıt ve Discord kanalı) | Bearer + `X-Actor-Id` |
 | `GET` | `/api/admin/members?query=` | Sunucu üyeleri arama (kullanıcı adı, nick, ID, Roblox nick) | Bearer + `X-Actor-Id` (Yönetim) |
 | `GET` | `/api/admin/members/:id` | Üye tam profili: Discord + Kayıt + Tryout + VS + Sicil / Uyarı geçmişi | Bearer + `X-Actor-Id` (Yönetim) |
 | `POST` | `/api/admin/warn` | Uyarı verme (`verbal` / `official`, M/D/Y kuralları, roller, timeout, ban) | Bearer + `X-Actor-Id` (Yönetim) |
 | `POST` | `/api/admin/warn/:id/evidence` | Önceden verilen uyarıya kanıt görseli bağlantısı ekleme | Bearer + `X-Actor-Id` (Yönetim) |
+
+#### 💬 `POST /api/feedback` Detayları
+- **Başlıklar:** `Authorization: Bearer <API_SECRET>` ve `X-Actor-Id: <Discord_User_ID>` (Gönderen kimliği yalnızca `X-Actor-Id` başlığından alınır; gönderen sunucu üyesi olmalıdır, Kayıtsız üyeler dahildir).
+- **İstek Gövdesi (JSON):** `{ "message": "string (3-1000 karakter)", "page": "/sayfa", "lang": "tr" | "en" }`
+- **Hız Sınırları & Korumalar:** Kullanıcı başına 10 dakikada en fazla 3, 24 saatte en fazla 10 geri bildirim (`429 RATE_LIMITED`); son 10 dakikada aynı içerik tekrarı (`409 DUPLICATE`); Discord kanalında tüm etiket/mention bildirimleri (`allowedMentions: { parse: [] }` ve `@everyone`/`@here` koruması) devre dışıdır.
+- **Yanıtlar:**
+  - `200`: `{ "success": true, "id": "A1B2C3", "delivered": true }` veya kanal erişilemezse `{ "success": true, "id": "A1B2C3", "delivered": false, "reason": "CHANNEL_UNAVAILABLE" }`
+  - `400`: `{ "code": "TOO_SHORT" }` veya `{ "code": "TOO_LONG" }`
+  - `403`: `{ "code": "NOT_IN_GUILD" }`
+  - `409`: `{ "code": "DUPLICATE" }`
+  - `429`: `{ "code": "RATE_LIMITED", "retryAfterSec": 120 }`
 
 ---
 
@@ -146,6 +158,7 @@ Railway veya `.env` dosyasında tanımlanması gereken değişkenler:
 | `API_SECRET` | **Evet (API için)** | - | REST API Bearer kimlik doğrulama gizli anahtarı |
 | `PORT` | Hayır | `3000` | Express REST API dinleme portu (Railway otomatik atar) |
 | `DATA_DIR` | Hayır | `./data` | Kalıcı veritabanı klasörü (Railway Volume desteği) |
+| `FEEDBACK_CHANNEL_ID` | Hayır (Kanal için önerilir) | - | Web sitesi geri bildirim embedlerinin gönderileceği Discord kanal ID'si |
 | `GEMINI_API_KEY` | Hayır | - | Google Gemini Yapay Zeka API Anahtarı (Küfür filtresi) |
 | `GEMINI_MODEL` | Hayır | `gemini-3.8-flash` | Gemini model sürümü |
 
