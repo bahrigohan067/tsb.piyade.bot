@@ -36,12 +36,29 @@ router.get('/:id/roles', async (req, res) => {
     const level = getMemberLevel(member, req.guild);
     const highestRolePosition = member.roles?.highest?.position || 0;
 
+    const reg = database.getRegistrationByDiscordId(id);
+    const isRegMember = config.isRegisteredMember(member) || Boolean(reg);
+    const isOtherClanMember = Boolean(config.ROLES?.OTHER_CLAN && member.roles.cache.has(config.ROLES.OTHER_CLAN)) || reg?.registrationType === 'other';
+
+    let clanInfo = null;
+    if (isOtherClanMember) {
+      const clanRolesList = database.getClanRoles();
+      const memberClanRole = clanRolesList.find((cr) => member.roles.cache.has(cr.roleId));
+      clanInfo = {
+        name: reg?.clanName || memberClanRole?.name || null,
+        roleId: reg?.clanRoleId || memberClanRole?.roleId || null,
+      };
+    }
+
     return res.json({
       userId: member.id,
       username: member.user.username,
       displayName: member.displayName,
       avatarUrl: member.user.displayAvatarURL({ dynamic: true }),
       level,
+      registered: isRegMember,
+      registrationType: isRegMember ? (isOtherClanMember ? 'other' : 'own') : null,
+      clan: clanInfo,
       highestRolePosition,
       roles,
     });
@@ -94,7 +111,10 @@ router.get('/:id/profile', async (req, res) => {
         level,
       },
       registration: {
-        registered: Boolean(reg),
+        registered: Boolean(reg) || config.isRegisteredMember(member),
+        type: reg?.registrationType || (member.roles.cache.has(config.ROLES?.OTHER_CLAN) ? 'other' : (config.isRegisteredMember(member) ? 'own' : null)),
+        clanName: reg?.clanName || null,
+        clanRoleId: reg?.clanRoleId || null,
         realName: reg?.realName || null,
         gender: reg?.gender || null,
         robloxUsername: reg?.robloxUsername || null,

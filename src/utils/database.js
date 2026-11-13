@@ -25,6 +25,10 @@ class DatabaseManager {
       englishRoleId: null,            // Otomatik veya tanımlı 🇬🇧 English rolü ID'si
       lockedChannels: {},             // { [channelId]: { channelId, lockedBy, lockedAt, overwrites: [...] } }
       feedback: [],                   // [{ id, userId, usernameSnapshot, message, page, lang, createdAt, status, channelId, messageId }]
+      clanRoles: [],                  // [{ id, roleId, name, normalized, compact, aliases: [], source: 'bot'|'adopted'|'manual', createdBy, createdAt }]
+      knownClans: [],                 // [{ id, name, normalized, compact, type: 'ally'|'enemy', createdBy, createdAt, updatedAt }]
+      clanPanelMessageId: null,       // Dost/Düşman klan paneli mesaj ID'si
+      clanPanelChannelId: null,       // Dost/Düşman klan paneli kanal ID'si
     };
     this.init();
   }
@@ -54,18 +58,36 @@ class DatabaseManager {
           englishRoleId: parsed.englishRoleId || null,
           lockedChannels: parsed.lockedChannels || {},
           feedback: Array.isArray(parsed.feedback) ? parsed.feedback : [],
+          clanRoles: Array.isArray(parsed.clanRoles) ? parsed.clanRoles : [],
+          knownClans: Array.isArray(parsed.knownClans) ? parsed.knownClans : [],
+          clanPanelMessageId: parsed.clanPanelMessageId || null,
+          clanPanelChannelId: parsed.clanPanelChannelId || null,
         };
       } else {
         this.save();
       }
     } catch (err) {
       console.error('[DATABASE] Veritabanı başlatılırken hata oluştu:', err);
+      try {
+        if (fs.existsSync(DB_PATH)) {
+          const backupPath = path.join(DATA_DIR, `database.corrupted.${Date.now()}.json`);
+          fs.copyFileSync(DB_PATH, backupPath);
+          console.warn(`[DATABASE] Bozuk veritabanı yedeği alındı: ${backupPath}`);
+        }
+      } catch (backupErr) {
+        console.error('[DATABASE] Bozuk dosya yedeği alınamadı:', backupErr);
+      }
     }
   }
 
   save() {
     try {
-      fs.writeFileSync(DB_PATH, JSON.stringify(this.data, null, 2), 'utf-8');
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const tmpPath = `${DB_PATH}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, DB_PATH);
     } catch (err) {
       console.error('[DATABASE] Veritabanı kaydedilirken hata oluştu:', err);
     }
@@ -93,19 +115,28 @@ class DatabaseManager {
 
   // Yeni başarılı kaydı ekleme
   addRegistration(record) {
+    const regType = record.registrationType || 'own';
+    const cleanRecord = {
+      ...record,
+      registrationType: regType,
+      clanName: record.clanName || null,
+      clanRoleId: record.clanRoleId || null,
+      clanRoleCreated: Boolean(record.clanRoleCreated),
+    };
+
     const index = this.data.registrations.findIndex(
-      (r) => String(r.discordId) === String(record.discordId)
+      (r) => String(r.discordId) === String(cleanRecord.discordId)
     );
 
     if (index !== -1) {
       this.data.registrations[index] = {
         ...this.data.registrations[index],
-        ...record,
+        ...cleanRecord,
         updatedAt: Date.now(),
       };
     } else {
       this.data.registrations.push({
-        ...record,
+        ...cleanRecord,
         registeredAt: Date.now(),
       });
     }
@@ -116,13 +147,24 @@ class DatabaseManager {
   // Aktif kayıt başvuru kontrolleri
   getActiveApplication(discordId) {
     if (!discordId) return null;
-    return this.data.activeApplications[String(discordId)] || null;
+    const app = this.data.activeApplications[String(discordId)];
+    if (!app) return null;
+    return {
+      registrationType: 'own',
+      clanTypedName: null,
+      clanResolution: null,
+      ...app,
+    };
   }
 
   setActiveApplication(discordId, appData) {
+    const existing = this.data.activeApplications[String(discordId)] || {};
     this.data.activeApplications[String(discordId)] = {
+      ...existing,
       ...appData,
-      createdAt: Date.now(),
+      registrationType: appData.registrationType || existing.registrationType || 'own',
+      createdAt: existing.createdAt || Date.now(),
+      updatedAt: Date.now(),
     };
     this.save();
   }
@@ -156,7 +198,12 @@ class DatabaseManager {
   }
 
   getAllRegistrations() {
-    return this.data.registrations;
+    return (this.data.registrations || []).map((r) => ({
+      registrationType: 'own',
+      clanName: null,
+      clanRoleId: null,
+      ...r,
+    }));
   }
 
   // Acil Yardım Paneli mesaj ID'si
@@ -566,6 +613,148 @@ class DatabaseManager {
     Object.assign(entry, patch);
     this.save();
     return entry;
+  }
+
+  // ==========================================
+  // KLAN SİSTEMİ BÖLÜMÜ (CLAN ROLES & KNOWN CLANS)
+  // ==========================================
+
+  getClanRoles() {
+    return Array.isArray(this.data.clanRoles) ? this.data.clanRoles : [];
+  }
+
+  getClanRoleByRoleId(roleId) {
+    if (!roleId) return null;
+    return this.getClanRoles().find((cr) => String(cr.roleId) === String(roleId)) || null;
+  }
+
+  addClanRole(roleData) {
+    if (!Array.isArray(this.data.clanRoles)) this.data.clanRoles = [];
+    const roleId = String(roleData.roleId);
+    const existingIndex = this.data.clanRoles.findIndex((cr) => String(cr.roleId) === roleId);
+
+    const entry = {
+      id: roleData.id || `cr_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      roleId,
+      name: String(roleData.name || ''),
+      normalized: String(roleData.normalized || ''),
+      compact: String(roleData.compact || ''),
+      aliases: Array.isArray(roleData.aliases) ? [...new Set(roleData.aliases.map(String).filter(Boolean))] : [],
+      source: roleData.source || 'bot', // 'bot' | 'adopted' | 'manual'
+      createdBy: roleData.createdBy ? String(roleData.createdBy) : null,
+      createdAt: roleData.createdAt || Date.now(),
+    };
+
+    if (existingIndex !== -1) {
+      this.data.clanRoles[existingIndex] = {
+        ...this.data.clanRoles[existingIndex],
+        ...entry,
+        aliases: [
+          ...new Set([
+            ...(this.data.clanRoles[existingIndex].aliases || []),
+            ...entry.aliases,
+          ]),
+        ],
+      };
+    } else {
+      this.data.clanRoles.push(entry);
+    }
+
+    this.save();
+    return entry;
+  }
+
+  updateClanRole(roleId, patch) {
+    const list = this.getClanRoles();
+    const entry = list.find((cr) => String(cr.roleId) === String(roleId));
+    if (!entry) return null;
+    Object.assign(entry, patch);
+    this.save();
+    return entry;
+  }
+
+  removeClanRoleByRoleId(roleId) {
+    if (!roleId || !Array.isArray(this.data.clanRoles)) return false;
+    const initialLen = this.data.clanRoles.length;
+    this.data.clanRoles = this.data.clanRoles.filter((cr) => String(cr.roleId) !== String(roleId));
+    if (this.data.clanRoles.length !== initialLen) {
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  addClanAlias(roleId, alias) {
+    if (!roleId || !alias) return false;
+    const entry = this.getClanRoleByRoleId(roleId);
+    if (!entry) return false;
+    if (!Array.isArray(entry.aliases)) entry.aliases = [];
+    const cleanAlias = String(alias).trim();
+    if (cleanAlias && !entry.aliases.includes(cleanAlias)) {
+      entry.aliases.push(cleanAlias);
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  getKnownClans() {
+    return Array.isArray(this.data.knownClans) ? this.data.knownClans : [];
+  }
+
+  findKnownClanById(id) {
+    if (!id) return null;
+    return this.getKnownClans().find((kc) => String(kc.id) === String(id)) || null;
+  }
+
+  addKnownClan(clanData) {
+    if (!Array.isArray(this.data.knownClans)) this.data.knownClans = [];
+    const entry = {
+      id: clanData.id || `kc_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+      name: String(clanData.name || '').trim(),
+      normalized: String(clanData.normalized || ''),
+      compact: String(clanData.compact || ''),
+      type: clanData.type === 'enemy' ? 'enemy' : 'ally',
+      createdBy: clanData.createdBy ? String(clanData.createdBy) : null,
+      createdAt: clanData.createdAt || Date.now(),
+      updatedAt: Date.now(),
+    };
+    this.data.knownClans.push(entry);
+    this.save();
+    return entry;
+  }
+
+  updateKnownClan(id, patch) {
+    const list = this.getKnownClans();
+    const entry = list.find((kc) => String(kc.id) === String(id));
+    if (!entry) return null;
+    Object.assign(entry, patch, { updatedAt: Date.now() });
+    this.save();
+    return entry;
+  }
+
+  removeKnownClan(id) {
+    if (!id || !Array.isArray(this.data.knownClans)) return false;
+    const initialLen = this.data.knownClans.length;
+    this.data.knownClans = this.data.knownClans.filter((kc) => String(kc.id) !== String(id));
+    if (this.data.knownClans.length !== initialLen) {
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  setClanPanelMessage(channelId, messageId) {
+    this.data.clanPanelChannelId = channelId ? String(channelId) : null;
+    this.data.clanPanelMessageId = messageId ? String(messageId) : null;
+    this.save();
+  }
+
+  getClanPanelMessage() {
+    return {
+      channelId: this.data.clanPanelChannelId || null,
+      messageId: this.data.clanPanelMessageId || null,
+    };
   }
 }
 

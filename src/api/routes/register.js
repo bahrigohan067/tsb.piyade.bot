@@ -4,6 +4,7 @@ const config = require('../../../config');
 const database = require('../../utils/database');
 const { createRegistrationApplication } = require('../../services/registrationService');
 const { parseGenderInput } = require('../../utils/i18n');
+const clanMatcher = require('../../utils/clanMatcher');
 
 /**
  * GET /api/register/status/:id
@@ -18,18 +19,23 @@ async function getApplicationStatus(req, res) {
 
   try {
     const member = req.guild ? await req.guild.members.fetch(id).catch(() => null) : null;
-    const isRegisteredRole = member && config.ROLES && member.roles.cache.has(config.ROLES.REGISTERED_CHECK);
+    const isRegisteredRole = config.isRegisteredMember(member);
     const regRecord = database.getRegistrationByDiscordId(id);
 
     if (isRegisteredRole || regRecord) {
+      const regType = regRecord?.registrationType || (member?.roles?.cache?.has(config.ROLES?.OTHER_CLAN) ? 'other' : 'own');
       return res.json({
         userId: id,
         inGuild: Boolean(member),
         status: 'approved',
         message: 'Kayıt onaylandı ve üyelik aktif.',
+        registrationType: regType,
+        clanName: regRecord?.clanName || null,
         registration: regRecord || {
           registered: true,
           discordId: id,
+          registrationType: regType,
+          clanName: null,
         },
       });
     }
@@ -41,11 +47,15 @@ async function getApplicationStatus(req, res) {
         inGuild: Boolean(member),
         status: 'pending',
         message: 'Kayıt başvurunuz yetkili onayında bekliyor.',
+        registrationType: activeApp.registrationType || 'own',
+        clanName: activeApp.clanTypedName || null,
         application: {
           threadId: activeApp.threadId || null,
           robloxUsername: activeApp.robloxUsername || null,
           realName: activeApp.realName || null,
           gender: activeApp.gender || null,
+          registrationType: activeApp.registrationType || 'own',
+          clanName: activeApp.clanTypedName || null,
           createdAt: activeApp.createdAt || null,
         },
       });
@@ -84,23 +94,30 @@ router.get('/:id', getApplicationStatus);
 
 /**
  * POST /api/register
- * Site kayıt formu (gerçek ad, cinsiyet, Roblox nick/ID/link).
- * Mevcut Roblox doğrulaması, çift başvuru koruması, thread açma ve yetkili onay kartı akışı aynen çalışır.
+ * Site kayıt formu (gerçek ad, cinsiyet, Roblox nick/ID/link, kayıt türü ve klan adı).
  */
 router.post('/', async (req, res) => {
-  const { realName, gender, robloxInput, lang } = req.body;
+  const { realName, gender, robloxInput, registrationType, clanName, lang } = req.body;
   const discordId = req.body.discordId || req.headers['x-actor-id'];
+  const reqLang = lang === 'en' ? 'en' : 'tr';
+  const isEn = reqLang === 'en';
 
   // 1. Girdi Doğrulama
   if (!discordId || !/^\d{1,21}$/.test(String(discordId))) {
     return res.status(400).json({
-      error: 'Geçersiz veya eksik Discord ID ("discordId" gövde alanı veya "X-Actor-Id" başlığı gereklidir).',
+      error: isEn
+        ? 'Invalid or missing Discord ID (require "discordId" in body or "X-Actor-Id" header).'
+        : 'Geçersiz veya eksik Discord ID ("discordId" gövde alanı veya "X-Actor-Id" başlığı gereklidir).',
+      code: 'INVALID_DISCORD_ID',
     });
   }
 
   if (!realName || typeof realName !== 'string' || realName.trim().length < 2 || realName.trim().length > 32) {
     return res.status(400).json({
-      error: 'Geçersiz gerçek ad (en az 2, en fazla 32 karakter olmalıdır).',
+      error: isEn
+        ? 'Invalid real name (must be between 2 and 32 characters).'
+        : 'Geçersiz gerçek ad (en az 2, en fazla 32 karakter olmalıdır).',
+      code: 'INVALID_REAL_NAME',
     });
   }
 
@@ -109,15 +126,49 @@ router.post('/', async (req, res) => {
 
   if (!robloxInput || typeof robloxInput !== 'string' || robloxInput.trim().length < 1) {
     return res.status(400).json({
-      error: 'Geçersiz Roblox bilgisi (Kullanıcı adı, ID veya Profil Linki girilmelidir).',
+      error: isEn
+        ? 'Invalid Roblox info (Username, User ID, or Profile link required).'
+        : 'Geçersiz Roblox bilgisi (Kullanıcı adı, ID veya Profil Linki girilmelidir).',
+      code: 'INVALID_ROBLOX_INPUT',
     });
+  }
+
+  // registrationType: 'own' | 'other' (default 'own')
+  const regType = registrationType === 'other' ? 'other' : 'own';
+
+  if (regType === 'other') {
+    if (!clanName || typeof clanName !== 'string' || !clanName.trim()) {
+      return res.status(400).json({
+        error: isEn
+          ? 'Clan name is required for Other Clan registration.'
+          : 'Başka klan kaydı için klan adı zorunludur.',
+        code: 'CLAN_REQUIRED',
+      });
+    }
+
+    const sanitized = clanMatcher.sanitizeClanName(clanName);
+    if (!sanitized.valid) {
+      return res.status(400).json({
+        error: isEn
+          ? (sanitized.error === 'CLAN_BLOCKED'
+              ? 'The clan name you entered contains disallowed content (mentions, invite links, or inappropriate language).'
+              : 'Invalid clan name! Must be between 2 and 32 characters and contain valid letters.')
+          : (sanitized.error === 'CLAN_BLOCKED'
+              ? 'Girdiğiniz klan adı uygunsuz içerik (etiket, link veya küfür) içerdiği için reddedildi.'
+              : 'Geçersiz klan adı! Klan adı 2-32 karakter olmalı ve harf içermelidir.'),
+        code: sanitized.error,
+      });
+    }
   }
 
   try {
     const member = await req.guild.members.fetch(discordId).catch(() => null);
     if (!member) {
       return res.status(404).json({
-        error: 'Belirtilen Discord kullanıcısı sunucuda bulunamadı. Lütfen önce sunucuya katıldığınızdan emin olun.',
+        error: isEn
+          ? 'Specified Discord user was not found on the server. Please join the server first.'
+          : 'Belirtilen Discord kullanıcısı sunucuda bulunamadı. Lütfen önce sunucuya katıldığınızdan emin olun.',
+        code: 'MEMBER_NOT_FOUND',
       });
     }
 
@@ -128,8 +179,10 @@ router.post('/', async (req, res) => {
       realName: realName.trim(),
       gender: formattedGender,
       robloxInput: robloxInput.trim(),
+      registrationType: regType,
+      clanName: regType === 'other' ? clanName.trim() : null,
       source: 'site',
-      lang: lang === 'en' ? 'en' : lang === 'tr' ? 'tr' : null,
+      lang: reqLang,
     });
 
     if (!result.success) {
@@ -144,6 +197,7 @@ router.post('/', async (req, res) => {
       message: result.message,
       threadId: result.threadId,
       threadUrl: result.threadUrl,
+      registrationType: regType,
       robloxUser: result.robloxUser,
     });
   } catch (err) {

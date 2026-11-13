@@ -46,6 +46,8 @@ module.exports = {
     FEEDBACK_CHANNEL: (process.env.FEEDBACK_CHANNEL_ID || '1570061735665078392').trim(),
     // Sadece Medya Paylaşım Kanalı
     MEDIA: '1559316020227739806',
+    // Dost / Düşman Klan Paneli Kanalı
+    CLAN_PANEL: '1570462108691210432',
   },
 
   // Rol ID'leri
@@ -61,6 +63,12 @@ module.exports = {
       '1559604645821812896',
       '1559604702143062016',
     ],
+
+    // Hesabı Onaylı Rolü (APPROVED_ROLES içinde ilk rol)
+    VERIFIED: '1559604645821812896',
+
+    // Başka bir klandan gelen üyelere verilecek rol (Other Clan)
+    OTHER_CLAN: '1570460155437518960',
 
     // Cinsiyet Rolleri
     MALE: '1559637360558350356',     // Erkek rolü
@@ -117,6 +125,27 @@ module.exports = {
     TRYOUT_HEADER_USER: '1225903173961777152',
   },
 
+  // Kendi klanımızın takma adları (Başka klan alanına yazılırsa engellenir)
+  OWN_CLAN_ALIASES: [
+    'piyade',
+    'piyade team',
+    'piyade clan',
+    'tsb piyade',
+    'piyade tsb',
+    'piyadeler',
+  ],
+
+  // Klan Sistemi Yapılandırması
+  CLAN: {
+    MAX_NAME: 32,
+    MIN_NAME: 2,
+    AUTO_EXISTING_SCORE: 0.92,
+    SUGGEST_EXISTING_SCORE: 0.80,
+    ROLE_COLOR: 0x95A5A6,
+    MAX_GUILD_ROLES: 245,
+    OTHER_CLAN_CAN_CALL_HELP: true,
+  },
+
   // Renk Kodları (Discord Embed renkleri)
   COLORS: {
     PRIMARY: 0x0099FF,       // Canlı Mavi
@@ -128,6 +157,9 @@ module.exports = {
     NAVY: 0x0A2540,          // Lacivert (Tryout Değerlendirme Kartı için)
     WARNING_ORANGE: 0xFF7A00, // Turuncu (Kullanıcı Uyarı DM'i & Sözlü Uyarı için)
     DARK_RED: 0x8B0000,      // Koyu Kırmızı (Yetkili Uyarıları için)
+    OTHER_CLAN: 0x9B59B6,    // Başka klan başvuru kartı (Mor)
+    ALLY: 0xF2F3F5,          // Dost klan paneli (Beyaza yakın)
+    ENEMY: 0x0D0D0D,         // Düşman klan paneli (Siyaha yakın)
   },
 
   // Özel Discord Emojileri
@@ -212,4 +244,18 @@ module.exports = {
     { level: 36, order: 57, id: '1563202153445720074', name: 'High strong 1', canonical: 'high strong 1', aliases: ['high strong 1', 'hihg strong 1', 'hstr1', 'high 1 strong'] },
     { level: 37, order: 58, id: '1563188620809080843', name: 'Hihg Strong 0', canonical: 'high strong 0', aliases: ['high strong 0', 'hihg strong 0', 'hstr0', 'high 0', 'strong 0'] },
   ],
+
+  /**
+   * Üyenin sunucuda kayıtlı bir üye olup olmadığını doğrular (Piyade veya Diğer Klan).
+   * @param {import('discord.js').GuildMember} member
+   * @returns {boolean}
+   */
+  isRegisteredMember(member) {
+    if (!member || !member.roles?.cache) return false;
+    const roles = module.exports.ROLES || {};
+    return (
+      Boolean(roles.REGISTERED_CHECK && member.roles.cache.has(roles.REGISTERED_CHECK)) ||
+      Boolean(roles.OTHER_CLAN && member.roles.cache.has(roles.OTHER_CLAN))
+    );
+  },
 };

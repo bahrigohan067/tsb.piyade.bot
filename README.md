@@ -6,20 +6,33 @@ Bu bot, **Piyade Team | TSB** Discord sunucusu için geliştirilmiş, Roblox API
 
 ## 🚀 Başlıca Özellikler
 
-### 1. 🛡️ Roblox Doğrulamalı Kayıt Sistemi
+### 1. 🛡️ Roblox Doğrulamalı ve Çift Akışlı Kayıt Sistemi (Piyade & Başka Klan)
 * **Gelişmiş Kayıt Paneli (`/kayit-paneli`):**
-  - Mavi temalı Discord Embed formatında ve **`✅ Kayıt Ol`** butonuyla kurulur.
+  - Mavi temalı Discord Embed formatında ve **`✅ Kayıt Ol`** / **`🇬🇧 Register`** butonlarıyla kurulur.
 * **Ön Kontroller:**
-  - `<@&1559604702143062016>` rolü varsa mükerrer kayıt engellenir.
+  - `isRegisteredMember(member)` kontrolü ile hem `<@&1559604702143062016>` (Piyade Üye) hem de `<@&1570460155437518960>` (Other Clan) rolüne sahip olanların mükerrer kaydı engellenir.
   - Aktif başvurusu olanlar devam eden odalarına yönlendirilir.
+* **Kayıt Türü Seçimi (Piyade vs Başka Klan):**
+  - Butona tıklandığında kullanıcıya iki seçenek sunulur:
+    1. **`🛡️ Piyade Klanına Katılmak İstiyorum`** (`btn_reg_type_own`): Standart 3 alanlı kayıt formu açılır.
+    2. **`🏳️ Bir Klanım Bulunmakta`** (`btn_reg_type_other`): 4 alanlı kayıt formu açılır (ek olarak Klan Adı sorulur).
 * **Kayıt Formu (`KayitModal`):**
   - Cinsiyet seçimi açılır menüsü (👨 Erkek / 👩 Kız).
   - Gerçek Adı (Ad Soyad) ve Roblox Bilgisi (Kullanıcı Adı, ID veya Profil Linki).
+  - Başka klandan gelenler için ek alan: **Klanınızın Adı** (2 - 32 karakter).
+* **Toleranslı Klan Eşleştirme Motoru (`clanMatcher`):**
+  - Özel klan motoru; harf hataları, etiketler (`[TAG]`), boşluk ve büyük/küçük harf farklarına toleranslı olarak mevcut rolleri eşleştirir.
+  - Eşleşen rol yoksa yetkili onayında otomatik olarak `<@&1570460155437518960>` hiyerarşisi altında yeni klan rolü oluşturur (Sunucu 245 rol güvenlik sınırını aşamaz).
+* **Rol Tanımlama ve Ayrım:**
   - Formdaki cinsiyet okunarak kayıt onaylandığında:
     - Erkek ise: `<@&1559637360558350356>` Erkek rolü tanımlanır.
     - Kız ise: `<@&1559637300042797096>` Kız rolü tanımlanır.
-    - Genel Roller: `<@&1559604645821812896>` ve `<@&1559604702143062016>` tanımlanır.
     - `<@&1559604540997636147>` Kayıtsız rolü üzerinden geri alınır.
+    - **Piyade Klanı Üyesi İse:** `<@&1559604645821812896>` (Hesabı Onaylı) ve `<@&1559604702143062016>` (Piyade Üye) rolleri tanımlanır.
+    - **Başka Klan Üyesi İse:** `<@&1559604645821812896>` (Hesabı Onaylı) ve `<@&1570460155437518960>` (Other Clan) rolü ile birlikte eşleşen/oluşturulan **Özel Klan Rolü** tanımlanır (Piyade Üye rolü ASLA verilmez).
+* **Yetkili Onay Kartı & Müdahale:**
+  - Yetkiliye giden başvuru kartında klan eşleşme durumu (Mevcut / Önerilen / Yeni Rol) skoruyla gösterilir.
+  - Yetkililer **`✏️ Klanı Değiştir`** (`btn_clan_edit_<userId>`) butonuyla klan rolü kararını modal üzerinden diledikleri gibi güncelleyebilirler.
 * **Takma Ad (Nickname) Formatı:**
   - Onaylanan üyenin sunucu içi takma adı otomatik olarak:
     `{Formda yazdığı gerçek adı} | {Roblox Oyuncu Nicki}`
@@ -83,12 +96,31 @@ Bu bot, **Piyade Team | TSB** Discord sunucusu için geliştirilmiş, Roblox API
 
 ---
 
+### 5. 🤝⚔️ Dost ve Düşman Klanlar Paneli
+* **Canlı Liste Paneli (`/klan-paneli-kur`):**
+  - `[klan paneli]` (`1570462108691210432`) kanalına tek bir mesaj altında iki şık Discord Embed kartı kurar:
+    1. ⚪ **Dost Klanlar** (`0xF2F3F5` - Beyaz tema)
+    2. ⚫ **Düşman Klanlar** (`0x0D0D0D` - Siyah tema)
+  - Bot her başladığında veya `/klan-ekle`, `/klan-duzenle`, `/klan-sil` komutları çalıştırıldığında bu paneldeki mesajı otomatik olarak günceller (yeni mesaj atıp kanalı kirletmez).
+* **Slash Komutları ile Kolay Yönetim:**
+  - `/klan-ekle`: Yeni dost veya düşman klan kaydı oluşturur.
+  - `/klan-duzenle`: Mevcut bir klanın adını veya dost/düşman türünü günceller (otomatik tamamlama destekli).
+  - `/klan-sil`: Klan kaydını sistemden kaldırır (otomatik tamamlama destekli).
+  - `/klan-liste`: Tüm klanları yetkiliye anlık liste olarak döker.
+
+---
+
 ## 🛠️ Slash Komutları Listesi
 
 | Komut | Yetki | Açıklama |
 |---|---|---|
-| `/kayit-paneli` | Yönetici | Kayıt panelini kayıt kanalına kurar. |
-| `/kayit-bilgi` | Yetkili | Bir üyenin veya Roblox ID'sinin kayıt detaylarını sorgular. |
+| `/kayit-paneli` | Yönetici | Çift akışlı (Piyade & Başka Klan) kayıt panelini kurar. |
+| `/kayit-bilgi` | Yetkili | Bir üyenin veya Roblox ID'sinin kayıt detaylarını (Kayıt türü ve klan rolü dahil) sorgular. |
+| `/klan-paneli-kur` | Yönetici | Dost ve Düşman klanlar panelini ilgili kanala kurar / yeniler. |
+| `/klan-ekle` | Yönetici | Sisteme yeni bir dost veya düşman klan ekler. |
+| `/klan-duzenle` | Yönetici | Kayıtlı bir klanın adını veya türünü (Dost/Düşman) günceller. |
+| `/klan-sil` | Yönetici | Kayıtlı bir klanı sistemden siler. |
+| `/klan-liste` | Yetkili | Dost ve düşman klanların listesini gösterir. |
 | `/vs_talep_panel_kur` | Yönetici | VS Talep panelini ilgili kanala kurar. |
 | `/top10_guncelle` | Yönetici | Top 10 sıralama tablosunu anında yeniler. |
 | `/yardim_paneli_kur` | Yönetici | Acil Yardım ve Takviye Çağrısı panelini kurar. |
@@ -127,12 +159,26 @@ Bot aynı Node.js sürecinde Express ile çalışarak harici web sitelerine ve y
 | `GET` | `/api/vs/top10` | VS Top 10 sıralama tablosu verisi | Bearer |
 | `GET` | `/api/help/status` | Aktif kayıtlı üye sayısı ve çağrı bekleme (cooldown) durumu | Bearer (`X-Actor-Id` isteğe bağlı) |
 | `POST` | `/api/help/call` | Acil takviye çağrısı (5 dk cooldown, Roblox profil butonu, toplu DM) | Bearer + `X-Actor-Id` |
-| `POST` | `/api/register` | Web sitesi kayıt başvurusu (Roblox doğrulama, thread ve onay kartı) | Bearer |
+| `POST` | `/api/register` | Web sitesi kayıt başvurusu (Piyade veya Başka Klan seçimi, klan eşleştirme, thread ve onay kartı) | Bearer |
 | `POST` | `/api/feedback` | Web sitesi geri bildirimi (Doğrulama, hız sınırı, DB kayıt ve Discord kanalı) | Bearer + `X-Actor-Id` |
-| `GET` | `/api/admin/members?query=` | Sunucu üyeleri arama (kullanıcı adı, nick, ID, Roblox nick) | Bearer + `X-Actor-Id` (Yönetim) |
-| `GET` | `/api/admin/members/:id` | Üye tam profili: Discord + Kayıt + Tryout + VS + Sicil / Uyarı geçmişi | Bearer + `X-Actor-Id` (Yönetim) |
+| `GET` | `/api/admin/members?query=` | Sunucu üyeleri arama (kullanıcı adı, nick, ID, Roblox nick, kayıt türü ve klan) | Bearer + `X-Actor-Id` (Yönetim) |
+| `GET` | `/api/admin/members/:id` | Üye tam profili: Discord + Kayıt + Klan + Tryout + VS + Sicil / Uyarı geçmişi | Bearer + `X-Actor-Id` (Yönetim) |
 | `POST` | `/api/admin/warn` | Uyarı verme (`verbal` / `official`, M/D/Y kuralları, roller, timeout, ban) | Bearer + `X-Actor-Id` (Yönetim) |
 | `POST` | `/api/admin/warn/:id/evidence` | Önceden verilen uyarıya kanıt görseli bağlantısı ekleme | Bearer + `X-Actor-Id` (Yönetim) |
+
+#### 📝 `POST /api/register` Detayları
+- **İstek Gövdesi (JSON):**
+  ```json
+  {
+    "userId": "123456789012345678",
+    "realName": "Ahmet Yılmaz",
+    "robloxInput": "RobloxNick",
+    "gender": "male" | "female",
+    "registrationType": "own" | "other",
+    "clanName": "Dark Wolves"
+  }
+  ```
+- `registrationType: "other"` gönderildiğinde `clanName` (2-32 karakter) zorunludur. Küfür filtresi ve mention kontrolünden geçer, benzer klan rolleri taranır ve yetkiliye eşleştirme skoruyla iletilir.
 
 #### 💬 `POST /api/feedback` Detayları
 - **Başlıklar:** `Authorization: Bearer <API_SECRET>` ve `X-Actor-Id: <Discord_User_ID>` (Gönderen kimliği yalnızca `X-Actor-Id` başlığından alınır; gönderen sunucu üyesi olmalıdır, Kayıtsız üyeler dahildir).
@@ -161,6 +207,17 @@ Railway veya `.env` dosyasında tanımlanması gereken değişkenler:
 | `FEEDBACK_CHANNEL_ID` | Hayır (Kanal için önerilir) | - | Web sitesi geri bildirim embedlerinin gönderileceği Discord kanal ID'si |
 | `GEMINI_API_KEY` | Hayır | - | Google Gemini Yapay Zeka API Anahtarı (Küfür filtresi) |
 | `GEMINI_MODEL` | Hayır | `gemini-3.8-flash` | Gemini model sürümü |
+
+---
+
+## 🛡️ Discord Rol Hiyerarşisi ve Yetki Gereksinimleri
+
+Klan kayıt ve klan rolü oluşturma sisteminin sorunsuz çalışabilmesi için Discord Sunucu Ayarları'nda dikkat edilmesi gerekenler:
+1. **Bot Rolünün Hiyerarşik Konumu:** Botun sahip olduğu en yüksek rol, Sunucu Rol Ayarlarında `<@&1570460155437518960>` (**Other Clan**) rolünün ve üyelerin alacağı rollerin **üstünde** yer almalıdır. Aksi halde Discord API'si rol atama ve yeni klan rolünü doğru sıraya yerleştirme işlemine izin vermez (`Missing Permissions`).
+2. **Gerekli Bot Yetkileri:**
+   - **Rolleri Yönet (`Manage Roles`):** Yeni klan rolleri oluşturmak ve üyelere atamak için zorunludur.
+   - **Kanalları Yönet (`Manage Channels`):** Kayıt thread'lerini (alt başlıklarını) açmak ve temizlemek için gereklidir.
+   - **Mesajları Gönder & Gömülü Bağlantılar (`Send Messages` & `Embed Links`):** Dost & Düşman klan paneli (`1570462108691210432`) ve başvuru odalarında mesaj/embed göndermek için gereklidir.
 
 ---
 

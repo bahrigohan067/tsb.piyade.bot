@@ -51,20 +51,42 @@ module.exports = {
       });
     }
 
+    const isOtherClan = record.registrationType === 'other';
+
     const embed = new EmbedBuilder()
       .setTitle('📋 Kayıtlı Üye Bilgileri')
-      .setColor(config.COLORS.PRIMARY)
+      .setColor(isOtherClan ? config.COLORS.OTHER_CLAN : config.COLORS.PRIMARY)
       .addFields(
         { name: '👤 Discord Kullanıcısı', value: `<@${record.discordId}> (\`${record.discordId}\`)`, inline: true },
         { name: '📝 Gerçek Adı', value: `${record.realName || 'Belirtilmemiş'}`, inline: true },
         { name: '🚻 Cinsiyet', value: `${record.gender || 'Belirtilmemiş'}`, inline: true },
-        { name: '🎮 Roblox Kullanıcı Adı', value: `[${record.robloxUsername || 'Profil'}](https://www.roblox.com/users/${record.robloxId}/profile)`, inline: true },
-        { name: '🆔 Roblox ID', value: `\`${record.robloxId}\``, inline: true },
-        { name: '👮 Onaylayan Yetkili', value: record.approvedBy ? `<@${record.approvedBy}>` : 'Bilinmiyor', inline: true },
-        { name: '📅 Kayıt Tarihi', value: record.registeredAt ? `<t:${Math.floor(record.registeredAt / 1000)}:F>` : 'Bilinmiyor', inline: false }
-      )
-      .setFooter({ text: 'Piyade Team | Kayıt Sistemi' })
-      .setTimestamp();
+        {
+          name: '🏳️ Kayıt Türü',
+          value: isOtherClan ? '`Başka Klan Üyesi`' : '`Piyade Klanı`',
+          inline: true,
+        }
+      );
+
+    if (isOtherClan) {
+      embed.addFields(
+        {
+          name: '🏷️ Klan / Rol',
+          value: record.clanRoleId
+            ? `<@&${record.clanRoleId}> (${record.clanName || 'Klan'})`
+            : `${record.clanName || 'Belirtilmemiş'}`,
+          inline: true,
+        }
+      );
+    }
+
+    embed.addFields(
+      { name: '🎮 Roblox Kullanıcı Adı', value: `[${record.robloxUsername || 'Profil'}](https://www.roblox.com/users/${record.robloxId}/profile)`, inline: true },
+      { name: '🆔 Roblox ID', value: `\`${record.robloxId}\``, inline: true },
+      { name: '👮 Onaylayan Yetkili', value: record.approvedBy ? `<@${record.approvedBy}>` : 'Bilinmiyor', inline: true },
+      { name: '📅 Kayıt Tarihi', value: record.registeredAt ? `<t:${Math.floor(record.registeredAt / 1000)}:F>` : 'Bilinmiyor', inline: false }
+    )
+    .setFooter({ text: 'Piyade Team | Kayıt Sistemi' })
+    .setTimestamp();
 
     return interaction.reply({
       embeds: [embed],

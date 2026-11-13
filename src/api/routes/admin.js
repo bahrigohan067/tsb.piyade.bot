@@ -67,7 +67,10 @@ router.get('/members', async (req, res) => {
         createdAt: m.user.createdTimestamp,
         level,
         registration: {
-          registered: Boolean(reg),
+          registered: Boolean(reg) || config.isRegisteredMember(m),
+          type: reg?.registrationType || (m.roles.cache.has(config.ROLES?.OTHER_CLAN) ? 'other' : (config.isRegisteredMember(m) ? 'own' : null)),
+          clanName: reg?.clanName || null,
+          clanRoleId: reg?.clanRoleId || null,
           realName: reg?.realName || null,
           robloxUsername: reg?.robloxUsername || null,
           robloxId: reg?.robloxId || null,
@@ -170,7 +173,10 @@ router.get('/members/:id', async (req, res) => {
         roles,
       },
       registration: {
-        registered: Boolean(reg),
+        registered: Boolean(reg) || config.isRegisteredMember(member),
+        type: reg?.registrationType || (member.roles.cache.has(config.ROLES?.OTHER_CLAN) ? 'other' : (config.isRegisteredMember(member) ? 'own' : null)),
+        clanName: reg?.clanName || null,
+        clanRoleId: reg?.clanRoleId || null,
         realName: reg?.realName || null,
         gender: reg?.gender || null,
         robloxUsername: reg?.robloxUsername || null,

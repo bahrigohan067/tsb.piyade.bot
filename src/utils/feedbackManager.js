@@ -197,7 +197,7 @@ function resolveActorTierLabel(member, guild) {
     return 'Yönetim';
   }
 
-  if (hasRole(config.ROLES.REGISTERED_CHECK)) {
+  if (config.isRegisteredMember(member)) {
     return 'Üye';
   }
 

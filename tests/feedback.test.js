@@ -116,6 +116,14 @@ function createMockDiscordSetup() {
         roleIds: [config.ROLES.REGISTERED_CHECK],
       }),
     ],
+    [
+      '1009',
+      makeMember({
+        id: '1009',
+        username: 'other_clan_uye',
+        roleIds: [config.ROLES.OTHER_CLAN],
+      }),
+    ],
   ]);
 
   const channelMap = new Map([[feedbackChannel.id, feedbackChannel]]);
@@ -310,7 +318,7 @@ test('2. Geçersiz sayfa, geçersiz dil ve Yönetim / Üye seviyelerinin doğru 
   assert.equal(fields['Sayfa'], '`/`');
   assert.equal(fields['Seviye'], 'Yönetim');
 
-  // Üye seviyesi testi
+  // Üye seviyesi testi (Normal Kayıtlı Üye)
   const memberRes = await postFeedback({
     actorId: '1004',
     body: { message: 'Kayıtlı üye seviyesi testi.', page: '/profile', lang: 'en' },
@@ -320,6 +328,17 @@ test('2. Geçersiz sayfa, geçersiz dil ve Yönetim / Üye seviyelerinin doğru 
     mockEnv.sentMessages[1].embeds[0].toJSON().fields.map((f) => [f.name, f.value])
   );
   assert.equal(memberFields['Seviye'], 'Üye');
+
+  // Diğer Klan (Other Clan) üye seviyesi testi
+  const otherClanRes = await postFeedback({
+    actorId: '1009',
+    body: { message: 'Other clan üye seviyesi kontrolü.', page: '/profile', lang: 'tr' },
+  });
+  assert.equal(otherClanRes.status, 200);
+  const otherClanFields = Object.fromEntries(
+    mockEnv.sentMessages[2].embeds[0].toJSON().fields.map((f) => [f.name, f.value])
+  );
+  assert.equal(otherClanFields['Seviye'], 'Üye');
 });
 
 test('3. Çok kısa ve boşluk/görünmez karakterlerden oluşan mesajlar (400 TOO_SHORT)', async () => {

@@ -99,12 +99,14 @@ function resolveLang(context, explicitLang = null) {
 
   if (member && member.roles && member.roles.cache) {
     const enRoleId = database.getEnglishRoleId();
+    const cacheValues = Array.from(member.roles.cache.values());
     const hasEnRole =
       (enRoleId && member.roles.cache.has(enRoleId)) ||
-      member.roles.cache.some(
+      cacheValues.some(
         (r) =>
-          r.name.toLowerCase() === '🇬🇧 english' ||
-          r.name.toLowerCase() === 'english'
+          r && r.name &&
+          (r.name.toLowerCase() === '🇬🇧 english' ||
+           r.name.toLowerCase() === 'english')
       );
     if (hasEnRole) {
       if (userId) database.setUserLang(userId, 'en');

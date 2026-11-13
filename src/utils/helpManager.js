@@ -255,6 +255,21 @@ async function triggerHelpCall({ guild, member, user, source = 'discord' }) {
   const userId = targetUser.id;
   const now = Date.now();
   const COOLDOWN_MS = 5 * 60 * 1000; // 5 Dakika
+  const isEn = resolveLang(targetMember || targetUser) === 'en';
+
+  // 0. Diğer Klan Üyesi Çağrı İzni Kontrolü
+  if (
+    config.CLAN?.OTHER_CLAN_CAN_CALL_HELP === false &&
+    targetMember?.roles?.cache?.has(config.ROLES.OTHER_CLAN)
+  ) {
+    return {
+      success: false,
+      code: 'OTHER_CLAN_HELP_DISABLED',
+      message: isEn
+        ? 'Reinforcement calls are disabled for other clan members.'
+        : 'Diğer klan üyeleri için acil takviye çağrısı özelliği devre dışıdır.',
+    };
+  }
 
   // 1. Cooldown Kontrolü (5 Dakika)
   const lastUsed = helpCooldowns.get(userId);
