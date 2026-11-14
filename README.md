@@ -116,6 +116,7 @@ Bu bot, **Piyade Team | TSB** Discord sunucusu için geliştirilmiş, Roblox API
 |---|---|---|
 | `/kayit-paneli` | Yönetici | Çift akışlı (Piyade & Başka Klan) kayıt panelini kurar. |
 | `/kayit-bilgi` | Yetkili | Bir üyenin veya Roblox ID'sinin kayıt detaylarını (Kayıt türü ve klan rolü dahil) sorgular. |
+| `/kayit-sifirla` | Kayıt Yetkilisi & Yönetim | Seçilen kişinin kaydını ve Roblox bilgisini siler, tüm rollerini alıp Kayıtsız rolü verir. |
 | `/klan-paneli-kur` | Yönetici | Dost ve Düşman klanlar panelini ilgili kanala kurar / yeniler. |
 | `/klan-ekle` | Yönetici | Sisteme yeni bir dost veya düşman klan ekler. |
 | `/klan-duzenle` | Yönetici | Kayıtlı bir klanın adını veya türünü (Dost/Düşman) günceller. |

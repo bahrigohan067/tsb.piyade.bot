@@ -144,6 +144,32 @@ class DatabaseManager {
     this.save();
   }
 
+  // Kayıt silme / sıfırlama (Roblox hesabı ve kayıt geçmişini bellekten kaldırır)
+  removeRegistration(discordId) {
+    if (!discordId) return { success: false, removedRecord: null };
+    const strId = String(discordId);
+    const existingIndex = this.data.registrations.findIndex(
+      (r) => String(r.discordId) === strId
+    );
+
+    let removedRecord = null;
+    if (existingIndex !== -1) {
+      removedRecord = { ...this.data.registrations[existingIndex] };
+      this.data.registrations.splice(existingIndex, 1);
+    }
+
+    if (this.data.activeApplications && this.data.activeApplications[strId]) {
+      delete this.data.activeApplications[strId];
+    }
+
+    if (this.data.rejectedApplications && this.data.rejectedApplications[strId]) {
+      delete this.data.rejectedApplications[strId];
+    }
+
+    this.save();
+    return { success: Boolean(removedRecord), removedRecord };
+  }
+
   // Aktif kayıt başvuru kontrolleri
   getActiveApplication(discordId) {
     if (!discordId) return null;
