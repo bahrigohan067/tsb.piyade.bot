@@ -221,6 +221,14 @@ Klan kayıt ve klan rolü oluşturma sisteminin sorunsuz çalışabilmesi için 
 
 ---
 
+## 🧪 Test ve Kod Denetimi (Tanımsız Değişken Taraması)
+
+Her kod değişikliğinden sonra canlıda tanımsız import veya değişken hatası oluşmasını engellemek için şu komutları çalıştırabilirsiniz:
+- `npm run check:undef` : Projedeki tüm dosyalarda eksik import ve tanımsız değişkenleri (no-undef) denetler.
+- `npm test` : API smoke testleri, klan eşleştirme motoru ve kayıt akışı testlerini çalıştırır.
+
+---
+
 ## 🚀 GitHub ve Railway Güncellemesi
 
 Değişiklikleri GitHub'a pushlayarak Railway üzerinde otomatik güncelleyebilirsiniz:

@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const config = require('../../../config');
 const database = require('../../utils/database');
 const { requireManagement, getMemberLevel } = require('../middleware/auth');
 const {
