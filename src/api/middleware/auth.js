@@ -72,8 +72,13 @@ async function requireManagement(req, res, next) {
   requireActor(req, res, () => {
     const member = req.actorMember;
     const isOwner = req.guild.ownerId === member.id;
-    const isDeveloper = isOwner || member.roles.cache.has(config.ROLES.DEVELOPER);
+    const isDeveloper =
+      isOwner ||
+      member.roles.cache.has(config.ROLES.DEVELOPER) ||
+      (config.ROLES.FOUNDER && member.roles.cache.has(config.ROLES.FOUNDER)) ||
+      (config.ROLES.COMMUNITY_OFFICIAL && member.roles.cache.has(config.ROLES.COMMUNITY_OFFICIAL));
     const isYonetmenlik =
+      (config.ROLES.STAFF_GENERAL && member.roles.cache.has(config.ROLES.STAFF_GENERAL)) ||
       member.roles.cache.has(config.ROLES.TRYOUT_STAFF) || // 1559614111128490044
       member.permissions.has(PermissionFlagsBits.Administrator);
 
@@ -97,10 +102,16 @@ async function requireManagement(req, res, next) {
 function getMemberLevel(member, guild) {
   if (!member) return 'member';
   const isOwner = guild && guild.ownerId === member.id;
-  if (isOwner || member.roles.cache.has(config.ROLES.DEVELOPER)) {
+  if (
+    isOwner ||
+    member.roles.cache.has(config.ROLES.DEVELOPER) ||
+    (config.ROLES.FOUNDER && member.roles.cache.has(config.ROLES.FOUNDER)) ||
+    (config.ROLES.COMMUNITY_OFFICIAL && member.roles.cache.has(config.ROLES.COMMUNITY_OFFICIAL))
+  ) {
     return 'developer';
   }
   if (
+    (config.ROLES.STAFF_GENERAL && member.roles.cache.has(config.ROLES.STAFF_GENERAL)) ||
     member.roles.cache.has(config.ROLES.TRYOUT_STAFF) || // 1559614111128490044
     member.permissions?.has(PermissionFlagsBits.Administrator)
   ) {

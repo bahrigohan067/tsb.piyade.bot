@@ -192,6 +192,8 @@ function resolveActorTierLabel(member, guild) {
     isOwner ||
     isAdmin ||
     hasRole(config.ROLES.DEVELOPER) ||
+    hasRole(config.ROLES.FOUNDER) ||
+    hasRole(config.ROLES.COMMUNITY_OFFICIAL) ||
     hasRole(config.ROLES.TRYOUT_STAFF)
   ) {
     return 'Yönetim';

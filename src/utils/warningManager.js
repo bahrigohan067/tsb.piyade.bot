@@ -289,7 +289,8 @@ async function ensureWarningRoles(guild) {
   let changed = false;
 
   for (const def of WARNING_ROLE_DEFINITIONS) {
-    let role = savedRoles[def.key] ? guild.roles.cache.get(savedRoles[def.key]) : null;
+    const configuredId = savedRoles[def.key] || config.ROLES?.WARNING_ROLES_MAP?.[def.key];
+    let role = configuredId ? guild.roles.cache.get(configuredId) : null;
 
     // İsimle kontrol et
     if (!role) {

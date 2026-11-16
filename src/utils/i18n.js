@@ -1,4 +1,5 @@
 const database = require('./database');
+const config = require('../../config');
 
 /**
  * Desteklenen Diller Listesi (Merkezi Yapı)
@@ -14,8 +15,9 @@ async function ensureEnglishRole(guild) {
   if (!guild) return null;
 
   const savedId = database.getEnglishRoleId();
-  if (savedId && guild.roles.cache.has(savedId)) {
-    return guild.roles.cache.get(savedId);
+  const targetId = savedId || config.ROLES?.ENGLISH;
+  if (targetId && guild.roles.cache.has(targetId)) {
+    return guild.roles.cache.get(targetId);
   }
 
   const existing = guild.roles.cache.find(

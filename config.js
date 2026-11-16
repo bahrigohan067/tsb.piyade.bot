@@ -39,70 +39,174 @@ module.exports = {
     MEDIA: '1559316020227739806',
   },
 
-  // Rol ID'leri
+  // Rol ID'leri (Sunucuda Bulunan 38 Rolün Tamamı)
   ROLES: {
-    // Sunucuya yeni gelen üyelere verilecek "Kayıtsız" rolü
-    UNREGISTERED: '1559604540997636147',
+    // -------------------------------------------------------------
+    // 1. Üst Yönetim ve Yetkili Rolleri
+    // -------------------------------------------------------------
+    COMMUNITY_OFFICIAL: '1570767625188016259', // #1  | Community Official
+    DEVELOPER: '1561777507223601353',          // #2  💻| DEVELOPER
+    FOUNDER: '1559567065130737664',            // #3  FOUNDER (Sunucu Kurucusu)
+    CODER: '1570454776888430593',              // #4  </> (Geliştirici / Kod Rolü)
+    DEV_ALT: '1570454776888430593',
+    STAFF_GENERAL: '1568543109720317992',      // #5  🛡️| Yetkili
+    YETKILI: '1568543109720317992',
+    MESSAGE_MODERATOR: '1563914587273953363',  // #16 💭| Mesaj Denetimcisi
+    STAFF: '1559625308737507358',              // #17 | Başvuru Yetkilisi (Kayıt Yetkilisi)
+    APPLICATION_STAFF: '1559625308737507358',
 
-    // Zaten kayıtlı olup olmadığını kontrol etmek için kullanılan rol
+    // Arşiv Yetkili Rolleri (Geriye Uyumluluk İçin)
+    TRYOUT_STAFF: '1559614111128490044',       // Yönetmenlik / Üst Yetkili
+    VS_STAFF: '1559892661547307038',           // Kapışma Talep Yetkilisi
+
+    // -------------------------------------------------------------
+    // 2. Bot ve Entegrasyon Rolleri
+    // -------------------------------------------------------------
+    SERVER_BOTS: '1559926335995117590',        // #6  ®️| Sunucu Botları
+    BOT_MUSIC: '1559572934983688272',          // #7  Piyade RP | Music Bot (Bot Entegrasyonu)
+    BOT_MAIN: '1559602223183433842',           // #8  PİYADE TEAM | TSB BOT (Bot Entegrasyonu)
+    BOT_TSB: '1559602223183433842',
+    SERVER_BOOSTER: '1571813234644619284',      // #22 Server Booster (Sunucu Takviyecisi)
+    BOOSTER: '1571813234644619284',
+    BOT_QUARK_LOGGER: '1566236438574665858',   // #36 Quark Logger (Bot Entegrasyonu)
+    BOT_DISBOARD: '1569339982932475936',       // #38 DISBOARD.org (Bot Entegrasyonu)
+
+    // -------------------------------------------------------------
+    // 3. Özel Üye ve Topluluk Rolleri
+    // -------------------------------------------------------------
+    VIP: '1568995152561971312',                 // #9  👑 | VİP
+    CENGAVER: '1559604702143062016',           // #20 ♾️| Cengaver (Kayıtlı Üye Kontrol Rolü)
     REGISTERED_CHECK: '1559604702143062016',
+    WEEKLY_ACTIVE: '1570138106923974867',      // #24 | Haftanın En Çok Atifi
+    MOST_ACTIVE_OF_WEEK: '1570138106923974867',
+    MUSIC_PERMISSION: '1559575677584539769',   // #25 | Müzik Açma İzni
+    MUSIC_PERM: '1559575677584539769',
+
+    // -------------------------------------------------------------
+    // 4. İsim Rengi Rolleri
+    // -------------------------------------------------------------
+    COLOR_BLACK: '1559899395233808444',        // #10 Siyah
+    COLOR_BLUE: '1559926616535339010',         // #11 Mavi
+    COLOR_PINK: '1559926687645311017',         // #12 Pembe
+    COLOR_RED: '1559926857472675910',          // #13 Kırmızı
+    COLOR_GREEN: '1559926912338362379',        // #14 Yeşil
+    COLOR_YELLOW: '1559927000183873597',       // #15 Sarı
+
+    // -------------------------------------------------------------
+    // 5. Kayıt ve Temel Üye Rolleri
+    // -------------------------------------------------------------
+    FEMALE: '1559637300042797096',             // #18 | Kız (Cinsiyet Rolü)
+    MALE: '1559637360558350356',               // #19 | Erkek (Cinsiyet Rolü)
+    VERIFIED: '1559604645821812896',           // #21 | Hesabı Onaylı
+    UNREGISTERED: '1559604540997636147',       // #23 | Kayıtsız (Yeni Gelen Üye)
 
     // Başvuru onaylandığında kullanıcıya verilecek genel roller
     APPROVED_ROLES: [
-      '1559604645821812896',
-      '1559604702143062016',
+      '1559604645821812896', // | Hesabı Onaylı
+      '1559604702143062016', // ♾️| Cengaver
     ],
 
-    // Hesabı Onaylı Rolü (APPROVED_ROLES içinde ilk rol)
-    VERIFIED: '1559604645821812896',
+    // Diğer klan rolü (Geriye dönük test uyumluluğu için)
+    OTHER_CLAN: '1570460155437518960',
 
-    // Cinsiyet Rolleri
-    MALE: '1559637360558350356',     // Erkek rolü
-    FEMALE: '1559637300042797096',   // Kız rolü
+    // -------------------------------------------------------------
+    // 6. Dil Rolleri
+    // -------------------------------------------------------------
+    ENGLISH: '1567541917028458557',            // #37 🇬🇧 English
 
-    // Kayıt Yetkili Rolü
-    STAFF: '1559625308737507358',
+    // -------------------------------------------------------------
+    // 7. Ceza ve Uyarı Sistemi Rolleri
+    // -------------------------------------------------------------
+    SUSPENDED: '1563922256525000895',          // #26 | Askıda (1 Haftalık Karantina/Jail)
 
-    // Kapışma Talep Yetkilisi Rolü (Arşiv)
-    VS_STAFF: '1559892661547307038',
+    // Katılımcı Uyarı Rolleri (1 - 5 Puan)
+    WARN_1: '1563926964144832623',             // #27 Uyarı 1
+    WARN_2: '1563926965059326147',             // #28 Uyarı 2
+    WARN_3: '1563926966434930850',             // #29 Uyarı 3
+    WARN_4: '1563926967428972704',             // #30 Uyarı 4
+    WARN_5: '1563926968561565726',             // #31 Uyarı 5
+    UYARI_1: '1563926964144832623',
+    UYARI_2: '1563926965059326147',
+    UYARI_3: '1563926966434930850',
+    UYARI_4: '1563926967428972704',
+    UYARI_5: '1563926968561565726',
 
-    // Developer Rolü
-    DEVELOPER: '1561777507223601353',
+    // Yetkili Uyarı Rolleri (1 - 3)
+    STAFF_WARN_1: '1563926970037837975',       // #32 Yetkili Uyarı 1
+    STAFF_WARN_2: '1563926971409367402',       // #33 Yetkili Uyarı 2
+    STAFF_WARN_3: '1563926972223066188',       // #34 Yetkili Uyarı 3
+    YETKILI_UYARI_1: '1563926970037837975',
+    YETKILI_UYARI_2: '1563926971409367402',
+    YETKILI_UYARI_3: '1563926972223066188',
 
-    // Yönetmenlik / Üst Yetkili Rolü
-    TRYOUT_STAFF: '1559614111128490044',
+    // Kalıcı Ceza Rolü
+    BANNED: '1563926973707853884',             // #35 Yasaklı
+    YASAKLI: '1563926973707853884',
 
-    // Mesaj Denetimcisi Rolü (Küfür log kanalında etiketlenir)
-    MESSAGE_MODERATOR: '1563914587273953363',
+    // Uyarı Rolleri Dizi Listesi (Toplu işlemler ve temizlikler için)
+    WARNINGS: [
+      '1563926964144832623', // Uyarı 1
+      '1563926965059326147', // Uyarı 2
+      '1563926966434930850', // Uyarı 3
+      '1563926967428972704', // Uyarı 4
+      '1563926968561565726', // Uyarı 5
+    ],
 
-    // Askıda (1 Haftalık Karantina / Jail) Rolü
-    SUSPENDED: '1563922256525000895',
+    STAFF_WARNINGS: [
+      '1563926970037837975', // Yetkili Uyarı 1
+      '1563926971409367402', // Yetkili Uyarı 2
+      '1563926972223066188', // Yetkili Uyarı 3
+    ],
 
+    // warningManager otomatik kontrol haritası
+    WARNING_ROLES_MAP: {
+      uyari1: '1563926964144832623',
+      uyari2: '1563926965059326147',
+      uyari3: '1563926966434930850',
+      uyari4: '1563926967428972704',
+      uyari5: '1563926968561565726',
+      yetkiliUyari1: '1563926970037837975',
+      yetkiliUyari2: '1563926971409367402',
+      yetkiliUyari3: '1563926972223066188',
+      yasakli: '1563926973707853884',
+    },
+
+    // -------------------------------------------------------------
+    // 8. Yetki ve Muafiyet Listeleri
+    // -------------------------------------------------------------
     // Uyarı Sistemi Yetkilileri (Butonları ve /uyari-iptal komutunu kullanabilenler)
     WARNING_AUTHORITIES: [
-      '1561777507223601353', // Developer
-      '1559614111128490044', // Yönetmenlik
+      '1561777507223601353', // 💻| DEVELOPER
+      '1559567065130737664', // FOUNDER
+      '1570767625188016259', // | Community Official
+      '1559614111128490044', // Yönetmenlik (Arşiv)
     ],
 
     // 4. Yetkili Uyarısında veya Y1 İhlalinde Alınacak Yetkili Rolleri
     STAFF_ROLES_TO_STRIP: [
-      '1559625308737507358', // Kayıt Yetkilisi
-      '1559892661547307038', // Kapışma Talep Yetkilisi
-      '1563914587273953363', // Mesaj Denetimcisi
-      '1559614111128490044', // Yönetmenlik / Üst Yetkili
+      '1568543109720317992', // 🛡️| Yetkili
+      '1559625308737507358', // | Başvuru Yetkilisi
+      '1563914587273953363', // 💭| Mesaj Denetimcisi
+      '1559892661547307038', // Kapışma Talep Yetkilisi (Arşiv)
+      '1559614111128490044', // Yönetmenlik / Üst Yetkili (Arşiv)
     ],
 
     // Medya Kanalı Denetiminden Muaf Yönetim Rolleri (Kurucu / Üst Yönetim)
     MEDIA_EXEMPT: [
-      '1559614111128490044', // Yönetmenlik
-      '1561777507223601353', // Kurucu / Developer
+      '1561777507223601353', // 💻| DEVELOPER
+      '1559567065130737664', // FOUNDER
+      '1570767625188016259', // | Community Official
+      '1559614111128490044', // Yönetmenlik (Arşiv)
     ],
 
     // Kanal Kilitleme (!lock / !unlock) Komutunu Kullanabilen ve Kilitli Kanalda Yazabilen Roller
     LOCK_AUTHORITIES: [
-      '1559614111128490044', // Yönetmenlik
-      '1561777507223601353', // Developer
-      '1559604770396967022', // Üst Yetkili
+      '1561777507223601353', // 💻| DEVELOPER
+      '1559567065130737664', // FOUNDER
+      '1570767625188016259', // | Community Official
+      '1568543109720317992', // 🛡️| Yetkili
+      '1559614111128490044', // Yönetmenlik (Arşiv)
+      '1559604770396967022', // Üst Yetkili (Arşiv)
     ],
   },
 
@@ -160,6 +264,57 @@ module.exports = {
     { id: '1559926912338362379', label: 'Yeşil',   emoji: '💚', style: 'Success' },
     { id: '1559926687645311017', label: 'Pembe',   emoji: '🩷', style: 'Primary' },
   ],
+
+  // Sunucudaki Tüm Rollerin Hiyerarşik Sıralı Kataloğu (/rols komutu çıktısı)
+  SERVER_ROLES: [
+    { rank: 1,  id: '1570767625188016259', name: '| Community Official', key: 'COMMUNITY_OFFICIAL' },
+    { rank: 2,  id: '1561777507223601353', name: '💻| DEVELOPER', key: 'DEVELOPER' },
+    { rank: 3,  id: '1559567065130737664', name: 'FOUNDER', key: 'FOUNDER' },
+    { rank: 4,  id: '1570454776888430593', name: '</>', key: 'CODER' },
+    { rank: 5,  id: '1568543109720317992', name: '🛡️| Yetkili', key: 'STAFF_GENERAL' },
+    { rank: 6,  id: '1559926335995117590', name: '®️| Sunucu Botları', key: 'SERVER_BOTS' },
+    { rank: 7,  id: '1559572934983688272', name: 'Piyade RP | Music Bot', key: 'BOT_MUSIC', managed: true },
+    { rank: 8,  id: '1559602223183433842', name: 'PİYADE TEAM | TSB BOT', key: 'BOT_TSB', managed: true },
+    { rank: 9,  id: '1568995152561971312', name: '👑 | VİP', key: 'VIP' },
+    { rank: 10, id: '1559899395233808444', name: 'Siyah', key: 'COLOR_BLACK' },
+    { rank: 11, id: '1559926616535339010', name: 'Mavi', key: 'COLOR_BLUE' },
+    { rank: 12, id: '1559926687645311017', name: 'Pembe', key: 'COLOR_PINK' },
+    { rank: 13, id: '1559926857472675910', name: 'Kırmızı', key: 'COLOR_RED' },
+    { rank: 14, id: '1559926912338362379', name: 'Yeşil', key: 'COLOR_GREEN' },
+    { rank: 15, id: '1559927000183873597', name: 'Sarı', key: 'COLOR_YELLOW' },
+    { rank: 16, id: '1563914587273953363', name: '💭| Mesaj Denetimcisi', key: 'MESSAGE_MODERATOR' },
+    { rank: 17, id: '1559625308737507358', name: '| Başvuru Yetkilisi', key: 'STAFF' },
+    { rank: 18, id: '1559637300042797096', name: '| Kız', key: 'FEMALE' },
+    { rank: 19, id: '1559637360558350356', name: '| Erkek', key: 'MALE' },
+    { rank: 20, id: '1559604702143062016', name: '♾️| Cengaver', key: 'CENGAVER' },
+    { rank: 21, id: '1559604645821812896', name: '| Hesabı Onaylı', key: 'VERIFIED' },
+    { rank: 22, id: '1571813234644619284', name: 'Server Booster', key: 'SERVER_BOOSTER', managed: true },
+    { rank: 23, id: '1559604540997636147', name: '| Kayıtsız', key: 'UNREGISTERED' },
+    { rank: 24, id: '1570138106923974867', name: '| Haftanın En Çok Atifi', key: 'WEEKLY_ACTIVE' },
+    { rank: 25, id: '1559575677584539769', name: '| Müzik Açma İzni', key: 'MUSIC_PERMISSION' },
+    { rank: 26, id: '1563922256525000895', name: '| Askıda', key: 'SUSPENDED' },
+    { rank: 27, id: '1563926964144832623', name: 'Uyarı 1', key: 'WARN_1' },
+    { rank: 28, id: '1563926965059326147', name: 'Uyarı 2', key: 'WARN_2' },
+    { rank: 29, id: '1563926966434930850', name: 'Uyarı 3', key: 'WARN_3' },
+    { rank: 30, id: '1563926967428972704', name: 'Uyarı 4', key: 'WARN_4' },
+    { rank: 31, id: '1563926968561565726', name: 'Uyarı 5', key: 'WARN_5' },
+    { rank: 32, id: '1563926970037837975', name: 'Yetkili Uyarı 1', key: 'STAFF_WARN_1' },
+    { rank: 33, id: '1563926971409367402', name: 'Yetkili Uyarı 2', key: 'STAFF_WARN_2' },
+    { rank: 34, id: '1563926972223066188', name: 'Yetkili Uyarı 3', key: 'STAFF_WARN_3' },
+    { rank: 35, id: '1563926973707853884', name: 'Yasaklı', key: 'BANNED' },
+    { rank: 36, id: '1566236438574665858', name: 'Quark Logger', key: 'BOT_QUARK_LOGGER', managed: true },
+    { rank: 37, id: '1567541917028458557', name: '🇬🇧 English', key: 'ENGLISH' },
+    { rank: 38, id: '1569339982932475936', name: 'DISBOARD.org', key: 'BOT_DISBOARD', managed: true },
+  ],
+
+  /**
+   * Rol ID'sine göre katalogdaki rol bilgisini döner.
+   * @param {string} roleId
+   */
+  getRoleById(roleId) {
+    if (!roleId) return null;
+    return (module.exports.SERVER_ROLES || []).find((r) => r.id === String(roleId)) || null;
+  },
 
   /**
    * Üyenin sunucuda kayıtlı bir üye olup olmadığını doğrular.
