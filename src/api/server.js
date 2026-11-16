@@ -6,8 +6,6 @@ const { createRateLimiter } = require('./middleware/rateLimiter');
 
 // Rotalar
 const memberRoutes = require('./routes/member');
-const tryoutRoutes = require('./routes/tryout');
-const helpRoutes = require('./routes/help');
 const registerRoutes = require('./routes/register');
 const adminRoutes = require('./routes/admin');
 const feedbackRoutes = require('./routes/feedback');
@@ -48,8 +46,6 @@ function createApp(client) {
 
   // API Rotaları
   app.use('/api/member', memberRoutes);
-  app.use('/api/tryout', tryoutRoutes);
-  app.use('/api/help', helpRoutes);
   app.use('/api/register', registerRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api/feedback', feedbackRoutes);

@@ -55,8 +55,7 @@ module.exports = {
       const hasPermission =
         message.member.permissions.has(PermissionFlagsBits.ManageMessages) ||
         message.member.permissions.has(PermissionFlagsBits.Administrator) ||
-        message.member.roles.cache.has(config.ROLES.STAFF) ||
-        message.member.roles.cache.has(config.ROLES.VS_STAFF);
+        message.member.roles.cache.has(config.ROLES.STAFF);
 
       if (!hasPermission) {
         const errorMsg = await message.reply({

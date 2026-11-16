@@ -3,7 +3,6 @@ const router = express.Router();
 const config = require('../../../config');
 const database = require('../../utils/database');
 const { getMemberLevel } = require('../middleware/auth');
-const { getLevelRoleById } = require('../../utils/tryoutManager');
 
 /**
  * GET /api/member/:id/roles
@@ -38,17 +37,6 @@ router.get('/:id/roles', async (req, res) => {
 
     const reg = database.getRegistrationByDiscordId(id);
     const isRegMember = config.isRegisteredMember(member) || Boolean(reg);
-    const isOtherClanMember = Boolean(config.ROLES?.OTHER_CLAN && member.roles.cache.has(config.ROLES.OTHER_CLAN)) || reg?.registrationType === 'other';
-
-    let clanInfo = null;
-    if (isOtherClanMember) {
-      const clanRolesList = database.getClanRoles();
-      const memberClanRole = clanRolesList.find((cr) => member.roles.cache.has(cr.roleId));
-      clanInfo = {
-        name: reg?.clanName || memberClanRole?.name || null,
-        roleId: reg?.clanRoleId || memberClanRole?.roleId || null,
-      };
-    }
 
     return res.json({
       userId: member.id,
@@ -57,8 +45,6 @@ router.get('/:id/roles', async (req, res) => {
       avatarUrl: member.user.displayAvatarURL({ dynamic: true }),
       level,
       registered: isRegMember,
-      registrationType: isRegMember ? (isOtherClanMember ? 'other' : 'own') : null,
-      clan: clanInfo,
       highestRolePosition,
       roles,
     });
@@ -87,17 +73,10 @@ router.get('/:id/profile', async (req, res) => {
     // 1. Kayıt Bilgileri
     const reg = database.getRegistrationByDiscordId(id);
 
-    // 2. Tryout Seviyesi
-    const tryout = database.getTryoutStats(id);
-    let tryoutRole = null;
-    if (tryout && tryout.roleId) {
-      tryoutRole = getLevelRoleById(tryout.roleId);
-    }
-
-    // 3. Ceza & Uyarı Bilgileri
+    // 2. Ceza & Uyarı Bilgileri
     const warnStats = database.getUserWarningStats(id);
 
-    // 4. Yetki Seviyesi
+    // 3. Yetki Seviyesi
     const level = getMemberLevel(member, req.guild);
 
     return res.json({
@@ -112,9 +91,6 @@ router.get('/:id/profile', async (req, res) => {
       },
       registration: {
         registered: Boolean(reg) || config.isRegisteredMember(member),
-        type: reg?.registrationType || (member.roles.cache.has(config.ROLES?.OTHER_CLAN) ? 'other' : (config.isRegisteredMember(member) ? 'own' : null)),
-        clanName: reg?.clanName || null,
-        clanRoleId: reg?.clanRoleId || null,
         realName: reg?.realName || null,
         gender: reg?.gender || null,
         robloxUsername: reg?.robloxUsername || null,
@@ -122,20 +98,6 @@ router.get('/:id/profile', async (req, res) => {
         robloxDisplayName: reg?.robloxDisplayName || null,
         robloxProfileUrl: reg?.robloxId ? `https://www.roblox.com/users/${reg.robloxId}/profile` : null,
         registeredAt: reg?.registeredAt || null,
-      },
-      tryout: {
-        level: tryout?.level || 0,
-        roleId: tryout?.roleId || null,
-        roleName: tryoutRole?.name || null,
-        canonical: tryoutRole?.canonical || null,
-        formCount: tryout?.formCount || 0,
-        lastUpdated: tryout?.lastUpdated || null,
-      },
-      vs: {
-        points: 0,
-        wins: 0,
-        losses: 0,
-        kills: 0,
       },
       warnings: {
         points: warnStats.points || 0,

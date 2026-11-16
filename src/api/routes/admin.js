@@ -10,7 +10,6 @@ const {
   attachEvidenceToWarning,
   RULES,
 } = require('../../utils/warningManager');
-const { getLevelRoleById } = require('../../utils/tryoutManager');
 const { sendWebAuditLog } = require('../utils/auditLogger');
 
 // Tüm admin endpoint'leri Yönetmenlik veya Developer yetkisi gerektirir
@@ -69,9 +68,6 @@ router.get('/members', async (req, res) => {
         level,
         registration: {
           registered: Boolean(reg) || config.isRegisteredMember(m),
-          type: reg?.registrationType || (m.roles.cache.has(config.ROLES?.OTHER_CLAN) ? 'other' : (config.isRegisteredMember(m) ? 'own' : null)),
-          clanName: reg?.clanName || null,
-          clanRoleId: reg?.clanRoleId || null,
           realName: reg?.realName || null,
           robloxUsername: reg?.robloxUsername || null,
           robloxId: reg?.robloxId || null,
@@ -127,29 +123,18 @@ router.get('/members/:id', async (req, res) => {
     // 2. Kayıt Bilgisi
     const reg = database.getRegistrationByDiscordId(id);
 
-    // 3. Tryout İstatistikleri & Form Geçmişi
-    const tryoutStats = database.getTryoutStats(id);
-    let tryoutRole = null;
-    if (tryoutStats && tryoutStats.roleId) {
-      tryoutRole = getLevelRoleById(tryoutStats.roleId);
-    }
-
-    const tryoutForms = Object.values(database.data.tryoutForms || {})
-      .filter((f) => String(f.userId) === id)
-      .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-
-    // 4. Uyarı / Disiplin Geçmişi
+    // 3. Uyarı / Disiplin Geçmişi
     const warnStats = database.getUserWarningStats(id);
     const warningHistory = Object.values(database.data.warnings || {})
       .filter((w) => String(w.userId) === id)
       .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
 
-    // 5. Küfür / Argo İhlal Sayısı
+    // 4. Küfür / Argo İhlal Sayısı
     const profanityCount = database.getProfanityCount(id);
 
     const level = getMemberLevel(member, req.guild);
 
-    // 6. Denetim Logu (Üye Bilgileri / Sicil Görüntüleme)
+    // 5. Denetim Logu (Üye Bilgileri / Sicil Görüntüleme)
     if (req.query.audit === '1' && req.actorUser) {
       console.log(
         `[DENETİM LOGU] Yetkili ${req.actorUser.tag || req.actorUser.username} (${req.actorUser.id}), ${member.displayName} (${member.id}) üyesinin detaylarını görüntüledi. Zaman: ${new Date().toISOString()}`
@@ -175,9 +160,6 @@ router.get('/members/:id', async (req, res) => {
       },
       registration: {
         registered: Boolean(reg) || config.isRegisteredMember(member),
-        type: reg?.registrationType || (member.roles.cache.has(config.ROLES?.OTHER_CLAN) ? 'other' : (config.isRegisteredMember(member) ? 'own' : null)),
-        clanName: reg?.clanName || null,
-        clanRoleId: reg?.clanRoleId || null,
         realName: reg?.realName || null,
         gender: reg?.gender || null,
         robloxUsername: reg?.robloxUsername || null,
@@ -185,23 +167,6 @@ router.get('/members/:id', async (req, res) => {
         robloxDisplayName: reg?.robloxDisplayName || null,
         robloxProfileUrl: reg?.robloxId ? `https://www.roblox.com/users/${reg.robloxId}/profile` : null,
         registeredAt: reg?.registeredAt || null,
-      },
-      tryout: {
-        current: {
-          level: tryoutStats?.level || 0,
-          roleId: tryoutStats?.roleId || null,
-          roleName: tryoutRole?.name || null,
-          canonical: tryoutRole?.canonical || null,
-          formCount: tryoutStats?.formCount || 0,
-          lastUpdated: tryoutStats?.lastUpdated || null,
-        },
-        forms: tryoutForms,
-      },
-      vs: {
-        points: 0,
-        wins: 0,
-        losses: 0,
-        kills: 0,
       },
       warnings: {
         stats: {

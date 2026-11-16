@@ -39,7 +39,7 @@ function createColorPanel() {
   };
 
   const embed = new EmbedBuilder()
-    .setTitle(`${config.EMOJIS.KING} Piyade Team | TSB | İsim Rengi Seçim Paneli 🎨✨`)
+    .setTitle(`${config.EMOJIS.KING} ${config.BRAND_NAME} | İsim Rengi Seçim Paneli 🎨✨`)
     .setColor(0x9B59B6) // Canlı Mor / Gökkuşağı Teması
     .setDescription(
       `${PURPLE_DIVIDER}\n\n` +
@@ -62,10 +62,10 @@ function createColorPanel() {
       `> 🩷 <@&1559926687645311017> — **Pembe / Pink** *(Neon & Gösterişli Tarz)*\n\n` +
       `🇬🇧 **English:** Click any button below to equip a name color (1 color max, click again to remove, 10s cooldown).\n\n` +
       `${PURPLE_DIVIDER}\n` +
-      `-# ${config.EMOJIS.MODERATOR} Piyade Team | TSB • Kişiselleştirilebilir İsim Rengi Sistemi ✨`
+      `-# ${config.EMOJIS.MODERATOR} ${config.BRAND_NAME} • Kişiselleştirilebilir İsim Rengi Sistemi ✨`
     )
     .setFooter({
-      text: '🎨 Piyade Team • Sadece 1 renk seçilebilir (1 color max) • Bekleme süresi: 10sn',
+      text: `🎨 ${config.BRAND_NAME} • Sadece 1 renk seçilebilir (1 color max) • Bekleme süresi: 10sn`,
     })
     .setTimestamp();
 
@@ -112,7 +112,7 @@ function createColorPanel() {
  */
 function createEnglishColorGuideEmbed() {
   return new EmbedBuilder()
-    .setTitle(`${config.EMOJIS.KING} Piyade Team | TSB | Name Color Selection Panel (EN) 🎨✨`)
+    .setTitle(`${config.EMOJIS.KING} ${config.BRAND_NAME} | Name Color Selection Panel (EN) 🎨✨`)
     .setColor(0x9B59B6)
     .setDescription(
       `${PURPLE_DIVIDER}\n\n` +
@@ -134,10 +134,10 @@ function createEnglishColorGuideEmbed() {
       `> 💚 <@&1559926912338362379> — **Green** *(Yeşil — Vibrant & Emerald Style)*\n` +
       `> 🩷 <@&1559926687645311017> — **Pink** *(Pembe — Neon & Flashy Style)*\n\n` +
       `${PURPLE_DIVIDER}\n` +
-      `-# ${config.EMOJIS.MODERATOR} Piyade Team | TSB • Customizable Name Color System ✨`
+      `-# ${config.EMOJIS.MODERATOR} ${config.BRAND_NAME} • Customizable Name Color System ✨`
     )
     .setFooter({
-      text: '🎨 Piyade Team • Only 1 color allowed at a time • Cooldown: 10 Seconds',
+      text: `🎨 ${config.BRAND_NAME} • Only 1 color allowed at a time • Cooldown: 10 Seconds`,
     })
     .setTimestamp();
 }

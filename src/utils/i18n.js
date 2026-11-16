@@ -1,6 +1,13 @@
 const database = require('./database');
 
 /**
+ * Desteklenen Diller Listesi (Merkezi Yapı)
+ * Yeni dil eklemek = bu listeye kod eklemek
+ */
+const SUPPORTED_LANGUAGES = ['tr', 'en'];
+const DEFAULT_LANGUAGE = 'tr';
+
+/**
  * Sunucuda "🇬🇧 English" rolünü bulur veya yoksa otomatik oluşturur.
  */
 async function ensureEnglishRole(guild) {
@@ -200,6 +207,8 @@ async function translateToEnglish(text) {
 }
 
 module.exports = {
+  SUPPORTED_LANGUAGES,
+  DEFAULT_LANGUAGE,
   ensureEnglishRole,
   setMemberLanguage,
   resolveLang,

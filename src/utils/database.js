@@ -42,14 +42,45 @@ class DatabaseManager {
       if (fs.existsSync(DB_PATH)) {
         const fileContent = fs.readFileSync(DB_PATH, 'utf-8');
         const parsed = JSON.parse(fileContent);
+
+        // Eski klan ve tryout verileri için ilk seferlik legacy yedekleme
+        const legacyKeys = [
+          'tryoutStats',
+          'tryoutForms',
+          'tryoutLeaderboardMessageId',
+          'helpPanelMessageId',
+          'clanRoles',
+          'knownClans',
+          'clanPanelMessageId',
+          'clanPanelChannelId',
+        ];
+        const hasLegacyData = legacyKeys.some((k) => {
+          const val = parsed[k];
+          if (!val) return false;
+          if (Array.isArray(val)) return val.length > 0;
+          if (typeof val === 'object') return Object.keys(val).length > 0;
+          return true;
+        });
+
+        if (hasLegacyData) {
+          try {
+            const files = fs.readdirSync(DATA_DIR);
+            const hasLegacyBackup = files.some((f) => f.startsWith('database.legacy-') && f.endsWith('.json'));
+            if (!hasLegacyBackup) {
+              const nowStr = new Date().toISOString().replace(/[:.]/g, '-');
+              const legacyPath = path.join(DATA_DIR, `database.legacy-${nowStr}.json`);
+              fs.copyFileSync(DB_PATH, legacyPath);
+              console.log(`[DATABASE] Eski klan/tryout verilerinin ilk seferlik yedeği alındı: ${legacyPath}`);
+            }
+          } catch (legacyErr) {
+            console.warn('[DATABASE] Legacy yedeği oluşturulurken hata:', legacyErr.message);
+          }
+        }
+
         this.data = {
           registrations: parsed.registrations || [],
           activeApplications: parsed.activeApplications || {},
           rejectedApplications: parsed.rejectedApplications || {},
-          helpPanelMessageId: parsed.helpPanelMessageId || null,
-          tryoutStats: parsed.tryoutStats || {},
-          tryoutForms: parsed.tryoutForms || {},
-          tryoutLeaderboardMessageId: parsed.tryoutLeaderboardMessageId || null,
           profanityStats: parsed.profanityStats || {},
           warningRoles: parsed.warningRoles || {},
           warningStats: parsed.warningStats || {},
@@ -58,10 +89,8 @@ class DatabaseManager {
           englishRoleId: parsed.englishRoleId || null,
           lockedChannels: parsed.lockedChannels || {},
           feedback: Array.isArray(parsed.feedback) ? parsed.feedback : [],
-          clanRoles: Array.isArray(parsed.clanRoles) ? parsed.clanRoles : [],
-          knownClans: Array.isArray(parsed.knownClans) ? parsed.knownClans : [],
-          clanPanelMessageId: parsed.clanPanelMessageId || null,
-          clanPanelChannelId: parsed.clanPanelChannelId || null,
+          // Eski verileri JSON içinde koru ama kod içinde aktif kullanma
+          ...parsed,
         };
       } else {
         this.save();
@@ -115,13 +144,8 @@ class DatabaseManager {
 
   // Yeni başarılı kaydı ekleme
   addRegistration(record) {
-    const regType = record.registrationType || 'own';
     const cleanRecord = {
       ...record,
-      registrationType: regType,
-      clanName: record.clanName || null,
-      clanRoleId: record.clanRoleId || null,
-      clanRoleCreated: Boolean(record.clanRoleCreated),
     };
 
     const index = this.data.registrations.findIndex(
@@ -224,12 +248,92 @@ class DatabaseManager {
   }
 
   getAllRegistrations() {
-    return (this.data.registrations || []).map((r) => ({
-      registrationType: 'own',
-      clanName: null,
-      clanRoleId: null,
-      ...r,
-    }));
+    return this.data.registrations || [];
+  }
+
+  /**
+   * /veri-sifirla öncesi veritabanının yedeğini alır. En son 5 yedeği saklar.
+   */
+  backupDatabaseForReset() {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const nowStr = new Date().toISOString().replace(/[:.]/g, '-');
+      const backupFileName = `database.backup-reset-${nowStr}.json`;
+      const backupPath = path.join(DATA_DIR, backupFileName);
+
+      fs.copyFileSync(DB_PATH, backupPath);
+
+      // En fazla 5 adet backup-reset dosyasını sakla, eskileri temizle
+      const files = fs.readdirSync(DATA_DIR)
+        .filter((f) => f.startsWith('database.backup-reset-') && f.endsWith('.json'))
+        .map((f) => ({
+          name: f,
+          path: path.join(DATA_DIR, f),
+          time: fs.statSync(path.join(DATA_DIR, f)).mtimeMs,
+        }))
+        .sort((a, b) => b.time - a.time);
+
+      if (files.length > 5) {
+        for (let i = 5; i < files.length; i++) {
+          try {
+            fs.unlinkSync(files[i].path);
+          } catch (e) {}
+        }
+      }
+
+      return { success: true, fileName: backupFileName, path: backupPath };
+    } catch (err) {
+      console.error('[DATABASE] Reset yedeği alınamadı:', err);
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * /veri-sifirla için önizleme sayılarını hesaplar
+   */
+  getResetPreviewCounts() {
+    const warningStats = this.data.warningStats || {};
+    const warnings = this.data.warnings || {};
+    const registrations = this.data.registrations || [];
+    const activeApplications = this.data.activeApplications || {};
+
+    const warnedUsersCount = Object.keys(warningStats).length;
+    const totalWarningsCount = Object.keys(warnings).length;
+    const activeTimeoutCount = Object.values(warningStats).filter(
+      (s) => s.suspendedUntil && s.suspendedUntil > Date.now()
+    ).length;
+
+    return {
+      warnedUsersCount,
+      totalWarningsCount,
+      activeTimeoutCount,
+      registrationsCount: registrations.length,
+      activeApplicationsCount: Object.keys(activeApplications).length,
+    };
+  }
+
+  /**
+   * Kullanıcı bazlı tüm uyarı verilerini sıfırlar (yapılandırma rolleri korunur)
+   */
+  resetWarningData() {
+    this.data.warningStats = {};
+    this.data.warnings = {};
+    this.data.profanityStats = {};
+    this.save();
+    return true;
+  }
+
+  /**
+   * Tüm kayıt ve başvuru verilerini sıfırlar
+   */
+  resetRegistrationData() {
+    this.data.registrations = [];
+    this.data.activeApplications = {};
+    this.data.rejectedApplications = {};
+    this.save();
+    return true;
   }
 
   // Acil Yardım Paneli mesaj ID'si

@@ -1,6 +1,9 @@
 require('dotenv').config();
 
 module.exports = {
+  // Marka Adı (Piyade Topluluğu)
+  BRAND_NAME: (process.env.BRAND_NAME || 'Piyade').trim(),
+
   // Bot Tokeni (Tırnak işaretleri ve boşluklar otomatik temizlenir)
   TOKEN: (process.env.TSB_TOKEN || process.env.DISCORD_TOKEN || '').trim().replace(/^['"]+|['"]+$/g, ''),
 
@@ -11,7 +14,7 @@ module.exports = {
   PORT: process.env.PORT || 3000,
   API_SECRET: (process.env.API_SECRET || '').trim().replace(/^['"]+|['"]+$/g, ''),
 
-  // Web Sitesi Geri Bildirim Kanalı ID'si (https://discord.com/channels/1559313292651008040/1570061735665078392)
+  // Web Sitesi Geri Bildirim Kanalı ID'si
   FEEDBACK_CHANNEL_ID: (process.env.FEEDBACK_CHANNEL_ID || '1570061735665078392').trim().replace(/^['"]+|['"]+$/g, ''),
 
   // Kanal ID'leri
@@ -20,18 +23,6 @@ module.exports = {
     REGISTER: '1559605626198302741',
     // Yetkililerin Başvuruları Onaylayıp/Reddettiği Kanal
     STAFF_APPROVAL: '1559621928187199488',
-    // Acil Takviye / Yardım Paneli Kanalı
-    HELP_PANEL: '1559323174594945104',
-    // Yardım Çağrılarının Düşeceği Bildirim Kanalı
-    HELP_ALERT: '1559928245598560336',
-    // Tryout / Seviye Değerlendirme Paneli Kanalı
-    TRYOUT_PANEL: '1562459282040029225',
-    // Tryout Sıralama Tablosu Kanalı
-    TRYOUT_LEADERBOARD: '1563212550332612700',
-    // Tryout Anket Sonuçlarının Paylaşıldığı Kanal
-    TRYOUT_RESULT: '1563218527584788560',
-    // Seviye Atlama / Değişim Log Kanalı
-    TRYOUT_LOG: '1562031846295076874',
     // İsim Rengi Seçim Paneli Kanalı
     COLOR_PANEL: '1559605214690934854',
     // Küfür / Uygunsuz İçerik Log Kanalı
@@ -46,8 +37,6 @@ module.exports = {
     FEEDBACK_CHANNEL: (process.env.FEEDBACK_CHANNEL_ID || '1570061735665078392').trim(),
     // Sadece Medya Paylaşım Kanalı
     MEDIA: '1559316020227739806',
-    // Dost / Düşman Klan Paneli Kanalı
-    CLAN_PANEL: '1570462108691210432',
   },
 
   // Rol ID'leri
@@ -67,9 +56,6 @@ module.exports = {
     // Hesabı Onaylı Rolü (APPROVED_ROLES içinde ilk rol)
     VERIFIED: '1559604645821812896',
 
-    // Başka bir klandan gelen üyelere verilecek rol (Other Clan)
-    OTHER_CLAN: '1570460155437518960',
-
     // Cinsiyet Rolleri
     MALE: '1559637360558350356',     // Erkek rolü
     FEMALE: '1559637300042797096',   // Kız rolü
@@ -77,13 +63,13 @@ module.exports = {
     // Kayıt Yetkili Rolü
     STAFF: '1559625308737507358',
 
-    // Kapışma Talep Yetkilisi Rolü
+    // Kapışma Talep Yetkilisi Rolü (Arşiv)
     VS_STAFF: '1559892661547307038',
 
     // Developer Rolü
     DEVELOPER: '1561777507223601353',
 
-    // Tryout / Seviye Değerlendirme Yetkilisi Rolü
+    // Yönetmenlik / Üst Yetkili Rolü
     TRYOUT_STAFF: '1559614111128490044',
 
     // Mesaj Denetimcisi Rolü (Küfür log kanalında etiketlenir)
@@ -103,7 +89,7 @@ module.exports = {
       '1559625308737507358', // Kayıt Yetkilisi
       '1559892661547307038', // Kapışma Talep Yetkilisi
       '1563914587273953363', // Mesaj Denetimcisi
-      '1559614111128490044', // Yönetmenlik / Tryout Yetkilisi
+      '1559614111128490044', // Yönetmenlik / Üst Yetkili
     ],
 
     // Medya Kanalı Denetiminden Muaf Yönetim Rolleri (Kurucu / Üst Yönetim)
@@ -120,32 +106,6 @@ module.exports = {
     ],
   },
 
-  // Özel Kullanıcı ID'leri
-  USERS: {
-    TRYOUT_HEADER_USER: '1225903173961777152',
-  },
-
-  // Kendi klanımızın takma adları (Başka klan alanına yazılırsa engellenir)
-  OWN_CLAN_ALIASES: [
-    'piyade',
-    'piyade team',
-    'piyade clan',
-    'tsb piyade',
-    'piyade tsb',
-    'piyadeler',
-  ],
-
-  // Klan Sistemi Yapılandırması
-  CLAN: {
-    MAX_NAME: 32,
-    MIN_NAME: 2,
-    AUTO_EXISTING_SCORE: 0.92,
-    SUGGEST_EXISTING_SCORE: 0.80,
-    ROLE_COLOR: 0x95A5A6,
-    MAX_GUILD_ROLES: 245,
-    OTHER_CLAN_CAN_CALL_HELP: true,
-  },
-
   // Renk Kodları (Discord Embed renkleri)
   COLORS: {
     PRIMARY: 0x0099FF,       // Canlı Mavi
@@ -153,13 +113,10 @@ module.exports = {
     PENDING: 0x0099FF,       // İnceleme / Başvuru Kartı (Mavi)
     SUCCESS: 0x2ECC71,       // Yeşil / Onaylandı
     DANGER: 0xE74C3C,        // Kırmızı / Reddedildi
-    GOLD_ORANGE: 0xFF8C00,   // Sarı ve Turuncu Karışımı (Top 10 için)
-    NAVY: 0x0A2540,          // Lacivert (Tryout Değerlendirme Kartı için)
+    GOLD_ORANGE: 0xFF8C00,   // Sarı ve Turuncu Karışımı
+    NAVY: 0x0A2540,          // Lacivert
     WARNING_ORANGE: 0xFF7A00, // Turuncu (Kullanıcı Uyarı DM'i & Sözlü Uyarı için)
     DARK_RED: 0x8B0000,      // Koyu Kırmızı (Yetkili Uyarıları için)
-    OTHER_CLAN: 0x9B59B6,    // Başka klan başvuru kartı (Mor)
-    ALLY: 0xF2F3F5,          // Dost klan paneli (Beyaza yakın)
-    ENEMY: 0x0D0D0D,         // Düşman klan paneli (Siyaha yakın)
   },
 
   // Özel Discord Emojileri
@@ -204,58 +161,14 @@ module.exports = {
     { id: '1559926687645311017', label: 'Pembe',   emoji: '🩷', style: 'Primary' },
   ],
 
-  // Aşamalı Seviye Rolleri (1 = En Düşük Seviye, 37 = En Üst Seviye)
-  LEVEL_ROLES: [
-    { level: 1,  order: 22, id: '1563092531867164742', name: 'Low weak 4',    canonical: 'low weak 4',    aliases: ['low weak 4', 'lw4', 'low 4 weak'] },
-    { level: 2,  order: 23, id: '1563092582802657310', name: 'Low stable 4',  canonical: 'low stable 4',  aliases: ['low stable 4', 'ls4', 'low 4 stable'] },
-    { level: 3,  order: 24, id: '1563092648989040751', name: 'Low strong 4',  canonical: 'low strong 4',  aliases: ['low strong 4', 'lstr4', 'low 4 strong'] },
-    { level: 4,  order: 25, id: '1563092700805341214', name: 'Low weak 3',    canonical: 'low weak 3',    aliases: ['low weak 3', 'lw3', 'low 3 weak'] },
-    { level: 5,  order: 26, id: '1563092750545723464', name: 'Low stable 3',  canonical: 'low stable 3',  aliases: ['low stable 3', 'ls3', 'low 3 stable'] },
-    { level: 6,  order: 27, id: '1563092801774821439', name: 'Low strong 3',  canonical: 'low strong 3',  aliases: ['low strong 3', 'lstr3', 'low 3 strong'] },
-    { level: 7,  order: 28, id: '1563092867692367892', name: 'Low weak 2',    canonical: 'low weak 2',    aliases: ['low weak 2', 'lw2', 'low 2 weak'] },
-    { level: 8,  order: 29, id: '1563092925317906513', name: 'Low stable 2',  canonical: 'low stable 2',  aliases: ['low stable 2', 'ls2', 'low 2 stable'] },
-    { level: 9,  order: 30, id: '1563092976937476116', name: 'Low strong 2',  canonical: 'low strong 2',  aliases: ['low strong 2', 'lstr2', 'low 2 strong'] },
-    { level: 10, order: 31, id: '1563093055807037511', name: 'Low weak 2',    canonical: 'low weak 1',    aliases: ['low weak 1', 'lw1', 'low 1 weak', 'low weak 2 #31'] },
-    { level: 11, order: 32, id: '1563093176112381953', name: 'Low stable 2',  canonical: 'low stable 1',  aliases: ['low stable 1', 'ls1', 'low 1 stable', 'low stable 2 #32'] },
-    { level: 12, order: 33, id: '1563093229597888572', name: 'Low strong 1',  canonical: 'low strong 1',  aliases: ['low strong 1', 'lstr1', 'low 1 strong'] },
-    { level: 13, order: 34, id: '1563093414109511730', name: 'Mid weak 4',    canonical: 'mid weak 4',    aliases: ['mid weak 4', 'mw4', 'mid 4 weak'] },
-    { level: 14, order: 35, id: '1563093461425717318', name: 'Mid stable 4',  canonical: 'mid stable 4',  aliases: ['mid stable 4', 'ms4', 'mid 4 stable'] },
-    { level: 15, order: 36, id: '1563093530308649034', name: 'Mid strong 4',  canonical: 'mid strong 4',  aliases: ['mid strong 4', 'mstr4', 'mid 4 strong'] },
-    { level: 16, order: 37, id: '1563093644108497006', name: 'Mid weak 3',    canonical: 'mid weak 3',    aliases: ['mid weak 3', 'mw3', 'mid 3 weak'] },
-    { level: 17, order: 38, id: '1563093697376161853', name: 'Mid stable 3',  canonical: 'mid stable 3',  aliases: ['mid stable 3', 'ms3', 'mid 3 stable'] },
-    { level: 18, order: 39, id: '1563093808512630795', name: 'Mid strong 3',  canonical: 'mid strong 3',  aliases: ['mid strong 3', 'mstr3', 'mid 3 strong'] },
-    { level: 19, order: 40, id: '1563093864577765416', name: 'Mid weak 2',    canonical: 'mid weak 2',    aliases: ['mid weak 2', 'mw2', 'mid 2 weak'] },
-    { level: 20, order: 41, id: '1563093942894071808', name: 'Mid stable 2',  canonical: 'mid stable 2',  aliases: ['mid stable 2', 'ms2', 'mid 2 stable'] },
-    { level: 21, order: 42, id: '1563094015228772425', name: 'Mid strong 2',  canonical: 'mid strong 2',  aliases: ['mid strong 2', 'mstr2', 'mid 2 strong'] },
-    { level: 22, order: 43, id: '1563094189787447296', name: 'Mid weak 1',    canonical: 'mid weak 1',    aliases: ['mid weak 1', 'mw1', 'mid 1 weak'] },
-    { level: 23, order: 44, id: '1563094244313268285', name: 'Mid stable 1',  canonical: 'mid stable 1',  aliases: ['mid stable 1', 'ms1', 'mid 1 stable'] },
-    { level: 24, order: 45, id: '1563094327092056104', name: 'Mid strong 1',  canonical: 'mid strong 1',  aliases: ['mid strong 1', 'mstr1', 'mid 1 strong'] },
-    { level: 25, order: 46, id: '1563188918529036338', name: 'Hihg weak 4',   canonical: 'high weak 4',   aliases: ['high weak 4', 'hihg weak 4', 'hw4', 'high 4 weak'] },
-    { level: 26, order: 47, id: '1563194977406943232', name: 'Hihg stable 4', canonical: 'high stable 4', aliases: ['high stable 4', 'hihg stable 4', 'hs4', 'high 4 stable'] },
-    { level: 27, order: 48, id: '1563195185486102608', name: 'High strong 4', canonical: 'high strong 4', aliases: ['high strong 4', 'hihg strong 4', 'hstr4', 'high 4 strong'] },
-    { level: 28, order: 49, id: '1563200337891041280', name: 'Hihg weak 3',   canonical: 'high weak 3',   aliases: ['high weak 3', 'hihg weak 3', 'hw3', 'high 3 weak'] },
-    { level: 29, order: 50, id: '1563195219564961803', name: 'Hihg stable 3', canonical: 'high stable 3', aliases: ['high stable 3', 'hihg stable 3', 'hs3', 'high 3 stable'] },
-    { level: 30, order: 51, id: '1563195203735785602', name: 'High strong 3', canonical: 'high strong 3', aliases: ['high strong 3', 'hihg strong 3', 'hstr3', 'high 3 strong'] },
-    { level: 31, order: 52, id: '1563200825806037032', name: 'Hihg weak 2',   canonical: 'high weak 2',   aliases: ['high weak 2', 'hihg weak 2', 'hw2', 'high 2 weak'] },
-    { level: 32, order: 53, id: '1563200691348963338', name: 'Hihg stable 2', canonical: 'high stable 2', aliases: ['high stable 2', 'hihg stable 2', 'hs2', 'high 2 stable'] },
-    { level: 33, order: 54, id: '1563200633790795878', name: 'High strong 2', canonical: 'high strong 2', aliases: ['high strong 2', 'hihg strong 2', 'hstr2', 'high 2 strong'] },
-    { level: 34, order: 55, id: '1563202108780707951', name: 'Hihg weak 1',   canonical: 'high weak 1',   aliases: ['high weak 1', 'hihg weak 1', 'hw1', 'high 1 weak'] },
-    { level: 35, order: 56, id: '1563202135603154964', name: 'Hihg stable 1', canonical: 'high stable 1', aliases: ['high stable 1', 'hihg stable 1', 'hs1', 'high 1 stable'] },
-    { level: 36, order: 57, id: '1563202153445720074', name: 'High strong 1', canonical: 'high strong 1', aliases: ['high strong 1', 'hihg strong 1', 'hstr1', 'high 1 strong'] },
-    { level: 37, order: 58, id: '1563188620809080843', name: 'Hihg Strong 0', canonical: 'high strong 0', aliases: ['high strong 0', 'hihg strong 0', 'hstr0', 'high 0', 'strong 0'] },
-  ],
-
   /**
-   * Üyenin sunucuda kayıtlı bir üye olup olmadığını doğrular (Piyade veya Diğer Klan).
+   * Üyenin sunucuda kayıtlı bir üye olup olmadığını doğrular.
    * @param {import('discord.js').GuildMember} member
    * @returns {boolean}
    */
   isRegisteredMember(member) {
     if (!member || !member.roles?.cache) return false;
     const roles = module.exports.ROLES || {};
-    return (
-      Boolean(roles.REGISTERED_CHECK && member.roles.cache.has(roles.REGISTERED_CHECK)) ||
-      Boolean(roles.OTHER_CLAN && member.roles.cache.has(roles.OTHER_CLAN))
-    );
+    return Boolean(roles.REGISTERED_CHECK && member.roles.cache.has(roles.REGISTERED_CHECK));
   },
 };

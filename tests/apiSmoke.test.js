@@ -45,9 +45,7 @@ function createMockDiscordEnvironment() {
 
   const devRole = createRole(config.ROLES.DEVELOPER, 'Developer', 50);
   const staffRole = createRole(config.ROLES.TRYOUT_STAFF, 'Yönetmenlik', 40);
-  const ownRole = createRole(config.ROLES.REGISTERED_CHECK, 'Kayıtlı Üye', 20);
-  const otherClanRole = createRole(config.ROLES.OTHER_CLAN, 'Other Clan', 25);
-  const customClanRole = createRole('8888', 'Valhalla', 24, '#95a5a6');
+  const regRole = createRole(config.ROLES.REGISTERED_CHECK, 'Kayıtlı Üye', 20);
   const unregisteredRole = createRole(config.ROLES.UNREGISTERED, 'Kayıtsız', 5);
 
   function makeMember({ id, username, displayName, roles = [], joinedTimestamp = 1600000000000 }) {
@@ -107,14 +105,7 @@ function createMockDiscordEnvironment() {
     id: '9101',
     username: 'ahmet_uye',
     displayName: 'Ahmet | ahmet_roblox',
-    roles: [ownRole],
-  });
-
-  makeMember({
-    id: '9102',
-    username: 'mehmet_uye',
-    displayName: 'Mehmet | mehmet_roblox',
-    roles: [otherClanRole, customClanRole],
+    roles: [regRole],
   });
 
   makeMember({
@@ -140,15 +131,8 @@ function createMockDiscordEnvironment() {
 
   makeMember({
     id: '9106',
-    username: 'yeni_kayit_own',
-    displayName: 'Yeni Piyade Adayı',
-    roles: [unregisteredRole],
-  });
-
-  makeMember({
-    id: '9107',
-    username: 'yeni_kayit_other',
-    displayName: 'Yeni Klan Adayı',
+    username: 'yeni_kayit_user',
+    displayName: 'Yeni Aday',
     roles: [unregisteredRole],
   });
 
@@ -237,31 +221,14 @@ test.before(async () => {
   database.init();
   database.data.registrations = [];
 
-  // Veritabanı ön yüklemeleri (Kayıt, Tryout, Uyarı)
+  // Veritabanı ön yüklemeleri (Kayıt, Uyarı)
   database.addRegistration({
     discordId: '9101',
     realName: 'Ahmet Yılmaz',
     robloxUsername: 'ahmet_roblox',
     robloxId: '123456',
     gender: 'Erkek',
-    registrationType: 'own',
-    clanName: null,
-    clanRoleId: null,
-    clanRoleCreated: false,
     registeredAt: Date.now() - 100000,
-  });
-
-  database.addRegistration({
-    discordId: '9102',
-    realName: 'Mehmet Demir',
-    robloxUsername: 'mehmet_roblox',
-    robloxId: '654321',
-    gender: 'Erkek',
-    registrationType: 'other',
-    clanName: 'Valhalla',
-    clanRoleId: '8888',
-    clanRoleCreated: false,
-    registeredAt: Date.now() - 50000,
   });
 
   // Bekleyen başvuru (9104)
@@ -271,8 +238,6 @@ test.before(async () => {
     realName: 'Ali Can',
     gender: 'Erkek',
     robloxUsername: 'ali_roblox',
-    registrationType: 'other',
-    clanTypedName: 'Dark Wolves',
     createdAt: Date.now() - 20000,
   });
 
@@ -337,19 +302,16 @@ async function apiRequest(endpoint, { method = 'GET', body = null, actorId = '90
 // TESTLER
 // -------------------------------------------------------------------------
 
-test('1. GET /api/admin/members?query= (boş ve dolu sorgu, config hatası olmadan 200 dönmeli)', async () => {
+test('1. GET /api/admin/members?query= (boş ve dolu sorgu, 200 dönmeli)', async () => {
   // Boş sorgu
   const emptyQueryRes = await apiRequest('/api/admin/members?query=');
   assert.equal(emptyQueryRes.status, 200, 'Boş sorgu 200 dönmeli, 500 olmamalı');
-  assert.ok(emptyQueryRes.body.members.length >= 5, 'Üye listesi dönmeli');
+  assert.ok(emptyQueryRes.body.members.length >= 4, 'Üye listesi dönmeli');
   assert.equal(typeof emptyQueryRes.body.total, 'number');
 
-  // Her üye için registration alanlarının yapısını doğrula
   for (const m of emptyQueryRes.body.members) {
     assert.ok('registered' in m.registration, 'm.registration.registered alanı olmalı');
-    assert.ok('type' in m.registration, 'm.registration.type alanı olmalı');
-    assert.ok('clanName' in m.registration, 'm.registration.clanName alanı olmalı');
-    assert.ok('clanRoleId' in m.registration, 'm.registration.clanRoleId alanı olmalı');
+    assert.ok('realName' in m.registration, 'm.registration.realName alanı olmalı');
   }
 
   // Dolu sorgu (Ahmet)
@@ -359,53 +321,37 @@ test('1. GET /api/admin/members?query= (boş ve dolu sorgu, config hatası olmad
   const foundAhmet = queryRes.body.members.find((m) => m.id === '9101');
   assert.ok(foundAhmet, '9101 idli Ahmet bulunmalı');
   assert.equal(foundAhmet.registration.registered, true);
-  assert.equal(foundAhmet.registration.type, 'own');
-  assert.equal(foundAhmet.registration.clanName, null);
 });
 
-test('2. GET /api/admin/members/:id (kayıtlı own, kayıtlı other ve kayıtsız üye)', async () => {
-  // A. Piyade Klanı Üyesi (9101)
-  const ownRes = await apiRequest('/api/admin/members/9101');
-  assert.equal(ownRes.status, 200, 'Kayıtlı own üye 200 dönmeli');
-  assert.equal(ownRes.body.discord.id, '9101');
-  assert.equal(ownRes.body.registration.registered, true);
-  assert.equal(ownRes.body.registration.type, 'own');
-  assert.equal(ownRes.body.registration.clanName, null);
-  assert.equal(ownRes.body.registration.realName, 'Ahmet Yılmaz');
+test('2. GET /api/admin/members/:id (kayıtlı ve kayıtsız üye, tryout/vs alanları olmamalı)', async () => {
+  // A. Kayıtlı Üye (9101)
+  const regRes = await apiRequest('/api/admin/members/9101');
+  assert.equal(regRes.status, 200, 'Kayıtlı üye 200 dönmeli');
+  assert.equal(regRes.body.discord.id, '9101');
+  assert.equal(regRes.body.registration.registered, true);
+  assert.equal(regRes.body.registration.realName, 'Ahmet Yılmaz');
+  assert.equal(regRes.body.tryout, undefined, 'tryout alanı kaldırılmış olmalı');
+  assert.equal(regRes.body.vs, undefined, 'vs alanı kaldırılmış olmalı');
 
-  // B. Başka Klan Üyesi (9102)
-  const otherRes = await apiRequest('/api/admin/members/9102');
-  assert.equal(otherRes.status, 200, 'Kayıtlı other üye 200 dönmeli');
-  assert.equal(otherRes.body.discord.id, '9102');
-  assert.equal(otherRes.body.registration.registered, true);
-  assert.equal(otherRes.body.registration.type, 'other');
-  assert.equal(otherRes.body.registration.clanName, 'Valhalla');
-  assert.equal(otherRes.body.registration.clanRoleId, '8888');
-
-  // C. Kayıtsız Üye (9103)
+  // B. Kayıtsız Üye (9103)
   const unregRes = await apiRequest('/api/admin/members/9103');
   assert.equal(unregRes.status, 200, 'Kayıtsız üye 200 dönmeli');
   assert.equal(unregRes.body.registration.registered, false);
-  assert.equal(unregRes.body.registration.type, null);
-  assert.equal(unregRes.body.registration.clanName, null);
 });
 
 test('3. GET /api/member/:id/roles ve /api/member/:id/profile', async () => {
   // Roller endpoint'i
-  const rolesRes = await apiRequest('/api/member/9102/roles');
+  const rolesRes = await apiRequest('/api/member/9101/roles');
   assert.equal(rolesRes.status, 200, '/roles 200 dönmeli');
   assert.equal(rolesRes.body.registered, true);
-  assert.equal(rolesRes.body.registrationType, 'other');
-  assert.equal(rolesRes.body.clan?.name, 'Valhalla');
-  assert.equal(rolesRes.body.clan?.roleId, '8888');
+  assert.ok(Array.isArray(rolesRes.body.roles));
 
   // Profil endpoint'i
-  const profileRes = await apiRequest('/api/member/9102/profile');
+  const profileRes = await apiRequest('/api/member/9101/profile');
   assert.equal(profileRes.status, 200, '/profile 200 dönmeli');
   assert.equal(profileRes.body.registration?.registered, true);
-  assert.equal(profileRes.body.registration?.type, 'other');
-  assert.equal(profileRes.body.registration?.clanName, 'Valhalla');
-  assert.equal(profileRes.body.registration?.clanRoleId, '8888');
+  assert.equal(profileRes.body.tryout, undefined, 'tryout kaldırılmış olmalı');
+  assert.equal(profileRes.body.vs, undefined, 'vs kaldırılmış olmalı');
 });
 
 test('4. GET /api/register/status/:id (approved, pending, rejected, unregistered)', async () => {
@@ -413,14 +359,11 @@ test('4. GET /api/register/status/:id (approved, pending, rejected, unregistered
   const approvedRes = await apiRequest('/api/register/status/9101');
   assert.equal(approvedRes.status, 200);
   assert.equal(approvedRes.body.status, 'approved');
-  assert.equal(approvedRes.body.registrationType, 'own');
 
   // B. Pending (9104)
   const pendingRes = await apiRequest('/api/register/status/9104');
   assert.equal(pendingRes.status, 200);
   assert.equal(pendingRes.body.status, 'pending');
-  assert.equal(pendingRes.body.registrationType, 'other');
-  assert.equal(pendingRes.body.clanName, 'Dark Wolves');
 
   // C. Rejected (9105)
   const rejectedRes = await apiRequest('/api/register/status/9105');
@@ -433,70 +376,25 @@ test('4. GET /api/register/status/:id (approved, pending, rejected, unregistered
   assert.equal(unregRes.body.status, 'unregistered');
 });
 
-test('5. POST /api/register (own ve other, geçersiz klan adı hataları)', async () => {
-  // A. Piyade klanı başvurusu (own)
-  const ownRegRes = await apiRequest('/api/register', {
+test('5. POST /api/register (başvuru oluşturma)', async () => {
+  const regRes = await apiRequest('/api/register', {
     method: 'POST',
     body: {
       discordId: '9106',
       realName: 'Barış Can',
       gender: 'male',
       robloxInput: 'baris_roblox',
-      registrationType: 'own',
     },
   });
-  assert.equal(ownRegRes.status, 200, 'Piyade kaydı 200 dönmeli');
-  assert.equal(ownRegRes.body.success, true);
-  assert.equal(ownRegRes.body.registrationType, 'own');
+  assert.equal(regRes.status, 200, 'Kayıt 200 dönmeli');
+  assert.equal(regRes.body.success, true);
+  assert.ok(regRes.body.threadId);
+});
 
-  // B. Başka klan başvurusu (other) - Geçerli klan adı
-  const otherRegRes = await apiRequest('/api/register', {
-    method: 'POST',
-    body: {
-      discordId: '9107',
-      realName: 'Görkem Kaya',
-      gender: 'male',
-      robloxInput: 'gorkem_roblox',
-      registrationType: 'other',
-      clanName: 'Shadow Hunters',
-    },
-  });
-  assert.equal(otherRegRes.status, 200, 'Başka klan kaydı 200 dönmeli');
-  assert.equal(otherRegRes.body.success, true);
-  assert.equal(otherRegRes.body.registrationType, 'other');
+test('6. Kaldırılan rotalar 404 dönmeli (/api/tryout ve /api/help)', async () => {
+  const tryoutRes = await apiRequest('/api/tryout/leaderboard');
+  assert.equal(tryoutRes.status, 404, '/api/tryout 404 dönmeli');
 
-  // Aktif başvuruda klan adının saklandığını doğrula
-  const storedApp = database.getActiveApplication('9107');
-  assert.ok(storedApp, '9107 nolu başvuru veritabanında olmalı');
-  assert.equal(storedApp.clanTypedName, 'Shadow Hunters');
-
-  // C. Başka klan başvurusu - Boş / eksik klan adı (400 CLAN_REQUIRED)
-  const missingClanRes = await apiRequest('/api/register', {
-    method: 'POST',
-    body: {
-      discordId: '9103',
-      realName: 'Test İsim',
-      gender: 'male',
-      robloxInput: 'test_roblox',
-      registrationType: 'other',
-      clanName: '',
-    },
-  });
-  assert.equal(missingClanRes.status, 400, 'Eksik klan adı 400 dönmeli');
-  assert.equal(missingClanRes.body.code, 'CLAN_REQUIRED');
-
-  // D. Başka klan başvurusu - Yasaklı / mention klan adı (400 CLAN_BLOCKED)
-  const blockedClanRes = await apiRequest('/api/register', {
-    method: 'POST',
-    body: {
-      discordId: '9103',
-      realName: 'Test İsim',
-      gender: 'male',
-      robloxInput: 'test_roblox',
-      registrationType: 'other',
-      clanName: '@everyone Clan',
-    },
-  });
-  assert.equal(blockedClanRes.status, 400, 'Yasaklı klan adı 400 dönmeli');
-  assert.equal(blockedClanRes.body.code, 'CLAN_BLOCKED');
+  const helpRes = await apiRequest('/api/help/status');
+  assert.equal(helpRes.status, 404, '/api/help 404 dönmeli');
 });

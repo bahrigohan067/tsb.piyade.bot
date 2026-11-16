@@ -1,7 +1,7 @@
 {
   "name": "tsb-piyade-bot",
   "version": "1.0.0",
-  "description": "Piyade Team | TSB | Roblox Doğrulamalı Kayıt Sistemi Botu",
+  "description": "Piyade | Çok Oyunculu Topluluk Discord Botu",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {

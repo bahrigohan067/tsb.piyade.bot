@@ -191,7 +191,7 @@ module.exports = {
         }
       )
       .setFooter({
-        text: 'Piyade Team | TSB • Kayıt Yönetim Sistemi',
+        text: `${config.BRAND_NAME} • Kayıt Yönetim Sistemi`,
       })
       .setTimestamp();
 

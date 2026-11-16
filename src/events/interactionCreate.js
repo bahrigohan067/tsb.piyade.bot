@@ -3,30 +3,18 @@ const {
   ActionRowBuilder,
   StringSelectMenuBuilder,
   StringSelectMenuOptionBuilder,
-  UserSelectMenuBuilder,
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
   EmbedBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ChannelType,
   PermissionFlagsBits,
 } = require('discord.js');
 
 const config = require('../../config');
 const database = require('../utils/database');
-const robloxService = require('../services/roblox');
 const { createEnglishRegisterGuideEmbed } = require('../utils/panel');
-const { handleHelpRequest, createEnglishHelpGuideEmbed } = require('../utils/helpManager');
-const {
-  handleTryoutStart,
-  handleTryoutUserSelected,
-  handleTryoutModalSubmit,
-  createEnglishTryoutPanelEmbed,
-  createEnglishTryoutLeaderboardEmbed,
-  handleTryoutReportEnglishButton,
-} = require('../utils/tryoutManager');
 const { handleColorButton, createEnglishColorGuideEmbed } = require('../utils/colorManager');
 const {
   handleWarningButton,
@@ -38,17 +26,47 @@ const {
 } = require('../utils/warningManager');
 const { createRegistrationApplication } = require('../services/registrationService');
 const { resolveLang, setMemberLanguage, parseGenderInput } = require('../utils/i18n');
-const clanMatcher = require('../utils/clanMatcher');
 
 // Eşzamanlı işlem kilitleri (Bellek içi kilitler)
 const approvalUserLocks = new Set();
-const clanRoleCreationLocks = new Set();
+
+/**
+ * Kaldırılan eski sistemlerin (Tryout, Acil Yardım, Klan Eşleştirme, VS) customId kontrolü
+ */
+function isLegacyInteraction(customId) {
+  if (!customId || typeof customId !== 'string') return false;
+  const legacyPatterns = [
+    'tryout',
+    'btn_tryout',
+    'modal_tryout',
+    'select_tryout',
+    'help',
+    'btn_help',
+    'yardim',
+    'btn_acil_yardim',
+    'clan',
+    'klan',
+    'btn_clan',
+    'modal_clan',
+    'btn_reg_type',
+    'select_gender_other',
+    'select_gender_own',
+    'modal_kayit_other',
+    'modal_kayit_own',
+    'vs_',
+    'btn_vs',
+    'modal_vs',
+    'select_vs',
+  ];
+
+  return legacyPatterns.some((pattern) => customId.toLowerCase().includes(pattern));
+}
 
 module.exports = {
   name: Events.InteractionCreate,
   async execute(interaction) {
     try {
-      // 0. AUTOCOMPLETE ETKİLEŞİMLERİ (/klan-duzenle, /klan-sil vb.)
+      // 0. AUTOCOMPLETE ETKİLEŞİMLERİ
       if (interaction.isAutocomplete()) {
         const command = interaction.client.commands.get(interaction.commandName);
         if (command && typeof command.autocomplete === 'function') {
@@ -65,7 +83,18 @@ module.exports = {
         return;
       }
 
-      // 2. BUTON ETKİLEŞİMLERİ
+      // 2. KALDIRILAN ESKİ SİSTEMLERİN ETKİLEŞİM YAKALAYICISI (GÜVENLİ GERİ DÖNÜŞ)
+      if (interaction.customId && isLegacyInteraction(interaction.customId)) {
+        const isEn = interaction.customId.endsWith('_en') || resolveLang(interaction) === 'en';
+        return interaction.reply({
+          content: isEn
+            ? '⚠️ This feature has been removed. / Bu özellik kaldırıldı.'
+            : '⚠️ Bu özellik kaldırıldı. / This feature has been removed.',
+          ephemeral: true,
+        }).catch(() => {});
+      }
+
+      // 3. BUTON ETKİLEŞİMLERİ
       if (interaction.isButton()) {
         // [A] "✅ Kayıt Ol" ve "🇬🇧 Register (English)" Paneli Butonları
         if (interaction.customId === 'btn_kayit_ol' || interaction.customId === 'btn_kayit_ol_en') {
@@ -75,19 +104,12 @@ module.exports = {
           }
           const isEn = isEnClick || resolveLang(interaction) === 'en';
 
-          // Kontrol 1: Zaten Kayıtlı mı? (Piyade veya Diğer Klan)
+          // Kontrol 1: Zaten Kayıtlı mı?
           if (config.isRegisteredMember(interaction.member)) {
-            const hasOtherClan = Boolean(
-              config.ROLES?.OTHER_CLAN && interaction.member.roles.cache.has(config.ROLES.OTHER_CLAN)
-            );
             return interaction.reply({
-              content: hasOtherClan
-                ? (isEn
-                    ? '❌ You are already registered (Other Clan member). Please contact staff to switch to Piyade Clan.'
-                    : '❌ Zaten kayıtlısınız (Diğer Klan üyesi). Piyade Klanına geçmek için yetkililere ulaşın.')
-                : (isEn
-                    ? '❌ You are already registered on our server! You cannot submit another application.'
-                    : '❌ Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.'),
+              content: isEn
+                ? '❌ You are already registered on our server! You cannot submit another application.'
+                : '❌ Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
               ephemeral: true,
             });
           }
@@ -108,134 +130,36 @@ module.exports = {
             }
           }
 
-          // Kayıt Türü Seçimi (Ephemeral 2 Buton)
-          const typeRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder()
-              .setCustomId(isEn ? 'btn_reg_type_own_en' : 'btn_reg_type_own')
-              .setLabel(isEn ? '🛡️ I Want to Join the Piyade Clan' : '🛡️ Piyade Klanına Katılmak İstiyorum')
-              .setStyle(ButtonStyle.Primary),
-            new ButtonBuilder()
-              .setCustomId(isEn ? 'btn_reg_type_other_en' : 'btn_reg_type_other')
-              .setLabel(isEn ? '🏳️ I Already Have a Clan' : '🏳️ Bir Klanım Bulunmakta')
-              .setStyle(ButtonStyle.Secondary)
-          );
-
-          return interaction.reply({
-            content: isEn
-              ? `👋 Welcome <@${interaction.user.id}>! First, choose your registration type:\n\n` +
-                `• **🛡️ I Want to Join the Piyade Clan:** Apply to become a member of our clan (Grants Member role).\n` +
-                `• **🏳️ I Already Have a Clan:** Choose this if you belong to another clan (Grants Other Clan & Clan role; does NOT grant Registered Member role).`
-              : `👋 Hoş geldin <@${interaction.user.id}>! Önce kayıt türünü seç:\n\n` +
-                `• **🛡️ Piyade Klanına Katılmak İstiyorum:** Klanımıza katılmak için başvurursunuz (Kayıtlı Üye rolü verilir).\n` +
-                `• **🏳️ Bir Klanım Bulunmakta:** Başka bir klandaysanız seçiniz (Diğer Klan ve klan rolü verilir, Kayıtlı Üye rolü verilmez).`,
-            embeds: isEn ? [createEnglishRegisterGuideEmbed()] : [],
-            components: [typeRow],
-            ephemeral: true,
-          });
-        }
-
-        // [A1] Kayıt Türü Seçildiğinde Cinsiyet Seçimini Getiren Butonlar
-        if (
-          interaction.customId === 'btn_reg_type_own' ||
-          interaction.customId === 'btn_reg_type_own_en' ||
-          interaction.customId === 'btn_reg_type_other' ||
-          interaction.customId === 'btn_reg_type_other_en'
-        ) {
-          const isOther = interaction.customId.includes('other');
-          const isEn = interaction.customId.endsWith('_en') || resolveLang(interaction) === 'en';
-          if (isEn) {
-            await setMemberLanguage(interaction.member, 'en').catch(() => {});
-          }
-
-          const selectCustomId = isOther
-            ? (isEn ? 'select_gender_other_en' : 'select_gender_other')
-            : (isEn ? 'select_gender_own_en' : 'select_gender_own');
-
+          // Cinsiyet Seçim Menüsü
           const genderSelect = new StringSelectMenuBuilder()
-            .setCustomId(selectCustomId)
+            .setCustomId(isEn ? 'select_gender_en' : 'select_gender')
             .setPlaceholder(isEn ? 'Please select your gender...' : 'Lütfen Cinsiyetinizi Seçiniz...')
             .addOptions(
               new StringSelectMenuOptionBuilder()
                 .setLabel(isEn ? 'Male' : 'Erkek')
                 .setEmoji('👨')
                 .setValue('gender_erkek')
-                .setDescription(
-                  isEn
-                    ? (isOther ? 'Register as male member (Other Clan)' : 'Register as male member of Piyade Team')
-                    : (isOther ? 'Diğer klan erkek üye kaydı' : 'Piyade Team bünyesine erkek üye olarak kayıt')
-                ),
+                .setDescription(isEn ? 'Register as male member' : 'Erkek üye olarak kayıt'),
               new StringSelectMenuOptionBuilder()
                 .setLabel(isEn ? 'Female' : 'Kız')
                 .setEmoji('👩')
                 .setValue('gender_kiz')
-                .setDescription(
-                  isEn
-                    ? (isOther ? 'Register as female member (Other Clan)' : 'Register as female member of Piyade Team')
-                    : (isOther ? 'Diğer klan kadın üye kaydı' : 'Piyade Team bünyesine kadın üye olarak kayıt')
-                )
+                .setDescription(isEn ? 'Register as female member' : 'Kadın üye olarak kayıt')
             );
 
           const row = new ActionRowBuilder().addComponents(genderSelect);
 
-          return interaction.update({
-            content: isEn
-              ? `Selected: **${isOther ? '🏳️ Other Clan' : '🛡️ Piyade Clan'}**\nNow please select your **Gender** to open the registration form:`
-              : `Seçilen Kayıt Türü: **${isOther ? '🏳️ Bir Klanım Bulunmakta' : '🛡️ Piyade Klanına Katılmak İstiyorum'}**\nKayıt formunu açmak için lütfen aşağıdan **Cinsiyetinizi** seçiniz:`,
-            components: [row],
-          });
-        }
-
-        // [A2] Yetkili Başka Klan Başvurusunda "🏷️ Klanı Düzenle" Butonuna Bastığında
-        if (interaction.customId.startsWith('btn_clan_edit_')) {
-          const isStaff =
-            interaction.member.roles.cache.has(config.ROLES.STAFF) ||
-            interaction.member.permissions.has(PermissionFlagsBits.Administrator) ||
-            interaction.member.roles.cache.has(config.ROLES.TRYOUT_STAFF) ||
-            interaction.member.roles.cache.has(config.ROLES.DEVELOPER);
-
-          if (!isStaff) {
-            return interaction.reply({
-              content: '❌ Bu işlemi sadece yetkililer yapabilir!',
-              ephemeral: true,
-            });
-          }
-
-          const applicantId = interaction.customId.replace('btn_clan_edit_', '');
-          const activeApp = database.getActiveApplication(applicantId);
-          if (!activeApp || activeApp.registrationType !== 'other') {
-            return interaction.reply({
-              content: '❌ Aktif bir başka klan başvurusu bulunamadı!',
-              ephemeral: true,
-            });
-          }
-
-          const modal = new ModalBuilder()
-            .setCustomId(`modal_clan_edit_${applicantId}`)
-            .setTitle('Piyade Team | Klanı Düzenle');
-
-          const clanInput = new TextInputBuilder()
-            .setCustomId('modal_clan_name_edit')
-            .setLabel('Klan Adı')
-            .setValue(activeApp.clanTypedName || '')
-            .setPlaceholder('Örn: Dark Wolves')
-            .setStyle(TextInputStyle.Short)
-            .setMinLength(2)
-            .setMaxLength(32)
-            .setRequired(true);
-
-          modal.addComponents(new ActionRowBuilder().addComponents(clanInput));
-          return interaction.showModal(modal);
-        }
-
-        // [A2] İNGİLİZCE REHBER BUTONLARI
-        if (interaction.customId === 'btn_help_en_info') {
-          await setMemberLanguage(interaction.member, 'en').catch(() => {});
           return interaction.reply({
-            embeds: [createEnglishHelpGuideEmbed()],
+            content: isEn
+              ? `👋 Welcome <@${interaction.user.id}>! Please select your **Gender** to open the registration form:`
+              : `👋 Hoş geldin <@${interaction.user.id}>! Kayıt formunu açmak için lütfen aşağıdan **Cinsiyetinizi** seçiniz:`,
+            embeds: isEn ? [createEnglishRegisterGuideEmbed()] : [],
+            components: [row],
             ephemeral: true,
           });
         }
 
+        // [B] İSİM RENGİ İNGİLİZCE REHBER BUTONU
         if (interaction.customId === 'btn_color_en_info') {
           await setMemberLanguage(interaction.member, 'en').catch(() => {});
           return interaction.reply({
@@ -244,57 +168,25 @@ module.exports = {
           });
         }
 
-        if (interaction.customId === 'btn_tryout_panel_en') {
-          await setMemberLanguage(interaction.member, 'en').catch(() => {});
-          return interaction.reply({
-            embeds: [createEnglishTryoutPanelEmbed()],
-            ephemeral: true,
-          });
-        }
-
-        if (interaction.customId === 'btn_tryout_leaderboard_en') {
-          await setMemberLanguage(interaction.member, 'en').catch(() => {});
-          const payload = createEnglishTryoutLeaderboardEmbed();
-          return interaction.reply({
-            ...payload,
-            ephemeral: true,
-          });
-        }
-
-        if (interaction.customId.startsWith('btn_tryout_report_en_')) {
-          const formCode = interaction.customId.replace('btn_tryout_report_en_', '');
-          return handleTryoutReportEnglishButton(interaction, formCode);
-        }
-
-        // [B] YETKİLİ KART BUTONU: ✅ ONAYLA
+        // [C] YETKİLİ KART BUTONU: ✅ ONAYLA
         if (interaction.customId.startsWith('btn_approve_')) {
           const applicantId = interaction.customId.replace('btn_approve_', '');
           return handleApprove(interaction, applicantId);
         }
 
-        // [C] YETKİLİ KART BUTONU: ✖️ REDDET
+        // [D] YETKİLİ KART BUTONU: ✖️ REDDET
         if (interaction.customId.startsWith('btn_reject_')) {
           const applicantId = interaction.customId.replace('btn_reject_', '');
           return handleRejectButton(interaction, applicantId);
         }
 
-        // [G] ACİL YARDIM ÇAĞRISI BUTONU (btn_acil_yardim)
-        if (interaction.customId === 'btn_acil_yardim') {
-          return handleHelpRequest(interaction);
-        }
-
-        // [H] TRYOUT / SEVİYE DEĞERLENDİRME BUTONU (btn_tryout_degerlendir)
-        if (interaction.customId === 'btn_tryout_degerlendir') {
-          return handleTryoutStart(interaction);
-        }
-
-        // [I] İSİM RENGİ SEÇİM BUTONLARI (btn_color_...)
+        // [E] İSİM RENGİ SEÇİM BUTONLARI (btn_color_...)
         if (interaction.customId.startsWith('btn_color_')) {
           const roleId = interaction.customId.replace('btn_color_', '');
           return handleColorButton(interaction, roleId);
         }
 
-        // [J] UYARI SİSTEMİ: SÖZLÜ UYARI & RESMİ UYARI BUTONLARI
+        // [F] UYARI SİSTEMİ: SÖZLÜ UYARI & RESMİ UYARI BUTONLARI
         if (interaction.customId === 'btn_warn_verbal') {
           return handleWarningButton(interaction, 'verbal');
         }
@@ -302,7 +194,7 @@ module.exports = {
           return handleWarningButton(interaction, 'official');
         }
 
-        // [K] UYARI SİSTEMİ: KANIT GÖRSELİ YÜKLE / PAS GEÇ BUTONLARI
+        // [G] UYARI SİSTEMİ: KANIT GÖRSELİ YÜKLE / PAS GEÇ BUTONLARI
         if (interaction.customId.startsWith('btn_warn_proof_upload_')) {
           const warnId = interaction.customId.replace('btn_warn_proof_upload_', '');
           return handleProofButton(interaction, 'upload', warnId);
@@ -312,34 +204,30 @@ module.exports = {
           return handleProofButton(interaction, 'skip', warnId);
         }
 
-        // [L] UYARI LOG KANALINDAKİ "🇬🇧 English" ÇEVİRİ BUTONU (1563923439121604720)
+        // [H] UYARI LOG KANALINDAKİ "🇬🇧 English" ÇEVİRİ BUTONU
         if (interaction.customId.startsWith('btn_warn_log_en_')) {
           const warnId = interaction.customId.replace('btn_warn_log_en_', '');
           return handleWarningLogEnglishButton(interaction, warnId);
         }
       }
 
-      // 3. AÇILIR MENÜ (STRING SELECT MENU) ETKİLEŞİMLERİ
+      // 4. AÇILIR MENÜ (STRING SELECT MENU) ETKİLEŞİMLERİ
       if (interaction.isStringSelectMenu()) {
         if (
           interaction.customId === 'select_gender' ||
           interaction.customId === 'select_gender_en' ||
-          interaction.customId === 'select_gender_own' ||
-          interaction.customId === 'select_gender_own_en' ||
-          interaction.customId === 'select_gender_other' ||
-          interaction.customId === 'select_gender_other_en'
+          interaction.customId === 'select_kayit_cinsiyet'
         ) {
-          const isOther = interaction.customId.includes('other');
           const isEn = interaction.customId.endsWith('_en') || resolveLang(interaction) === 'en';
           const selectedGender = interaction.values[0]; // 'gender_erkek' veya 'gender_kiz'
 
-          const modalCustomId = isOther
-            ? (isEn ? `modal_kayit_other_${selectedGender}_en` : `modal_kayit_other_${selectedGender}`)
-            : (isEn ? `modal_kayit_own_${selectedGender}_en` : `modal_kayit_own_${selectedGender}`);
+          const modalCustomId = isEn
+            ? `modal_kayit_${selectedGender}_en`
+            : `modal_kayit_${selectedGender}`;
 
-          const modalTitle = isOther
-            ? (isEn ? 'Piyade Team | Registration (Other Clan)' : 'Piyade Team | Kayıt Formu (Başka Klan)')
-            : (isEn ? 'Piyade Team | Registration Form' : 'Piyade Team | Kayıt Formu');
+          const modalTitle = isEn
+            ? `${config.BRAND_NAME} | Registration Form`
+            : `${config.BRAND_NAME} | Kayıt Formu`;
 
           const modal = new ModalBuilder()
             .setCustomId(modalCustomId)
@@ -383,30 +271,13 @@ module.exports = {
             new ActionRowBuilder().addComponents(genderInput),
           ];
 
-          if (isOther) {
-            const clanInput = new TextInputBuilder()
-              .setCustomId('modal_clan_name')
-              .setLabel(isEn ? 'Which clan are you in?' : 'Hangi klandasın?')
-              .setPlaceholder(isEn ? 'e.g. Dark Wolves' : 'Örn: Dark Wolves')
-              .setStyle(TextInputStyle.Short)
-              .setMinLength(2)
-              .setMaxLength(32)
-              .setRequired(true);
-
-            rows.push(new ActionRowBuilder().addComponents(clanInput));
-          }
-
           modal.addComponents(rows);
           return interaction.showModal(modal);
         }
       }
 
-      // 4. USER SELECT MENU (TRYOUT & UYARI KULLANICI SEÇİMİ)
+      // 5. USER SELECT MENU (UYARI KULLANICI SEÇİMİ)
       if (interaction.isUserSelectMenu()) {
-        if (interaction.customId === 'select_tryout_user') {
-          return handleTryoutUserSelected(interaction);
-        }
-
         if (interaction.customId === 'select_warn_verbal_user') {
           return handleWarningUserSelected(interaction, 'verbal');
         }
@@ -416,17 +287,11 @@ module.exports = {
         }
       }
 
-      // 5. MODAL GÖNDERİMLERİ (MODAL SUBMIT)
+      // 6. MODAL GÖNDERİMLERİ (MODAL SUBMIT)
       if (interaction.isModalSubmit()) {
         // [A] Kullanıcı Kayıt Formu Gönderimi
         if (interaction.customId.startsWith('modal_kayit_')) {
           return handleRegistrationModalSubmit(interaction);
-        }
-
-        // [A1] Yetkili Klan Düzenleme Formu Gönderimi
-        if (interaction.customId.startsWith('modal_clan_edit_')) {
-          const applicantId = interaction.customId.replace('modal_clan_edit_', '');
-          return handleClanEditModalSubmit(interaction, applicantId);
         }
 
         // [B] Yetkili Red Sebebi Formu Gönderimi
@@ -435,19 +300,13 @@ module.exports = {
           return handleRejectModalSubmit(interaction, applicantId);
         }
 
-        // [C] Tryout Seviye Değerlendirme Formu Gönderimi
-        if (interaction.customId.startsWith('modal_tryout_eval_')) {
-          const targetUserId = interaction.customId.replace('modal_tryout_eval_', '');
-          return handleTryoutModalSubmit(interaction, targetUserId);
-        }
-
-        // [D] Sözlü Uyarı Formu Gönderimi
+        // [C] Sözlü Uyarı Formu Gönderimi
         if (interaction.customId.startsWith('modal_warn_verbal_')) {
           const targetUserId = interaction.customId.replace('modal_warn_verbal_', '');
           return handleVerbalWarnModalSubmit(interaction, targetUserId);
         }
 
-        // [E] Resmi Uyarı (Madde No) Formu Gönderimi
+        // [D] Resmi Uyarı (Madde No) Formu Gönderimi
         if (interaction.customId.startsWith('modal_warn_official_')) {
           const targetUserId = interaction.customId.replace('modal_warn_official_', '');
           return handleOfficialWarnModalSubmit(interaction, targetUserId);
@@ -479,17 +338,9 @@ async function handleRegistrationModalSubmit(interaction) {
     interaction.customId.startsWith('modal_kayit_en_') ||
     interaction.customId.endsWith('_en');
   const isEn = isEnModal || resolveLang(interaction) === 'en';
-  const isOther = interaction.customId.includes('_other_');
 
   const realName = interaction.fields.getTextInputValue('modal_real_name').trim();
   const robloxInput = interaction.fields.getTextInputValue('modal_roblox_input').trim();
-
-  let clanName = null;
-  if (isOther) {
-    try {
-      clanName = interaction.fields.getTextInputValue('modal_clan_name')?.trim() || null;
-    } catch (e) {}
-  }
 
   // Formda yazılan cinsiyet okunuyor (Türkçe ve İngilizce girdileri destekler)
   let inputGender = '';
@@ -507,8 +358,6 @@ async function handleRegistrationModalSubmit(interaction) {
     realName,
     gender,
     robloxInput,
-    registrationType: isOther ? 'other' : 'own',
-    clanName,
     source: 'discord',
     lang: isEn ? 'en' : 'tr',
   });
@@ -523,115 +372,6 @@ async function handleRegistrationModalSubmit(interaction) {
     content: isEn
       ? `✅ Your registration application has been submitted! You can follow your application in your private thread: <#${result.threadId}>`
       : `✅ Başvurunuz başarıyla alındı! Size özel oluşturulan kayıt odasını takip edebilirsiniz: <#${result.threadId}>`,
-  });
-}
-
-/**
- * Yetkili 🏷️ Klanı Düzenle modalını gönderdiğinde çalışan fonksiyon.
- */
-async function handleClanEditModalSubmit(interaction, applicantId) {
-  const isStaff =
-    interaction.member.roles.cache.has(config.ROLES.STAFF) ||
-    interaction.member.permissions.has(PermissionFlagsBits.Administrator) ||
-    interaction.member.roles.cache.has(config.ROLES.TRYOUT_STAFF) ||
-    interaction.member.roles.cache.has(config.ROLES.DEVELOPER);
-
-  if (!isStaff) {
-    return interaction.reply({
-      content: '❌ Bu işlemi sadece yetkililer yapabilir!',
-      ephemeral: true,
-    });
-  }
-
-  await interaction.deferReply({ ephemeral: true });
-
-  const activeApp = database.getActiveApplication(applicantId);
-  if (!activeApp || activeApp.registrationType !== 'other') {
-    return interaction.editReply({
-      content: '❌ Aktif bir başka klan başvurusu bulunamadı veya sonuçlanmış!',
-    });
-  }
-
-  const rawClanName = interaction.fields.getTextInputValue('modal_clan_name_edit')?.trim() || '';
-  const sanitized = clanMatcher.sanitizeClanName(rawClanName);
-  if (!sanitized.valid) {
-    return interaction.editReply({
-      content:
-        sanitized.error === 'CLAN_BLOCKED'
-          ? '❌ Girdiğiniz klan adı uygunsuz içerik (etiket, link veya küfür) barındırdığı için reddedildi.'
-          : '❌ Geçersiz klan adı! 2-32 karakter olmalı ve harf içermelidir.',
-    });
-  }
-
-  const registryRoles = database.getClanRoles();
-  const safeGuildRoles = Array.from(interaction.guild.roles.cache.values()).filter((r) =>
-    clanMatcher.isSafeClanRole(r, interaction.guild, config, database)
-  );
-  const knownClans = database.getKnownClans();
-
-  const resolution = clanMatcher.resolveClan(sanitized.cleanName, {
-    registryRoles,
-    safeGuildRoles,
-    knownClans,
-    ownClanAliases: config.OWN_CLAN_ALIASES,
-  });
-
-  if (resolution.ownClan) {
-    return interaction.editReply({
-      content: '❌ Başka klan alanına Piyade klanının adı yazılamaz!',
-    });
-  }
-
-  resolution.forcedByStaff = true;
-
-  // Veritabanını güncelle
-  database.setActiveApplication(applicantId, {
-    ...activeApp,
-    clanTypedName: sanitized.cleanName,
-    clanResolution: resolution,
-  });
-
-  // Yetkili onay kartını güncelle
-  if (activeApp.staffChannelId && activeApp.staffMessageId) {
-    try {
-      const staffChannel = await interaction.guild.channels.fetch(activeApp.staffChannelId).catch(() => null);
-      if (staffChannel) {
-        const staffMsg = await staffChannel.messages.fetch(activeApp.staffMessageId).catch(() => null);
-        if (staffMsg && staffMsg.embeds.length > 0) {
-          const oldEmbed = staffMsg.embeds[0];
-          let roleDecisionText = '';
-          if (resolution.mode === 'existing') {
-            roleDecisionText = `✅ Mevcut rol kullanılacak: <@&${resolution.roleId}> (%${Math.round(resolution.score * 100)}) [Yetkili Düzenledi]`;
-          } else if (resolution.mode === 'suggested') {
-            const candidateList = (resolution.candidates || [])
-              .map((c) => `• <@&${c.roleId}> (%${Math.round(c.score * 100)})`)
-              .join('\n');
-            roleDecisionText = `⚠️ Benzer rol bulundu: <@&${resolution.roleId}> (%${Math.round(resolution.score * 100)}) [Yetkili Düzenledi]\n${candidateList}`;
-          } else {
-            roleDecisionText = `🆕 Yeni rol oluşturulacak: **${resolution.displayName}** [Yetkili Düzenledi]`;
-          }
-
-          const updatedFields = oldEmbed.fields.map((f) => {
-            if (f.name === '🏷️ Yazdığı Klan') {
-              return { ...f, value: `\`${sanitized.cleanName}\` *(Yetkili tarafından güncellendi)*` };
-            }
-            if (f.name === '🧩 Rol Kararı') {
-              return { ...f, value: roleDecisionText };
-            }
-            return f;
-          });
-
-          const newEmbed = EmbedBuilder.from(oldEmbed).setFields(updatedFields);
-          await staffMsg.edit({ embeds: [newEmbed] });
-        }
-      }
-    } catch (e) {
-      console.warn('[CLAN EDIT EMBED UPDATE ERROR]:', e.message);
-    }
-  }
-
-  return interaction.editReply({
-    content: `✅ <@${applicantId}> adlı üyenin klanı **${sanitized.cleanName}** olarak güncellendi ve karar kaydedildi!`,
   });
 }
 
@@ -678,119 +418,18 @@ async function handleApprove(interaction, applicantId) {
       });
     }
 
-    const isOtherClan = activeApp.registrationType === 'other';
     const isApplicantEn = activeApp?.lang === 'en' || resolveLang(applicantMember || applicantId) === 'en';
     if (isApplicantEn) {
       await setMemberLanguage(applicantMember, 'en').catch(() => {});
     }
 
-    let assignedRoleId = null;
-    let isRoleCreated = false;
-
-    // 1. Rolleri Belirleme
+    // 1. Rolleri Belirleme (APPROVED_ROLES)
     const rolesToGive = [];
-
-    if (isOtherClan) {
-      // Başka Klan akışı: OTHER_CLAN ve VERIFIED verilir, REGISTERED_CHECK ASLA VERİLMEZ
-      if (config.ROLES.OTHER_CLAN) rolesToGive.push(config.ROLES.OTHER_CLAN);
-      if (config.ROLES.VERIFIED) rolesToGive.push(config.ROLES.VERIFIED);
-
-      // Klan Rolünü Çözümleme
-      const clanRes = activeApp.clanResolution || {};
-      let targetRole = null;
-
-      if (clanRes.mode === 'existing' || clanRes.mode === 'suggested') {
-        if (clanRes.roleId) {
-          const fetchedRole = interaction.guild.roles.cache.get(clanRes.roleId);
-          if (fetchedRole && clanMatcher.isSafeClanRole(fetchedRole, interaction.guild, config, database)) {
-            targetRole = fetchedRole;
-            assignedRoleId = fetchedRole.id;
-            isRoleCreated = false;
-          }
-        }
-      }
-
-      // Rol bulunamadıysa veya 'new' modundaysa
-      if (!targetRole) {
-        const targetName = clanRes.displayName || activeApp.clanTypedName || 'Klan';
-        const normCompact = clanMatcher.normalizeClanName(targetName).compact;
-
-        // Çift rol açılmasını önlemek için klan compact lock ve registry kontrolü
-        const registryMatch = database.getClanRoles().find((cr) => cr.compact === normCompact);
-        if (registryMatch && interaction.guild.roles.cache.has(registryMatch.roleId)) {
-          assignedRoleId = registryMatch.roleId;
-          isRoleCreated = false;
-        } else {
-          // Güvenli roller arasında compact tam eşleşen var mı?
-          const guildMatch = Array.from(interaction.guild.roles.cache.values()).find(
-            (r) =>
-              clanMatcher.normalizeClanName(r.name).compact === normCompact &&
-              clanMatcher.isSafeClanRole(r, interaction.guild, config, database)
-          );
-
-          if (guildMatch) {
-            assignedRoleId = guildMatch.id;
-            isRoleCreated = false;
-          } else {
-            // Sunucu rol sınırı kontrolü (CLAN.MAX_GUILD_ROLES = 245)
-            const maxRoles = config.CLAN?.MAX_GUILD_ROLES || 245;
-            if (interaction.guild.roles.cache.size >= maxRoles) {
-              return interaction.editReply({
-                content: `❌ Sunucudaki maksimum rol sınırına (${maxRoles}) ulaşıldığı için yeni klan rolü oluşturulamadı! Lütfen sunucu rollerini temizleyiniz veya mevcut bir rol seçiniz. Başvuru aktif tutuldu.`,
-              });
-            }
-
-            clanRoleCreationLocks.add(normCompact);
-            try {
-              const newRole = await interaction.guild.roles.create({
-                name: targetName,
-                color: config.CLAN?.ROLE_COLOR || 0x95A5A6,
-                hoist: false,
-                mentionable: false,
-                permissions: [],
-                reason: `Klan rolü (otomatik) - ${activeApp.clanTypedName} - Yetkili: ${interaction.user.tag}`,
-              });
-
-              // Rolü Other Clan rolünün hemen altına yerleştir
-              const otherClanRole = interaction.guild.roles.cache.get(config.ROLES.OTHER_CLAN);
-              if (otherClanRole && newRole.position < otherClanRole.position) {
-                await newRole.setPosition(Math.max(1, otherClanRole.position - 1)).catch(() => {});
-              }
-
-              database.addClanRole({
-                roleId: newRole.id,
-                name: newRole.name,
-                normalized: clanMatcher.normalizeClanName(newRole.name).full,
-                compact: normCompact,
-                aliases: activeApp.clanTypedName ? [activeApp.clanTypedName] : [],
-                source: 'bot',
-                createdBy: interaction.user.id,
-                createdAt: Date.now(),
-              });
-
-              assignedRoleId = newRole.id;
-              isRoleCreated = true;
-            } finally {
-              clanRoleCreationLocks.delete(normCompact);
-            }
-          }
-        }
-      }
-
-      if (assignedRoleId) {
-        rolesToGive.push(assignedRoleId);
-        if (activeApp.clanTypedName) {
-          database.addClanAlias(assignedRoleId, activeApp.clanTypedName);
-        }
-      }
-    } else {
-      // Piyade Klanı akışı (mevcut APPROVED_ROLES)
-      for (const rId of config.ROLES.APPROVED_ROLES || []) {
-        if (rId) rolesToGive.push(rId);
-      }
+    for (const rId of config.ROLES.APPROVED_ROLES || []) {
+      if (rId) rolesToGive.push(rId);
     }
 
-    // 2. Rolleri Üyeye Ver (Hata durumunda başvuru aktif kalır, güvenli/idempotent)
+    // 2. Rolleri Üyeye Ver (Hata durumunda başvuru aktif kalır)
     for (const roleId of rolesToGive) {
       if (roleId && interaction.guild.roles.cache.has(roleId)) {
         try {
@@ -841,10 +480,6 @@ async function handleApprove(interaction, applicantId) {
       robloxUsername: activeApp ? activeApp.robloxUsername : null,
       realName: activeApp ? activeApp.realName : null,
       gender: activeApp ? activeApp.gender : null,
-      registrationType: isOtherClan ? 'other' : 'own',
-      clanName: isOtherClan ? activeApp.clanTypedName : null,
-      clanRoleId: isOtherClan ? assignedRoleId : null,
-      clanRoleCreated: Boolean(isRoleCreated),
       approvedBy: interaction.user.id,
       approvedAt: Date.now(),
     });
@@ -859,27 +494,12 @@ async function handleApprove(interaction, applicantId) {
         const oldEmbed = interaction.message.embeds[0];
         const updatedEmbed = EmbedBuilder.from(oldEmbed)
           .setColor(config.COLORS.SUCCESS)
-          .setTitle(
-            isOtherClan
-              ? '✅ Kayıt Başvurusu Onaylandı (Başka Klan)'
-              : '✅ Kayıt Başvurusu Onaylandı'
-          )
+          .setTitle('✅ Kayıt Başvurusu Onaylandı')
           .addFields({
             name: '👮 Onaylayan Yetkili',
             value: `<@${interaction.user.id}> (\`${interaction.user.tag}\`)`,
             inline: false,
           });
-
-        if (isOtherClan && assignedRoleId) {
-          updatedEmbed.addFields(
-            { name: '🏷️ Klan', value: `<@&${assignedRoleId}>`, inline: true },
-            {
-              name: '🧩 Rol Durumu',
-              value: isRoleCreated ? '`Yeni oluşturuldu`' : '`Mevcut rol kullanıldı`',
-              inline: true,
-            }
-          );
-        }
 
         await interaction.message.edit({
           embeds: [updatedEmbed],
@@ -892,21 +512,11 @@ async function handleApprove(interaction, applicantId) {
 
     // 8. Kullanıcıya DM Gönder (TR/EN)
     try {
-      if (isOtherClan) {
-        await applicantMember.user.send(
-          isApplicantEn
-            ? `🎉 Congratulations! Your registration application in **Piyade Team | TSB** has been **approved** by <@${interaction.user.id}>.\n` +
-              `Your clan role (${assignedRoleId ? `<@&${assignedRoleId}>` : `**${activeApp.clanTypedName}**`}) and member roles have been assigned. Welcome!`
-            : `🎉 Tebrikler! **Piyade Team | TSB** sunucusundaki başka klan kaydınız <@${interaction.user.id}> tarafından **onaylandı**.\n` +
-              `Klan rolünüz (${assignedRoleId ? `<@&${assignedRoleId}>` : `**${activeApp.clanTypedName}**`}) ve sunucu rolleriniz hesabınıza tanımlandı. İyi eğlenceler dileriz!`
-        );
-      } else {
-        await applicantMember.user.send(
-          isApplicantEn
-            ? `🎉 Congratulations! Your registration application in **Piyade Team | TSB** has been **approved** by <@${interaction.user.id}>.\nYour member roles have been assigned. Have fun!`
-            : `🎉 Tebrikler! **Piyade Team | TSB** sunucusundaki kayıt başvurunuz <@${interaction.user.id}> tarafından **onaylandı**.\nRolleriniz hesabınıza tanımlandı. İyi eğlenceler dileriz!`
-        );
-      }
+      await applicantMember.user.send(
+        isApplicantEn
+          ? `🎉 Congratulations! Your registration application in **${config.BRAND_NAME}** has been **approved** by <@${interaction.user.id}>.\nYour member roles have been assigned. Have fun!`
+          : `🎉 Tebrikler! **${config.BRAND_NAME}** sunucusundaki kayıt başvurunuz <@${interaction.user.id}> tarafından **onaylandı**.\nRolleriniz hesabınıza tanımlandı. İyi eğlenceler dileriz!`
+      );
     } catch (e) {}
 
     // 9. Özel Kayıt Odasını Sil
@@ -1063,11 +673,11 @@ async function handleRejectModalSubmit(interaction, applicantId) {
     try {
       await applicantMember.user.send(
         isApplicantEn
-          ? `✖️ Your registration application in **Piyade Team | TSB** was rejected.\n\n` +
+          ? `✖️ Your registration application in **${config.BRAND_NAME}** was rejected.\n\n` +
             `**Reviewed By:** <@${interaction.user.id}>\n` +
             `**Reason:**\n> ${rejectReason}\n\n` +
             `Please correct your information and re-apply using the registration panel.`
-          : `✖️ **Piyade Team | TSB** sunucusundaki kayıt başvurunuz reddedildi.\n\n` +
+          : `✖️ **${config.BRAND_NAME}** sunucusundaki kayıt başvurunuz reddedildi.\n\n` +
             `**Reddeden Yetkili:** <@${interaction.user.id}>\n` +
             `**Red Sebebi:**\n> ${rejectReason}\n\n` +
             `Eksik veya hatalı bilgilerinizi düzelterek kayıt kanalındaki panelden tekrar başvurabilirsiniz.`

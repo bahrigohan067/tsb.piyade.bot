@@ -402,7 +402,7 @@ function createWarningPanel() {
       `${LINE_DIVIDER}`
     )
     .setFooter({
-      text: 'Piyade Team | TSB • Sunucu Disiplin & Uyarı Sistemi',
+      text: `${config.BRAND_NAME} • Sunucu Disiplin & Uyarı Sistemi`,
     })
     .setTimestamp();
 

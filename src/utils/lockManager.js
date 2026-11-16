@@ -121,7 +121,6 @@ async function handleLockCommand(message) {
       const rolesToRestrict = new Set([
         ...(config.ROLES.APPROVED_ROLES || []),
         config.ROLES.REGISTERED_CHECK,
-        config.ROLES.OTHER_CLAN,
         config.ROLES.UNREGISTERED,
       ].filter(Boolean));
 
@@ -338,7 +337,6 @@ async function fallbackUnlockOverwrites(channel, guild, reason) {
   const memberRoles = new Set([
     ...(config.ROLES.APPROVED_ROLES || []),
     config.ROLES.REGISTERED_CHECK,
-    config.ROLES.OTHER_CLAN,
   ].filter(Boolean));
 
   for (const roleId of memberRoles) {

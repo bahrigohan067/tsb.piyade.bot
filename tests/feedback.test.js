@@ -121,7 +121,7 @@ function createMockDiscordSetup() {
       makeMember({
         id: '1009',
         username: 'other_clan_uye',
-        roleIds: [config.ROLES.OTHER_CLAN],
+        roleIds: [config.ROLES.REGISTERED_CHECK],
       }),
     ],
   ]);
@@ -272,7 +272,7 @@ test('1. Normal gönderim, embed formatı, sahte gövde ID yoksayma ve gizli log
     assert.equal(embedData.color, config.COLORS.PRIMARY);
     assert.ok(embedData.description.startsWith('```\n'));
     assert.ok(embedData.description.endsWith('\n```'));
-    assert.equal(embedData.footer.text, 'Piyade Clan | TSB Web Sitesi');
+    assert.equal(embedData.footer.text, `${config.BRAND_NAME} Web Sitesi`);
     assert.ok(embedData.timestamp);
 
     const fieldMap = Object.fromEntries(embedData.fields.map((f) => [f.name, f.value]));

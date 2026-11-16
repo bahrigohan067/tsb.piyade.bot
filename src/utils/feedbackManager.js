@@ -246,7 +246,7 @@ function buildFeedbackEmbed({ id, userId, usernameSnapshot, message, page, lang,
         inline: true,
       }
     )
-    .setFooter({ text: 'Piyade Clan | TSB Web Sitesi' })
+    .setFooter({ text: `${config.BRAND_NAME} Web Sitesi` })
     .setTimestamp(createdAt);
 }
 
