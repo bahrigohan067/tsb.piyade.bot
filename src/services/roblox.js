@@ -154,6 +154,8 @@ class RobloxService {
         id: userData.id,
         name: userData.name,
         displayName: userData.displayName || userData.name,
+        description: userData.description || '',
+        hasVerifiedBadge: Boolean(userData.hasVerifiedBadge),
         profileUrl: `https://www.roblox.com/users/${userData.id}/profile`,
         avatarUrl: avatarUrl,
         createdAt: userData.created,

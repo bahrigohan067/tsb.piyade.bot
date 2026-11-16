@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const config = require('../../../config');
+const gamesConfig = require('../../../games.config');
 const database = require('../../utils/database');
 const { createRegistrationApplication } = require('../../services/registrationService');
 const { parseGenderInput } = require('../../utils/i18n');
@@ -44,6 +45,8 @@ async function getApplicationStatus(req, res) {
         application: {
           threadId: activeApp.threadId || null,
           robloxUsername: activeApp.robloxUsername || null,
+          games: activeApp.games || [],
+          gameUsernames: activeApp.gameUsernames || {},
           realName: activeApp.realName || null,
           gender: activeApp.gender || null,
           createdAt: activeApp.createdAt || null,
@@ -84,10 +87,10 @@ router.get('/:id', getApplicationStatus);
 
 /**
  * POST /api/register
- * Site kayıt formu (gerçek ad, cinsiyet, Roblox nick/ID/link).
+ * Site kayıt formu (gerçek ad/takma ad, cinsiyet, seçilen oyunlar + kullanıcı adları veya robloxInput).
  */
 router.post('/', async (req, res) => {
-  const { realName, gender, robloxInput, lang } = req.body;
+  const { realName, gender, robloxInput, games, gameUsernames, lang } = req.body;
   const discordId = req.body.discordId || req.headers['x-actor-id'];
   const reqLang = lang === 'en' ? 'en' : 'tr';
   const isEn = reqLang === 'en';
@@ -106,7 +109,7 @@ router.post('/', async (req, res) => {
     return res.status(400).json({
       error: isEn
         ? 'Invalid real name (must be between 2 and 32 characters).'
-        : 'Geçersiz gerçek ad (en az 2, en fazla 32 karakter olmalıdır).',
+        : 'Geçersiz ad / takma ad (en az 2, en fazla 32 karakter olmalıdır).',
       code: 'INVALID_REAL_NAME',
     });
   }
@@ -114,13 +117,21 @@ router.post('/', async (req, res) => {
   const parsedGender = parseGenderInput(gender);
   const formattedGender = parsedGender.tr;
 
-  if (!robloxInput || typeof robloxInput !== 'string' || robloxInput.trim().length < 1) {
-    return res.status(400).json({
-      error: isEn
-        ? 'Invalid Roblox info (Username, User ID, or Profile link required).'
-        : 'Geçersiz Roblox bilgisi (Kullanıcı adı, ID veya Profil Linki girilmelidir).',
-      code: 'INVALID_ROBLOX_INPUT',
-    });
+  let normalizedGames = gamesConfig.normalizeGameList(Array.isArray(games) ? games : []);
+  const cleanUsernames =
+    gameUsernames && typeof gameUsernames === 'object' ? { ...gameUsernames } : {};
+
+  if (normalizedGames.length === 0) {
+    if (!robloxInput || typeof robloxInput !== 'string' || robloxInput.trim().length < 1) {
+      return res.status(400).json({
+        error: isEn
+          ? 'Please select at least 1 game or provide Roblox info.'
+          : 'En az 1 oyun seçilmeli veya Roblox kullanıcı bilgisi girilmelidir.',
+        code: 'INVALID_ROBLOX_INPUT',
+      });
+    }
+    normalizedGames = ['roblox'];
+    cleanUsernames.roblox = robloxInput.trim();
   }
 
   try {
@@ -140,7 +151,9 @@ router.post('/', async (req, res) => {
       user: member.user,
       realName: realName.trim(),
       gender: formattedGender,
-      robloxInput: robloxInput.trim(),
+      games: normalizedGames,
+      gameUsernames: cleanUsernames,
+      robloxInput: cleanUsernames.roblox || (robloxInput ? String(robloxInput).trim() : null),
       source: 'site',
       lang: reqLang,
     });
@@ -157,6 +170,8 @@ router.post('/', async (req, res) => {
       message: result.message,
       threadId: result.threadId,
       threadUrl: result.threadUrl,
+      games: result.games,
+      gameUsernames: result.gameUsernames,
       robloxUser: result.robloxUser,
     });
   } catch (err) {

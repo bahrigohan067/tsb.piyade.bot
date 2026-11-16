@@ -7,14 +7,16 @@ const {
   TextInputBuilder,
   TextInputStyle,
   EmbedBuilder,
-  ButtonBuilder,
-  ButtonStyle,
   PermissionFlagsBits,
 } = require('discord.js');
 
 const config = require('../../config');
+const gamesConfig = require('../../games.config');
 const database = require('../utils/database');
-const { createEnglishRegisterGuideEmbed } = require('../utils/panel');
+const {
+  buildGameAndGenderSelectionPayload,
+  buildRegistrationModal,
+} = require('../utils/panel');
 const { handleColorButton, createEnglishColorGuideEmbed } = require('../utils/colorManager');
 const {
   handleWarningButton,
@@ -62,271 +64,90 @@ function isLegacyInteraction(customId) {
   return legacyPatterns.some((pattern) => customId.toLowerCase().includes(pattern));
 }
 
-module.exports = {
-  name: Events.InteractionCreate,
-  async execute(interaction) {
-    try {
-      // 0. AUTOCOMPLETE ETKİLEŞİMLERİ
-      if (interaction.isAutocomplete()) {
-        const command = interaction.client.commands.get(interaction.commandName);
-        if (command && typeof command.autocomplete === 'function') {
-          await command.autocomplete(interaction);
-        }
-        return;
-      }
+/**
+ * Üyenin kayıt başvurusu onay/ret yetkisine sahip olup olmadığını kontrol eder
+ */
+function hasRegistrationStaffPermission(member) {
+  if (!member) return false;
+  return (
+    member.roles?.cache?.has(config.ROLES.STAFF) ||
+    member.roles?.cache?.has(config.ROLES.STAFF_GENERAL) ||
+    member.roles?.cache?.has(config.ROLES.TRYOUT_STAFF) ||
+    member.roles?.cache?.has(config.ROLES.DEVELOPER) ||
+    member.roles?.cache?.has(config.ROLES.FOUNDER) ||
+    member.roles?.cache?.has(config.ROLES.COMMUNITY_OFFICIAL) ||
+    Boolean(member.permissions?.has(PermissionFlagsBits.Administrator))
+  );
+}
 
-      // 1. SLASH KOMUTLAR
-      if (interaction.isChatInputCommand()) {
-        const command = interaction.client.commands.get(interaction.commandName);
-        if (!command) return;
-        await command.execute(interaction);
-        return;
-      }
+/**
+ * Oyun ve cinsiyet seçim butonlarına (reg_act:...) tıklanmasını yönetir
+ */
+async function handleRegistrationSelectionAction(interaction) {
+  const parts = interaction.customId.split(':');
+  // Format: reg_act:<gameCodes>:<genderCode>:<langCode>:<action>
+  const gameCodesRaw = parts[1] || '0';
+  const genderCode = parts[2] || 'u';
+  const langCode = parts[3] || 'tr';
+  const action = parts[4] || '';
 
-      // 2. KALDIRILAN ESKİ SİSTEMLERİN ETKİLEŞİM YAKALAYICISI (GÜVENLİ GERİ DÖNÜŞ)
-      if (interaction.customId && isLegacyInteraction(interaction.customId)) {
-        const isEn = interaction.customId.endsWith('_en') || resolveLang(interaction) === 'en';
-        return interaction.reply({
-          content: isEn
-            ? '⚠️ This feature has been removed. / Bu özellik kaldırıldı.'
-            : '⚠️ Bu özellik kaldırıldı. / This feature has been removed.',
-          ephemeral: true,
-        }).catch(() => {});
-      }
+  const state = gamesConfig.decodeRegState(`${gameCodesRaw}:${genderCode}:${langCode}`);
+  const isEn = state.lang === 'en';
 
-      // 3. BUTON ETKİLEŞİMLERİ
-      if (interaction.isButton()) {
-        // [A] "✅ Kayıt Ol" ve "🇬🇧 Register (English)" Paneli Butonları
-        if (interaction.customId === 'btn_kayit_ol' || interaction.customId === 'btn_kayit_ol_en') {
-          const isEnClick = interaction.customId === 'btn_kayit_ol_en';
-          if (isEnClick) {
-            await setMemberLanguage(interaction.member, 'en').catch(() => {});
-          }
-          const isEn = isEnClick || resolveLang(interaction) === 'en';
+  if (config.isRegisteredMember(interaction.member)) {
+    return interaction.reply({
+      content: isEn
+        ? '❌ You are already registered on our server! You cannot submit another application.'
+        : '❌ Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
+      ephemeral: true,
+    });
+  }
 
-          // Kontrol 1: Zaten Kayıtlı mı?
-          if (config.isRegisteredMember(interaction.member)) {
-            return interaction.reply({
-              content: isEn
-                ? '❌ You are already registered on our server! You cannot submit another application.'
-                : '❌ Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
-              ephemeral: true,
-            });
-          }
-
-          // Kontrol 2: Aktif Başvurusu Var mı?
-          const activeApp = database.getActiveApplication(interaction.user.id);
-          if (activeApp && activeApp.threadId) {
-            const existingThread = await interaction.guild.channels.fetch(activeApp.threadId).catch(() => null);
-            if (existingThread) {
-              return interaction.reply({
-                content: isEn
-                  ? `⚠️ You already have an active registration application! Please check your registration thread: <#${activeApp.threadId}>`
-                  : `⚠️ Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: <#${activeApp.threadId}>`,
-                ephemeral: true,
-              });
-            } else {
-              database.removeActiveApplication(interaction.user.id);
-            }
-          }
-
-          // Cinsiyet Seçim Menüsü
-          const genderSelect = new StringSelectMenuBuilder()
-            .setCustomId(isEn ? 'select_gender_en' : 'select_gender')
-            .setPlaceholder(isEn ? 'Please select your gender...' : 'Lütfen Cinsiyetinizi Seçiniz...')
-            .addOptions(
-              new StringSelectMenuOptionBuilder()
-                .setLabel(isEn ? 'Male' : 'Erkek')
-                .setEmoji('👨')
-                .setValue('gender_erkek')
-                .setDescription(isEn ? 'Register as male member' : 'Erkek üye olarak kayıt'),
-              new StringSelectMenuOptionBuilder()
-                .setLabel(isEn ? 'Female' : 'Kız')
-                .setEmoji('👩')
-                .setValue('gender_kiz')
-                .setDescription(isEn ? 'Register as female member' : 'Kadın üye olarak kayıt')
-            );
-
-          const row = new ActionRowBuilder().addComponents(genderSelect);
-
-          return interaction.reply({
-            content: isEn
-              ? `👋 Welcome <@${interaction.user.id}>! Please select your **Gender** to open the registration form:`
-              : `👋 Hoş geldin <@${interaction.user.id}>! Kayıt formunu açmak için lütfen aşağıdan **Cinsiyetinizi** seçiniz:`,
-            embeds: isEn ? [createEnglishRegisterGuideEmbed()] : [],
-            components: [row],
-            ephemeral: true,
-          });
-        }
-
-        // [B] İSİM RENGİ İNGİLİZCE REHBER BUTONU
-        if (interaction.customId === 'btn_color_en_info') {
-          await setMemberLanguage(interaction.member, 'en').catch(() => {});
-          return interaction.reply({
-            embeds: [createEnglishColorGuideEmbed()],
-            ephemeral: true,
-          });
-        }
-
-        // [C] YETKİLİ KART BUTONU: ✅ ONAYLA
-        if (interaction.customId.startsWith('btn_approve_')) {
-          const applicantId = interaction.customId.replace('btn_approve_', '');
-          return handleApprove(interaction, applicantId);
-        }
-
-        // [D] YETKİLİ KART BUTONU: ✖️ REDDET
-        if (interaction.customId.startsWith('btn_reject_')) {
-          const applicantId = interaction.customId.replace('btn_reject_', '');
-          return handleRejectButton(interaction, applicantId);
-        }
-
-        // [E] İSİM RENGİ SEÇİM BUTONLARI (btn_color_...)
-        if (interaction.customId.startsWith('btn_color_')) {
-          const roleId = interaction.customId.replace('btn_color_', '');
-          return handleColorButton(interaction, roleId);
-        }
-
-        // [F] UYARI SİSTEMİ: SÖZLÜ UYARI & RESMİ UYARI BUTONLARI
-        if (interaction.customId === 'btn_warn_verbal') {
-          return handleWarningButton(interaction, 'verbal');
-        }
-        if (interaction.customId === 'btn_warn_official') {
-          return handleWarningButton(interaction, 'official');
-        }
-
-        // [G] UYARI SİSTEMİ: KANIT GÖRSELİ YÜKLE / PAS GEÇ BUTONLARI
-        if (interaction.customId.startsWith('btn_warn_proof_upload_')) {
-          const warnId = interaction.customId.replace('btn_warn_proof_upload_', '');
-          return handleProofButton(interaction, 'upload', warnId);
-        }
-        if (interaction.customId.startsWith('btn_warn_proof_skip_')) {
-          const warnId = interaction.customId.replace('btn_warn_proof_skip_', '');
-          return handleProofButton(interaction, 'skip', warnId);
-        }
-
-        // [H] UYARI LOG KANALINDAKİ "🇬🇧 English" ÇEVİRİ BUTONU
-        if (interaction.customId.startsWith('btn_warn_log_en_')) {
-          const warnId = interaction.customId.replace('btn_warn_log_en_', '');
-          return handleWarningLogEnglishButton(interaction, warnId);
-        }
-      }
-
-      // 4. AÇILIR MENÜ (STRING SELECT MENU) ETKİLEŞİMLERİ
-      if (interaction.isStringSelectMenu()) {
-        if (
-          interaction.customId === 'select_gender' ||
-          interaction.customId === 'select_gender_en' ||
-          interaction.customId === 'select_kayit_cinsiyet'
-        ) {
-          const isEn = interaction.customId.endsWith('_en') || resolveLang(interaction) === 'en';
-          const selectedGender = interaction.values[0]; // 'gender_erkek' veya 'gender_kiz'
-
-          const modalCustomId = isEn
-            ? `modal_kayit_${selectedGender}_en`
-            : `modal_kayit_${selectedGender}`;
-
-          const modalTitle = isEn
-            ? `${config.BRAND_NAME} | Registration Form`
-            : `${config.BRAND_NAME} | Kayıt Formu`;
-
-          const modal = new ModalBuilder()
-            .setCustomId(modalCustomId)
-            .setTitle(modalTitle.slice(0, 45));
-
-          const nameInput = new TextInputBuilder()
-            .setCustomId('modal_real_name')
-            .setLabel(isEn ? 'What is your Real Name?' : 'Gerçek Adın Nedir?')
-            .setPlaceholder(isEn ? 'e.g. John' : 'Örn: Ahmet Yılmaz')
-            .setStyle(TextInputStyle.Short)
-            .setMinLength(2)
-            .setMaxLength(32)
-            .setRequired(true);
-
-          const robloxInput = new TextInputBuilder()
-            .setCustomId('modal_roblox_input')
-            .setLabel(isEn ? 'Roblox Username, ID, or Profile Link' : 'Roblox Adı, ID\'si veya Profil Linki')
-            .setPlaceholder(isEn ? 'e.g. Builderman, 156, or profile link' : 'Örn: Builderman, 156 veya profil linki')
-            .setStyle(TextInputStyle.Short)
-            .setMinLength(1)
-            .setMaxLength(120)
-            .setRequired(true);
-
-          const genderInput = new TextInputBuilder()
-            .setCustomId('modal_gender')
-            .setLabel(isEn ? 'Your Gender (Male / Female)' : 'Cinsiyetiniz (Erkek / Kız)')
-            .setValue(
-              selectedGender.includes('kiz')
-                ? isEn ? 'Female' : 'Kız'
-                : isEn ? 'Male' : 'Erkek'
-            )
-            .setPlaceholder(isEn ? 'Male or Female' : 'Erkek veya Kız')
-            .setStyle(TextInputStyle.Short)
-            .setMinLength(1)
-            .setMaxLength(15)
-            .setRequired(true);
-
-          const rows = [
-            new ActionRowBuilder().addComponents(nameInput),
-            new ActionRowBuilder().addComponents(robloxInput),
-            new ActionRowBuilder().addComponents(genderInput),
-          ];
-
-          modal.addComponents(rows);
-          return interaction.showModal(modal);
-        }
-      }
-
-      // 5. USER SELECT MENU (UYARI KULLANICI SEÇİMİ)
-      if (interaction.isUserSelectMenu()) {
-        if (interaction.customId === 'select_warn_verbal_user') {
-          return handleWarningUserSelected(interaction, 'verbal');
-        }
-
-        if (interaction.customId === 'select_warn_official_user') {
-          return handleWarningUserSelected(interaction, 'official');
-        }
-      }
-
-      // 6. MODAL GÖNDERİMLERİ (MODAL SUBMIT)
-      if (interaction.isModalSubmit()) {
-        // [A] Kullanıcı Kayıt Formu Gönderimi
-        if (interaction.customId.startsWith('modal_kayit_')) {
-          return handleRegistrationModalSubmit(interaction);
-        }
-
-        // [B] Yetkili Red Sebebi Formu Gönderimi
-        if (interaction.customId.startsWith('modal_reject_staff_')) {
-          const applicantId = interaction.customId.replace('modal_reject_staff_', '');
-          return handleRejectModalSubmit(interaction, applicantId);
-        }
-
-        // [C] Sözlü Uyarı Formu Gönderimi
-        if (interaction.customId.startsWith('modal_warn_verbal_')) {
-          const targetUserId = interaction.customId.replace('modal_warn_verbal_', '');
-          return handleVerbalWarnModalSubmit(interaction, targetUserId);
-        }
-
-        // [D] Resmi Uyarı (Madde No) Formu Gönderimi
-        if (interaction.customId.startsWith('modal_warn_official_')) {
-          const targetUserId = interaction.customId.replace('modal_warn_official_', '');
-          return handleOfficialWarnModalSubmit(interaction, targetUserId);
-        }
-      }
-    } catch (err) {
-      console.error('[INTERACTION ERROR] Beklenmeyen hata:', err);
-      if (!interaction.replied && !interaction.deferred) {
-        await interaction.reply({
-          content: '❌ Bir hata meydana geldi! Lütfen yetkililere danışın.',
-          ephemeral: true,
-        }).catch(() => {});
-      }
+  // 1. Oyun Seçim Butonu (Her butona 1 kere basılabilir)
+  if (action.startsWith('g_')) {
+    const gameId = action.slice(2);
+    if (!state.games.includes(gameId)) {
+      state.games = gamesConfig.normalizeGameList([...state.games, gameId]);
     }
-  },
-};
+    return interaction.update(buildGameAndGenderSelectionPayload(state));
+  }
 
-// =========================================================================
-// KAYIT SİSTEMİ FONKSİYONLARI
-// =========================================================================
+  // 2. Seçimi Sıfırla Butonu
+  if (action === 'reset') {
+    state.games = [];
+    return interaction.update(buildGameAndGenderSelectionPayload(state));
+  }
+
+  // 3. Cinsiyet Butonları (Erkek / Kız)
+  if (action === 'sex_m' || action === 'sex_f') {
+    state.gender = action === 'sex_m' ? 'm' : 'f';
+    return interaction.update(buildGameAndGenderSelectionPayload(state));
+  }
+
+  // 4. Kayıt Formunu Aç Butonu
+  if (action === 'open') {
+    if (state.games.length === 0) {
+      return interaction.reply({
+        content: isEn
+          ? '⚠️ Please select **at least 1 game** you play first!'
+          : '⚠️ Lütfen önce oynadığınız oyunlardan **en az 1 tanesini** seçiniz!',
+        ephemeral: true,
+      });
+    }
+
+    if (state.gender !== 'm' && state.gender !== 'f') {
+      return interaction.reply({
+        content: isEn
+          ? '⚠️ Please select your **Gender** (👨 Male / 👩 Female) before opening the form!'
+          : '⚠️ Lütfen formu açmadan önce **Cinsiyetinizi** (👨 Erkek / 👩 Kız) seçiniz!',
+        ephemeral: true,
+      });
+    }
+
+    const modal = buildRegistrationModal(state);
+    return interaction.showModal(modal);
+  }
+}
 
 /**
  * Kullanıcı kayıt formunu doldurup gönderdiğinde çalışan ana fonksiyon.
@@ -334,21 +155,63 @@ module.exports = {
 async function handleRegistrationModalSubmit(interaction) {
   await interaction.deferReply({ ephemeral: true });
 
+  const realName = interaction.fields.getTextInputValue('modal_real_name').trim();
+  const customId = interaction.customId;
+
+  // Yeni Çoklu Oyun Formatı: modal_kayit:<gameCodes>:<genderCode>:<langCode>
+  if (customId.startsWith('modal_kayit:')) {
+    const statePart = customId.slice('modal_kayit:'.length);
+    const state = gamesConfig.decodeRegState(statePart);
+    const isEn = state.lang === 'en';
+    const gender = state.gender === 'f' ? '👩 Kız' : '👨 Erkek';
+
+    const gameUsernames = {};
+    for (const gameId of state.games) {
+      try {
+        const val = interaction.fields.getTextInputValue(`modal_game_${gameId}`)?.trim() || '';
+        gameUsernames[gameId] = val;
+      } catch (e) {}
+    }
+
+    const result = await createRegistrationApplication({
+      guild: interaction.guild,
+      member: interaction.member,
+      user: interaction.user,
+      realName,
+      gender,
+      games: state.games,
+      gameUsernames,
+      source: 'discord',
+      lang: state.lang,
+    });
+
+    if (!result.success) {
+      return interaction.editReply({
+        content: `❌ ${result.message}`,
+      });
+    }
+
+    return interaction.editReply({
+      content: isEn
+        ? `✅ Your registration application has been submitted! You can follow your application in your private thread: <#${result.threadId}>`
+        : `✅ Başvurunuz başarıyla alındı! Size özel oluşturulan kayıt odasını takip edebilirsiniz: <#${result.threadId}>`,
+    });
+  }
+
+  // Eski Form Formatı (Geriye Dönük Uyumluluk)
   const isEnModal =
-    interaction.customId.startsWith('modal_kayit_en_') ||
-    interaction.customId.endsWith('_en');
+    customId.startsWith('modal_kayit_en_') ||
+    customId.endsWith('_en');
   const isEn = isEnModal || resolveLang(interaction) === 'en';
 
-  const realName = interaction.fields.getTextInputValue('modal_real_name').trim();
   const robloxInput = interaction.fields.getTextInputValue('modal_roblox_input').trim();
 
-  // Formda yazılan cinsiyet okunuyor (Türkçe ve İngilizce girdileri destekler)
   let inputGender = '';
   try {
     inputGender = interaction.fields.getTextInputValue('modal_gender')?.trim() || '';
   } catch (e) {}
 
-  const parsedGender = parseGenderInput(inputGender, interaction.customId);
+  const parsedGender = parseGenderInput(inputGender, customId);
   const gender = parsedGender.tr;
 
   const result = await createRegistrationApplication({
@@ -357,6 +220,8 @@ async function handleRegistrationModalSubmit(interaction) {
     user: interaction.user,
     realName,
     gender,
+    games: ['roblox'],
+    gameUsernames: { roblox: robloxInput },
     robloxInput,
     source: 'discord',
     lang: isEn ? 'en' : 'tr',
@@ -379,13 +244,7 @@ async function handleRegistrationModalSubmit(interaction) {
  * Yetkili ✅ ONAYLA butonuna bastığında çalışan fonksiyon.
  */
 async function handleApprove(interaction, applicantId) {
-  const isStaff =
-    interaction.member.roles.cache.has(config.ROLES.STAFF) ||
-    interaction.member.permissions.has(PermissionFlagsBits.Administrator) ||
-    interaction.member.roles.cache.has(config.ROLES.TRYOUT_STAFF) ||
-    interaction.member.roles.cache.has(config.ROLES.DEVELOPER);
-
-  if (!isStaff) {
+  if (!hasRegistrationStaffPermission(interaction.member)) {
     return interaction.reply({
       content: '❌ Bu işlemi sadece Kayıt Yetkilileri yapabilir!',
       ephemeral: true,
@@ -423,10 +282,24 @@ async function handleApprove(interaction, applicantId) {
       await setMemberLanguage(applicantMember, 'en').catch(() => {});
     }
 
-    // 1. Rolleri Belirleme (APPROVED_ROLES)
+    // 1. Verilecek Rolleri Belirleme: Genel Onaylı Roller (Hesabı Onaylı + Cengaver) + Seçilen Oyun Rolleri
     const rolesToGive = [];
     for (const rId of config.ROLES.APPROVED_ROLES || []) {
-      if (rId) rolesToGive.push(rId);
+      if (rId && !rolesToGive.includes(rId)) rolesToGive.push(rId);
+    }
+
+    const selectedGames = gamesConfig.normalizeGameList(activeApp?.games || []);
+    // Eski başvuru ise (games dizisi yoksa ve robloxId varsa) Roblox rolünü ekle
+    if (selectedGames.length === 0 && (activeApp?.robloxId || activeApp?.robloxUsername)) {
+      selectedGames.push('roblox');
+    }
+
+    for (const gameId of selectedGames) {
+      const gameObj = gamesConfig.getGameById(gameId);
+      const gameRoleId = gameObj?.roleId || config.ROLES.GAME_ROLES?.[gameId];
+      if (gameRoleId && !rolesToGive.includes(gameRoleId)) {
+        rolesToGive.push(gameRoleId);
+      }
     }
 
     // 2. Rolleri Üyeye Ver (Hata durumunda başvuru aktif kalır)
@@ -462,9 +335,11 @@ async function handleApprove(interaction, applicantId) {
       await applicantMember.roles.remove(config.ROLES.UNREGISTERED, 'Kayıt tamamlandı.').catch(() => {});
     }
 
-    // 5. Sunucu İçi İsmi Güncelle: {Formda yazdığı gerçek adı} | {Roblox Oyuncu Nicki}
+    // 5. Sunucu İçi İsmi Güncelle
     if (activeApp && activeApp.realName) {
-      const fullNick = `${activeApp.realName} | ${activeApp.robloxUsername || ''}`.trim();
+      const fullNick = activeApp.robloxUsername
+        ? `${activeApp.realName} | ${activeApp.robloxUsername}`.trim()
+        : String(activeApp.realName).trim();
       const newNick = fullNick.length > 32 ? fullNick.slice(0, 32) : fullNick;
       try {
         await applicantMember.setNickname(newNick, 'Kayıt onaylandı - Otomatik isim güncelleme');
@@ -476,10 +351,15 @@ async function handleApprove(interaction, applicantId) {
     // 6. Veritabanına Kayıt Ekle
     database.addRegistration({
       discordId: applicantId,
-      robloxId: activeApp ? activeApp.robloxId : null,
-      robloxUsername: activeApp ? activeApp.robloxUsername : null,
       realName: activeApp ? activeApp.realName : null,
       gender: activeApp ? activeApp.gender : null,
+      games: selectedGames,
+      gameUsernames: activeApp ? activeApp.gameUsernames || {} : {},
+      robloxId: activeApp ? activeApp.robloxId : null,
+      robloxUsername: activeApp ? activeApp.robloxUsername : null,
+      robloxDisplayName: activeApp ? activeApp.robloxDisplayName : null,
+      robloxProfileUrl: activeApp ? activeApp.robloxProfileUrl : null,
+      robloxCreatedAt: activeApp ? activeApp.robloxCreatedAt : null,
       approvedBy: interaction.user.id,
       approvedAt: Date.now(),
     });
@@ -514,8 +394,8 @@ async function handleApprove(interaction, applicantId) {
     try {
       await applicantMember.user.send(
         isApplicantEn
-          ? `🎉 Congratulations! Your registration application in **${config.BRAND_NAME}** has been **approved** by <@${interaction.user.id}>.\nYour member roles have been assigned. Have fun!`
-          : `🎉 Tebrikler! **${config.BRAND_NAME}** sunucusundaki kayıt başvurunuz <@${interaction.user.id}> tarafından **onaylandı**.\nRolleriniz hesabınıza tanımlandı. İyi eğlenceler dileriz!`
+          ? `🎉 Congratulations! Your registration application in **${config.BRAND_NAME}** has been **approved** by <@${interaction.user.id}>.\nYour game roles, gender role, and member roles have been assigned. You can use \`/profilim\` in any chat channel to share your game usernames. Have fun!`
+          : `🎉 Tebrikler! **${config.BRAND_NAME}** sunucusundaki kayıt başvurunuz <@${interaction.user.id}> tarafından **onaylandı**.\nSeçtiğiniz oyun rolleri, cinsiyet rolünüz ve üye rolleriniz hesabınıza tanımlandı. İstediğiniz kanalda \`/profilim\` yazarak oyun bilgilerinizi arkadaşlarınızla paylaşabilirsiniz!`
       );
     } catch (e) {}
 
@@ -532,7 +412,7 @@ async function handleApprove(interaction, applicantId) {
     }
 
     return interaction.editReply({
-      content: `✅ <@${applicantId}> kullanıcısının kaydı başarıyla onaylandı, rolleri verildi, ismi güncellendi ve kayıt odası silindi!`,
+      content: `✅ <@${applicantId}> kullanıcısının kaydı başarıyla onaylandı, oyun ve üye rolleri verildi, ismi güncellendi ve kayıt odası silindi!`,
     });
   } catch (err) {
     console.error('[ONAY HATASI] Onaylama sırasında hata:', err);
@@ -548,11 +428,7 @@ async function handleApprove(interaction, applicantId) {
  * Yetkili ✖️ REDDET butonuna bastığında sebep girmesi için Modal açar.
  */
 async function handleRejectButton(interaction, applicantId) {
-  const isStaff =
-    interaction.member.roles.cache.has(config.ROLES.STAFF) ||
-    interaction.member.permissions.has(PermissionFlagsBits.Administrator);
-
-  if (!isStaff) {
+  if (!hasRegistrationStaffPermission(interaction.member)) {
     return interaction.reply({
       content: '❌ Bu işlemi sadece Kayıt Yetkilileri yapabilir!',
       ephemeral: true,
@@ -566,7 +442,7 @@ async function handleRejectButton(interaction, applicantId) {
   const reasonInput = new TextInputBuilder()
     .setCustomId('reject_reason')
     .setLabel('Reddetme Sebebi')
-    .setPlaceholder('Örn: Yanlış Roblox profili, kural ihlali, hatalı isim vb.')
+    .setPlaceholder('Örn: Yanlış oyun bilgisi, kural ihlali, hatalı isim vb.')
     .setStyle(TextInputStyle.Paragraph)
     .setMinLength(3)
     .setMaxLength(500)
@@ -689,3 +565,215 @@ async function handleRejectModalSubmit(interaction, applicantId) {
     content: `✖️ <@${applicantId}> kullanıcısının başvurusu reddedildi ve kullanıcı bilgilendirildi. Oda 5 dakika içinde silinecek.`,
   });
 }
+
+module.exports = {
+  name: Events.InteractionCreate,
+  handleRegistrationSelectionAction,
+  handleRegistrationModalSubmit,
+  handleApprove,
+  handleRejectButton,
+  handleRejectModalSubmit,
+  async execute(interaction) {
+    try {
+      // 0. AUTOCOMPLETE ETKİLEŞİMLERİ
+      if (interaction.isAutocomplete()) {
+        const command = interaction.client.commands.get(interaction.commandName);
+        if (command && typeof command.autocomplete === 'function') {
+          await command.autocomplete(interaction);
+        }
+        return;
+      }
+
+      // 1. SLASH KOMUTLAR
+      if (interaction.isChatInputCommand()) {
+        const command = interaction.client.commands.get(interaction.commandName);
+        if (!command) return;
+        await command.execute(interaction);
+        return;
+      }
+
+      // 2. KALDIRILAN ESKİ SİSTEMLERİN ETKİLEŞİM YAKALAYICISI (GÜVENLİ GERİ DÖNÜŞ)
+      if (interaction.customId && isLegacyInteraction(interaction.customId)) {
+        const isEn = interaction.customId.endsWith('_en') || resolveLang(interaction) === 'en';
+        return interaction.reply({
+          content: isEn
+            ? '⚠️ This feature has been removed. / Bu özellik kaldırıldı.'
+            : '⚠️ Bu özellik kaldırıldı. / This feature has been removed.',
+          ephemeral: true,
+        }).catch(() => {});
+      }
+
+      // 3. BUTON ETKİLEŞİMLERİ
+      if (interaction.isButton()) {
+        // [A] "✅ Kayıt Ol" ve "🇬🇧 Register (English)" Paneli Butonları
+        if (interaction.customId === 'btn_kayit_ol' || interaction.customId === 'btn_kayit_ol_en') {
+          const isEnClick = interaction.customId === 'btn_kayit_ol_en';
+          if (isEnClick) {
+            await setMemberLanguage(interaction.member, 'en').catch(() => {});
+          }
+          const isEn = isEnClick || resolveLang(interaction) === 'en';
+
+          // Kontrol 1: Zaten Kayıtlı mı?
+          if (config.isRegisteredMember(interaction.member)) {
+            return interaction.reply({
+              content: isEn
+                ? '❌ You are already registered on our server! You cannot submit another application.'
+                : '❌ Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
+              ephemeral: true,
+            });
+          }
+
+          // Kontrol 2: Aktif Başvurusu Var mı?
+          const activeApp = database.getActiveApplication(interaction.user.id);
+          if (activeApp && activeApp.threadId) {
+            const existingThread = await interaction.guild.channels.fetch(activeApp.threadId).catch(() => null);
+            if (existingThread) {
+              return interaction.reply({
+                content: isEn
+                  ? `⚠️ You already have an active registration application! Please check your registration thread: <#${activeApp.threadId}>`
+                  : `⚠️ Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: <#${activeApp.threadId}>`,
+                ephemeral: true,
+              });
+            } else {
+              database.removeActiveApplication(interaction.user.id);
+            }
+          }
+
+          // Oyun ve Cinsiyet Seçim Kartını Aç
+          const initialPayload = buildGameAndGenderSelectionPayload({
+            games: [],
+            gender: 'u',
+            lang: isEn ? 'en' : 'tr',
+          });
+
+          return interaction.reply({
+            ...initialPayload,
+            ephemeral: true,
+          });
+        }
+
+        // [A2] Çoklu Oyun & Cinsiyet Seçim Butonları (reg_act:...)
+        if (interaction.customId.startsWith('reg_act:')) {
+          return handleRegistrationSelectionAction(interaction);
+        }
+
+        // [B] İSİM RENGİ İNGİLİZCE REHBER BUTONU
+        if (interaction.customId === 'btn_color_en_info') {
+          await setMemberLanguage(interaction.member, 'en').catch(() => {});
+          return interaction.reply({
+            embeds: [createEnglishColorGuideEmbed()],
+            ephemeral: true,
+          });
+        }
+
+        // [C] YETKİLİ KART BUTONU: ✅ ONAYLA
+        if (interaction.customId.startsWith('btn_approve_')) {
+          const applicantId = interaction.customId.replace('btn_approve_', '');
+          return handleApprove(interaction, applicantId);
+        }
+
+        // [D] YETKİLİ KART BUTONU: ✖️ REDDET
+        if (interaction.customId.startsWith('btn_reject_')) {
+          const applicantId = interaction.customId.replace('btn_reject_', '');
+          return handleRejectButton(interaction, applicantId);
+        }
+
+        // [E] İSİM RENGİ SEÇİM BUTONLARI (btn_color_...)
+        if (interaction.customId.startsWith('btn_color_')) {
+          const roleId = interaction.customId.replace('btn_color_', '');
+          return handleColorButton(interaction, roleId);
+        }
+
+        // [F] UYARI SİSTEMİ: SÖZLÜ UYARI & RESMİ UYARI BUTONLARI
+        if (interaction.customId === 'btn_warn_verbal') {
+          return handleWarningButton(interaction, 'verbal');
+        }
+        if (interaction.customId === 'btn_warn_official') {
+          return handleWarningButton(interaction, 'official');
+        }
+
+        // [G] UYARI SİSTEMİ: KANIT GÖRSELİ YÜKLE / PAS GEÇ BUTONLARI
+        if (interaction.customId.startsWith('btn_warn_proof_upload_')) {
+          const warnId = interaction.customId.replace('btn_warn_proof_upload_', '');
+          return handleProofButton(interaction, 'upload', warnId);
+        }
+        if (interaction.customId.startsWith('btn_warn_proof_skip_')) {
+          const warnId = interaction.customId.replace('btn_warn_proof_skip_', '');
+          return handleProofButton(interaction, 'skip', warnId);
+        }
+
+        // [H] UYARI LOG KANALINDAKİ "🇬🇧 English" ÇEVİRİ BUTONU
+        if (interaction.customId.startsWith('btn_warn_log_en_')) {
+          const warnId = interaction.customId.replace('btn_warn_log_en_', '');
+          return handleWarningLogEnglishButton(interaction, warnId);
+        }
+      }
+
+      // 4. AÇILIR MENÜ (STRING SELECT MENU) - Eski paneller için geriye uyumluluk
+      if (interaction.isStringSelectMenu()) {
+        if (
+          interaction.customId === 'select_gender' ||
+          interaction.customId === 'select_gender_en' ||
+          interaction.customId === 'select_kayit_cinsiyet'
+        ) {
+          const isEn = interaction.customId.endsWith('_en') || resolveLang(interaction) === 'en';
+          const selectedGender = interaction.values[0];
+          const genderCode = String(selectedGender).includes('kiz') ? 'f' : 'm';
+
+          return interaction.update(
+            buildGameAndGenderSelectionPayload({
+              games: [],
+              gender: genderCode,
+              lang: isEn ? 'en' : 'tr',
+            })
+          );
+        }
+      }
+
+      // 5. USER SELECT MENU (UYARI KULLANICI SEÇİMİ)
+      if (interaction.isUserSelectMenu()) {
+        if (interaction.customId === 'select_warn_verbal_user') {
+          return handleWarningUserSelected(interaction, 'verbal');
+        }
+
+        if (interaction.customId === 'select_warn_official_user') {
+          return handleWarningUserSelected(interaction, 'official');
+        }
+      }
+
+      // 6. MODAL GÖNDERİMLERİ (MODAL SUBMIT)
+      if (interaction.isModalSubmit()) {
+        // [A] Kullanıcı Kayıt Formu Gönderimi
+        if (interaction.customId.startsWith('modal_kayit:') || interaction.customId.startsWith('modal_kayit_')) {
+          return handleRegistrationModalSubmit(interaction);
+        }
+
+        // [B] Yetkili Red Sebebi Formu Gönderimi
+        if (interaction.customId.startsWith('modal_reject_staff_')) {
+          const applicantId = interaction.customId.replace('modal_reject_staff_', '');
+          return handleRejectModalSubmit(interaction, applicantId);
+        }
+
+        // [C] Sözlü Uyarı Formu Gönderimi
+        if (interaction.customId.startsWith('modal_warn_verbal_')) {
+          const targetUserId = interaction.customId.replace('modal_warn_verbal_', '');
+          return handleVerbalWarnModalSubmit(interaction, targetUserId);
+        }
+
+        // [D] Resmi Uyarı (Madde No) Formu Gönderimi
+        if (interaction.customId.startsWith('modal_warn_official_')) {
+          const targetUserId = interaction.customId.replace('modal_warn_official_', '');
+          return handleOfficialWarnModalSubmit(interaction, targetUserId);
+        }
+      }
+    } catch (err) {
+      console.error('[INTERACTION ERROR] Beklenmeyen hata:', err);
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: '❌ Bir hata meydana geldi! Lütfen yetkililere danışın.',
+          ephemeral: true,
+        }).catch(() => {});
+      }
+    }
+  },
+};

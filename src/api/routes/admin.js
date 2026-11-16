@@ -36,7 +36,11 @@ router.get('/members', async (req, res) => {
             (r) =>
               (r.realName && r.realName.toLowerCase().includes(query)) ||
               (r.robloxUsername && r.robloxUsername.toLowerCase().includes(query)) ||
-              (r.robloxId && String(r.robloxId).includes(query))
+              (r.robloxId && String(r.robloxId).includes(query)) ||
+              (r.gameUsernames &&
+                Object.values(r.gameUsernames).some(
+                  (uname) => uname && String(uname).toLowerCase().includes(query)
+                ))
           )
           .map((r) => String(r.discordId))
       );
@@ -69,6 +73,8 @@ router.get('/members', async (req, res) => {
         registration: {
           registered: Boolean(reg) || config.isRegisteredMember(m),
           realName: reg?.realName || null,
+          games: reg?.games || (reg?.robloxId ? ['roblox'] : []),
+          gameUsernames: reg?.gameUsernames || (reg?.robloxUsername ? { roblox: reg.robloxUsername } : {}),
           robloxUsername: reg?.robloxUsername || null,
           robloxId: reg?.robloxId || null,
         },
@@ -162,6 +168,8 @@ router.get('/members/:id', async (req, res) => {
         registered: Boolean(reg) || config.isRegisteredMember(member),
         realName: reg?.realName || null,
         gender: reg?.gender || null,
+        games: reg?.games || (reg?.robloxId ? ['roblox'] : []),
+        gameUsernames: reg?.gameUsernames || (reg?.robloxUsername ? { roblox: reg.robloxUsername } : {}),
         robloxUsername: reg?.robloxUsername || null,
         robloxId: reg?.robloxId || null,
         robloxDisplayName: reg?.robloxDisplayName || null,

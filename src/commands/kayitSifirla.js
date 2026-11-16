@@ -159,12 +159,24 @@ module.exports = {
           inline: true,
         },
         {
-          name: isEn ? '🗑️ Wiped Roblox Account' : '🗑️ Silinen Roblox Hesabı',
-          value: removedRecord
-            ? `**@${removedRecord.robloxUsername || 'Unknown'}**\nID: \`${removedRecord.robloxId || '-'}\``
-            : isEn
-            ? '*No registered Roblox account found*'
-            : '*Kayıtlı Roblox hesabı bulunamadı*',
+          name: isEn ? '🗑️ Wiped Roblox / Game Info' : '🗑️ Silinen Roblox / Oyun Bilgisi',
+          value: (() => {
+            if (!removedRecord) {
+              return isEn ? '*No registered game/Roblox account found*' : '*Kayıtlı oyun/Roblox hesabı bulunamadı*';
+            }
+            const lines = [];
+            if (removedRecord.robloxUsername || removedRecord.robloxId) {
+              lines.push(`🎮 **@${removedRecord.robloxUsername || 'Unknown'}** (ID: \`${removedRecord.robloxId || '-'}\`)`);
+            }
+            if (removedRecord.gameUsernames && typeof removedRecord.gameUsernames === 'object') {
+              for (const [gKey, gVal] of Object.entries(removedRecord.gameUsernames)) {
+                if (gKey !== 'roblox' && gVal) {
+                  lines.push(`🕹️ **${gKey.toUpperCase()}:** \`${gVal}\``);
+                }
+              }
+            }
+            return lines.length > 0 ? lines.join('\n') : isEn ? '*No game details*' : '*Oyun detayı yok*';
+          })(),
           inline: true,
         },
         {
