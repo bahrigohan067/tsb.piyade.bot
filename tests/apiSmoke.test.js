@@ -321,6 +321,9 @@ test('1. GET /api/admin/members?query= (boş ve dolu sorgu, 200 dönmeli)', asyn
   const foundAhmet = queryRes.body.members.find((m) => m.id === '9101');
   assert.ok(foundAhmet, '9101 idli Ahmet bulunmalı');
   assert.equal(foundAhmet.registration.registered, true);
+  assert.ok(Array.isArray(foundAhmet.registration.games));
+  assert.equal(foundAhmet.registration.games[0]?.id, 'roblox');
+  assert.equal(foundAhmet.registration.displayName, 'Ahmet Yılmaz');
 });
 
 test('2. GET /api/admin/members/:id (kayıtlı ve kayıtsız üye, tryout/vs alanları olmamalı)', async () => {
@@ -330,6 +333,9 @@ test('2. GET /api/admin/members/:id (kayıtlı ve kayıtsız üye, tryout/vs ala
   assert.equal(regRes.body.discord.id, '9101');
   assert.equal(regRes.body.registration.registered, true);
   assert.equal(regRes.body.registration.realName, 'Ahmet Yılmaz');
+  assert.equal(regRes.body.registration.displayName, 'Ahmet Yılmaz');
+  assert.ok(Array.isArray(regRes.body.registration.games));
+  assert.equal(regRes.body.registration.games[0]?.username, 'ahmet_roblox');
   assert.equal(regRes.body.tryout, undefined, 'tryout alanı kaldırılmış olmalı');
   assert.equal(regRes.body.vs, undefined, 'vs alanı kaldırılmış olmalı');
 
@@ -350,6 +356,8 @@ test('3. GET /api/member/:id/roles ve /api/member/:id/profile', async () => {
   const profileRes = await apiRequest('/api/member/9101/profile');
   assert.equal(profileRes.status, 200, '/profile 200 dönmeli');
   assert.equal(profileRes.body.registration?.registered, true);
+  assert.equal(profileRes.body.registration?.displayName, 'Ahmet Yılmaz');
+  assert.equal(profileRes.body.registration?.games?.[0]?.id, 'roblox');
   assert.equal(profileRes.body.tryout, undefined, 'tryout kaldırılmış olmalı');
   assert.equal(profileRes.body.vs, undefined, 'vs kaldırılmış olmalı');
 });
@@ -359,11 +367,13 @@ test('4. GET /api/register/status/:id (approved, pending, rejected, unregistered
   const approvedRes = await apiRequest('/api/register/status/9101');
   assert.equal(approvedRes.status, 200);
   assert.equal(approvedRes.body.status, 'approved');
+  assert.ok(Array.isArray(approvedRes.body.registration?.games));
 
   // B. Pending (9104)
   const pendingRes = await apiRequest('/api/register/status/9104');
   assert.equal(pendingRes.status, 200);
   assert.equal(pendingRes.body.status, 'pending');
+  assert.ok(Array.isArray(pendingRes.body.application?.games));
 
   // C. Rejected (9105)
   const rejectedRes = await apiRequest('/api/register/status/9105');
@@ -376,7 +386,8 @@ test('4. GET /api/register/status/:id (approved, pending, rejected, unregistered
   assert.equal(unregRes.body.status, 'unregistered');
 });
 
-test('5. POST /api/register (başvuru oluşturma)', async () => {
+test('5. POST /api/register (başvuru oluşturma - eski ve yeni gövde uyumu)', async () => {
+  // Eski formatla başvuru (9106)
   const regRes = await apiRequest('/api/register', {
     method: 'POST',
     body: {
@@ -386,7 +397,7 @@ test('5. POST /api/register (başvuru oluşturma)', async () => {
       robloxInput: 'baris_roblox',
     },
   });
-  assert.equal(regRes.status, 200, 'Kayıt 200 dönmeli');
+  assert.equal(regRes.status, 200, 'Eski formatlı kayıt 200 dönmeli');
   assert.equal(regRes.body.success, true);
   assert.ok(regRes.body.threadId);
 });
@@ -397,4 +408,59 @@ test('6. Kaldırılan rotalar 404 dönmeli (/api/tryout ve /api/help)', async ()
 
   const helpRes = await apiRequest('/api/help/status');
   assert.equal(helpRes.status, 404, '/api/help 404 dönmeli');
+});
+
+test('7. POST /api/register (yeni çoklu oyun gövdesi ve hata kodları)', async () => {
+  // Oyun seçilmeden gönderim -> NO_GAME_SELECTED
+  const noGameRes = await apiRequest('/api/register', {
+    method: 'POST',
+    body: { discordId: '9103', name: 'Test Üye', gender: 'male', games: [] },
+  });
+  assert.equal(noGameRes.status, 400);
+  assert.equal(noGameRes.body.code, 'NO_GAME_SELECTED');
+
+  // Geçersiz isim -> NAME_INVALID
+  const badNameRes = await apiRequest('/api/register', {
+    method: 'POST',
+    body: {
+      discordId: '9103',
+      name: 'yok',
+      gender: 'male',
+      games: [{ id: 'cs2', username: 's1mple' }],
+    },
+  });
+  assert.equal(badNameRes.status, 400);
+  assert.equal(badNameRes.body.code, 'NAME_INVALID');
+
+  // Geçersiz Minecraft nicki -> GAME_USERNAME_INVALID + details.game
+  const badMcRes = await apiRequest('/api/register', {
+    method: 'POST',
+    body: {
+      discordId: '9103',
+      name: 'Emre Kaya',
+      gender: 'male',
+      games: [{ id: 'minecraft', username: 'gecersiz nick!' }],
+    },
+  });
+  assert.equal(badMcRes.status, 400);
+  assert.equal(badMcRes.body.code, 'GAME_USERNAME_INVALID');
+  assert.equal(badMcRes.body.details?.game, 'minecraft');
+
+  // Geçerli çoklu oyun başvurusu (9103: CS2 + Minecraft)
+  const validMultiRes = await apiRequest('/api/register', {
+    method: 'POST',
+    body: {
+      discordId: '9103',
+      name: 'Emre Kaya',
+      gender: 'male',
+      lang: 'en',
+      games: [
+        { id: 'cs2', username: 'EmreCS2' },
+        { id: 'minecraft', username: 'Emre_MC1' },
+      ],
+    },
+  });
+  assert.equal(validMultiRes.status, 200);
+  assert.equal(validMultiRes.body.success, true);
+  assert.ok(validMultiRes.body.threadId);
 });

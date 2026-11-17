@@ -66,8 +66,8 @@ startApiServer(client);
 // Botu Başlat
 if (!config.TOKEN) {
   console.error('========================================================================');
-  console.error('❌ HATA: Bot tokeni (TSB_TOKEN) bulunamadı veya boş!');
-  console.error('Railway Variables sekmesinde TSB_TOKEN değişkeninin tanımlı olduğundan emin olun.');
+  console.error('❌ HATA: Bot tokeni (DISCORD_TOKEN) bulunamadı veya boş!');
+  console.error('Railway Variables sekmesinde DISCORD_TOKEN değişkeninin tanımlı olduğundan emin olun.');
   console.error('========================================================================');
   process.exit(1);
 } else {
@@ -79,7 +79,7 @@ if (!config.TOKEN) {
       console.error('👉 ÇÖZÜM: Discord Developer Portal > Bot > Privileged Gateway Intents kısmından');
       console.error('   "SERVER MEMBERS INTENT" ve "MESSAGE CONTENT INTENT" seçeneklerini açın!');
     } else if (err.message.includes('An invalid token was provided')) {
-      console.error('👉 ÇÖZÜM: Girdiğiniz TSB_TOKEN geçersiz! Developer Portal\'dan tokeni kopyalayıp');
+      console.error('👉 ÇÖZÜM: Girdiğiniz bot tokeni geçersiz! Developer Portal\'dan tokeni kopyalayıp');
       console.error('   Railway Variables kısmına tırnaksız olarak tekrar yapıştırın.');
     }
     console.error('========================================================================');

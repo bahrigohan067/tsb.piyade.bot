@@ -123,11 +123,11 @@ test('4. Uyarı ve ceza sistemi rolleri (WARNINGS, STAFF_WARNINGS, WARNING_ROLES
   assert.equal(config.ROLES.WARNING_ROLES_MAP.yasakli, '1563926973707853884');
 });
 
-test('5. Oyun rolleri config.ROLES içinde eksiksiz tanımlı olmalı', () => {
+test('5. Oyun rolleri ve genel kayıt rolleri config.ROLES içinde doğru tanımlı olmalı', () => {
   assert.equal(config.ROLES.GAME_ROBLOX, '1571915640976056390');
+  assert.equal(config.ROLES.GAME_CS2, '1571915951946076323');
   assert.equal(config.ROLES.GAME_ZULA, '1571915745884115005');
   assert.equal(config.ROLES.GAME_MINECRAFT, '1571915841832886382');
-  assert.equal(config.ROLES.GAME_CS2, '1571915951946076323');
 
   assert.deepEqual(config.ROLES.GAME_ROLES, {
     roblox: '1571915640976056390',
@@ -135,4 +135,16 @@ test('5. Oyun rolleri config.ROLES içinde eksiksiz tanımlı olmalı', () => {
     zula: '1571915745884115005',
     minecraft: '1571915841832886382',
   });
+
+  // Genel onay rolleri doğrulaması (Hesabı Onaylı + Cengaver)
+  assert.deepEqual(config.ROLES.APPROVED_ROLES, [
+    '1559604645821812896',
+    '1559604702143062016',
+  ]);
+  assert.equal(config.ROLES.VERIFIED, '1559604645821812896');
+  assert.equal(config.ROLES.REGISTERED_CHECK, '1559604702143062016');
+  assert.equal(config.ROLES.MALE, '1559637360558350356');
+  assert.equal(config.ROLES.FEMALE, '1559637300042797096');
+  assert.equal(config.ROLES.UNREGISTERED, '1559604540997636147');
 });
+
