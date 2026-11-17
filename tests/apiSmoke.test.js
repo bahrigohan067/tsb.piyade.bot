@@ -464,3 +464,137 @@ test('7. POST /api/register (yeni çoklu oyun gövdesi ve hata kodları)', async
   assert.equal(validMultiRes.body.success, true);
   assert.ok(validMultiRes.body.threadId);
 });
+
+test('8. POST /api/register lang:"en" gönderilse bile veritabanına kalıcı dil yazmamalı', async () => {
+  assert.equal(
+    database.getUserLangInfo('9103'),
+    null,
+    'API üzerinden lang:"en" ile başvuru yapıldığında languagePrefs kalıcı olarak yazılmamalı'
+  );
+});
+
+test('9. GET /api/games etkin oyunları roleId olmadan döndürmeli ve Bearer korumalı olmalı', async () => {
+  // Yetkisiz istek -> 401
+  const unauthRes = await fetch(`${baseUrl}/api/games`);
+  assert.equal(unauthRes.status, 401);
+
+  const res = await apiRequest('/api/games');
+  assert.equal(res.status, 200);
+  assert.ok(Array.isArray(res.body.games));
+  assert.equal(res.body.games.length, 4);
+
+  const ids = res.body.games.map((g) => g.id);
+  assert.deepEqual(ids, ['roblox', 'cs2', 'zula', 'minecraft']);
+
+  for (const g of res.body.games) {
+    assert.equal(Object.prototype.hasOwnProperty.call(g, 'roleId'), false, 'roleId dışarı sızmamalı');
+    assert.ok(g.name && g.name.tr && g.name.en);
+    assert.ok(g.buttonLabel && g.buttonLabel.tr && g.buttonLabel.en);
+    assert.ok(g.validate && typeof g.validate.min === 'number');
+  }
+
+  const mcGame = res.body.games.find((g) => g.id === 'minecraft');
+  assert.equal(typeof mcGame.validate.regex, 'string');
+  assert.ok(mcGame.validate.regex.length > 0);
+});
+
+test('10. GET /api/roblox/lookup tüm durumları (FOUND, NOT_FOUND, BANNED, TEMPORARY_ERROR, alreadyRegistered, güvenlik ve 10/dk hız sınırı) döndürmeli', async () => {
+  // Yetkisiz -> 401
+  const unauth = await fetch(`${baseUrl}/api/roblox/lookup?query=builderman`);
+  assert.equal(unauth.status, 401);
+
+  // X-Actor-Id olmadan -> 400
+  const noActor = await apiRequest('/api/roblox/lookup?query=builderman', { actorId: null });
+  assert.equal(noActor.status, 400);
+
+  // Geçersiz/kötü amaçlı girdiler -> 400
+  const badInputs = ['', '   ', 'a'.repeat(101), '<@123456>', 'discord.gg/davet', 'https://evil.com/user'];
+  for (const q of badInputs) {
+    const r = await apiRequest(`/api/roblox/lookup?query=${encodeURIComponent(q)}`, {
+      actorId: '9104',
+    });
+    assert.equal(r.status, 400, `Geçersiz sorgu reddedilmeli: ${q}`);
+  }
+
+  // A. FOUND + alreadyRegistered: false
+  robloxService.resolveUser = async (query) => {
+    assert.equal(query, 'builderman');
+    return {
+      success: true,
+      user: {
+        id: '156',
+        name: 'builderman',
+        displayName: 'Builderman',
+        avatarUrl: 'https://tr.rbxcdn.com/avatar/156.png',
+      },
+    };
+  };
+  const foundRes = await apiRequest('/api/roblox/lookup?query=builderman', {
+    actorId: '9101',
+  });
+  assert.equal(foundRes.status, 200);
+  assert.equal(foundRes.body.status, 'FOUND');
+  assert.equal(foundRes.body.alreadyRegistered, false);
+  assert.equal(foundRes.body.user.id, '156');
+  assert.equal(foundRes.body.user.profileUrl, 'https://www.roblox.com/users/156/profile');
+
+  // B. FOUND + alreadyRegistered: true (kimin kaydettiği ASLA sızdırılmamalı)
+  database.addRegistration({
+    discordId: '888877776666',
+    displayName: 'Gizli Kullanıcı',
+    robloxId: '156',
+    robloxUsername: 'builderman',
+    games: [{ id: 'roblox', username: 'builderman', verified: true, robloxId: '156' }],
+  });
+  const dupRes = await apiRequest('/api/roblox/lookup?query=builderman', {
+    actorId: '9101',
+  });
+  assert.equal(dupRes.status, 200);
+  assert.equal(dupRes.body.status, 'FOUND');
+  assert.equal(dupRes.body.alreadyRegistered, true);
+  assert.equal(JSON.stringify(dupRes.body).includes('888877776666'), false, 'Başka kullanıcının discordId si sızmamalı');
+
+  // C. NOT_FOUND
+  robloxService.resolveUser = async () => ({ success: false, error: 'NOT_FOUND', message: 'Yok' });
+  const nfRes = await apiRequest('/api/roblox/lookup?query=olmayan123', {
+    actorId: '9101',
+  });
+  assert.equal(nfRes.status, 200);
+  assert.equal(nfRes.body.status, 'NOT_FOUND');
+  assert.equal(nfRes.body.alreadyRegistered, false);
+
+  // D. BANNED
+  robloxService.resolveUser = async () => ({ success: false, error: 'BANNED', message: 'Banned' });
+  const banRes = await apiRequest('/api/roblox/lookup?query=banli_user', {
+    actorId: '9101',
+  });
+  assert.equal(banRes.status, 200);
+  assert.equal(banRes.body.status, 'BANNED');
+
+  // E. Geçici API / hız sınırı hatası -> TEMPORARY_ERROR (NOT_FOUND sanılmamalı!)
+  robloxService.resolveUser = async () => ({ success: false, error: 'RATE_LIMITED', message: '429' });
+  const tempRes = await apiRequest('/api/roblox/lookup?query=test_user', {
+    actorId: '9101',
+  });
+  assert.equal(tempRes.status, 200);
+  assert.equal(tempRes.body.status, 'TEMPORARY_ERROR');
+
+  // F. Dakikada 10 istek hız sınırı kontrolü (9101 şu ana kadar 5 geçerli istek yaptı, 5 tane daha yapıp 11.'de 429 almalı)
+  robloxService.resolveUser = async () => ({ success: false, error: 'NOT_FOUND', message: 'Yok' });
+  for (let i = 0; i < 5; i++) {
+    const okLoop = await apiRequest('/api/roblox/lookup?query=testloop', {
+      actorId: '9101',
+    });
+    assert.equal(okLoop.status, 200);
+  }
+  const limitedRes = await apiRequest('/api/roblox/lookup?query=testloop', {
+    actorId: '9101',
+  });
+  assert.equal(limitedRes.status, 429);
+
+  // Farklı bir aktör (9103) sınır dışı olmamalı
+  const otherActorRes = await apiRequest('/api/roblox/lookup?query=testloop', {
+    actorId: '9103',
+  });
+  assert.equal(otherActorRes.status, 200);
+});

@@ -8,12 +8,13 @@ Bu bot, **Piyade** oyuncu topluluğu için geliştirilmiş; **Roblox**, **CS2**,
 
 ### 1. 🎮 Oyun Bazlı Çoklu Kayıt Sistemi (TR / EN)
 * **Kayıt Paneli (`/kayit-paneli` ve açılışta otomatik güncelleme):**
-  - İki dilli (`TR` + `EN`) tek panel üzerinden **`✅ Kayıt Ol`** (`btn_kayit_ol`) ve **`🇬🇧 Register (English)`** (`btn_kayit_ol_en`) butonlarıyla çalışır.
+  - İki dilli (`TR` + `EN`) tek panel üzerinden **`✅ Kayıt Ol (Türkçe)`** (`btn_kayit_ol`) ve **`🇬🇧 Register (English)`** (`btn_kayit_ol_en`) butonlarıyla çalışır.
   - Bot yeniden başlatıldığında mevcut paneli buton `customId`'siyle tanıyıp günceller; ikinci bir panel açmaz.
-* **Adım Adım Kayıt Akışı (Durumsuz `customId` Bitmask Tasarımı):**
+* **Adım Adım Kayıt Akışı (Durumsuz `customId` Bitmask Tasarımı & Akış İçi Dil Değiştirme):**
   1. **Oyun Seçimi:** Üye oynadığı oyunları (`🧱 Roblox`, `🔫 CS2`, `🪖 Zula`, `⛏️ Minecraft`) butonlarla seçer (birden fazla seçebilir, her oyuna en fazla bir kez basılır; `🔄 Sıfırla` ile sıfırlanabilir, `✅ Devam` ile ilerlenir).
   2. **Cinsiyet Seçimi:** Açılır menüden `👦 Erkek` / `👧 Kız` seçilir.
   3. **Anket Modalı:** Ad / Takma ad ve yalnızca seçilen oyunların kullanıcı adları istenir. Hata durumunda `🔁 Tekrar dene` butonu girilen değerleri **10 dakika** boyunca hatırlayarak formu yeniden doldurur.
+  4. **Akış İçi Dil Değiştirme:** Her adımda ve hata ekranında `🇹🇷 Türkçe` / `🇬🇧 English` (`reg_lang:...`) butonu yer alır. Bu buton veya `btn_kayit_ol_en` veritabanına kalıcı yazmaz; yalnızca o anki kayıt oturumunun dilini değiştirir.
   4. **Güvenlik ve Roblox Doğrulaması:**
      - Tüm alanlarda küfür filtresi, mention/URL/davet engeli ve anlamsız metin kontrolü uygulanır. Kullanıcı başına **10 dakikada en fazla 5** form denemesine izin verilir.
      - Roblox seçildiyse hesap API ile doğrulanır (`NOT_FOUND` veya `BANNED` ise başvuru reddedilir, yetkili kanalına gürültü yapılmaz; geçici API hatasında nazikçe tekrar denenmesi istenir).
@@ -45,7 +46,22 @@ Oyun listesi proje kökündeki [`games.config.js`](games.config.js) dosyasından
 
 ---
 
-### 4. 🎨 İsim Rengi Paneli & Moderasyon
+### 4. 🌐 İki Dilli (TR / EN) Dil Yönetimi & Otomatik İyileştirme
+Bot yanıtları `resolveLang(context, sessionLang)` üzerinden tamamen yan etkisiz olarak çözülür (veritabanına yazmaz, `🇬🇧 English` rolünü kaynak almaz):
+1. Oturum / `customId` / başvuru dili (`sessionLang`)
+2. Kullanıcının **`/dil`** komutuyla bilerek seçtiği kalıcı tercih (`source: "manual"`)
+3. Discord istemci dili (`interaction.locale`: `tr*` → `tr`, diğer diller → `en`)
+4. Önceki etkileşimlerden hatırlanan istemci dili ipucu (`localeHints`)
+5. Eski sürüm veritabanı kaydı (`source: "legacy"`)
+6. Varsayılan `'tr'`
+
+* **`/dil` (`/language`):** Üyenin tercihini (`tr`, `en`, `auto`) kaydeder ve en iyi çabayla `🇬🇧 English` rolünü senkronize eder (10 sn bekleme süresi).
+* **`/dil-sifirla`:** Yetkililerin hedef kullanıcının kayıtlı dil tercihini ve `🇬🇧 English` rolünü sıfırlayıp denetim kanalına log düşmesini sağlar.
+* **Sessiz Legacy İyileştirme:** Eski sürümlerden kalma `source: "legacy"` kayıtlı bir üye Türkçe Discord istemcisiyle (`locale: "tr*"`) etkileşime geçtiğinde kaydı sessizce `'tr'` yapılır ve varsa `🇬🇧 English` rolü kaldırılır (`source: "manual"` tercihlere dokunulmaz).
+
+---
+
+### 5. 🎨 İsim Rengi Paneli & Moderasyon
 * `/renk_paneli_kur`: 6 renk seçimi, tek renk kuralı, 10 sn cooldown ve İngilizce rehber.
 * Küfür filtresi (yerel + Gemini yapay zeka), sadece medya kanalı koruması, `!lock` / `!unlock`, `/temizle` / `!temizle`, `/veri-sifirla`, `/rols`.
 
@@ -56,6 +72,8 @@ Oyun listesi proje kökündeki [`games.config.js`](games.config.js) dosyasından
 | Komut | Yetki | Açıklama |
 |---|---|---|
 | `/profilim` (`/profile`) | Herkes (Kayıtlı) | Oynadığı oyunları ve kullanıcı adlarını herkese açık gösterir (30 sn cooldown). |
+| `/dil` (`/language`) | Herkes | Kalıcı bot dilini (`Türkçe`, `English`, `Otomatik`) seçer (10 sn cooldown). |
+| `/dil-sifirla` | Developer & Yönetim | Hedef kullanıcının kayıtlı dil tercihini ve English rolünü sıfırlar. |
 | `/kayit-paneli` | Yönetici | TR/EN kayıt panelini günceller (yoksa yeni oluşturur). |
 | `/kayit-bilgi` | Kayıt Yetkilisi & Yönetim | Üyenin kayıt, oyun ve Roblox detaylarını sorgular. |
 | `/kayit-sifirla` | Kayıt Yetkilisi & Yönetim | Belirtilen üyenin kaydını ve rollerini sıfırlar, Kayıtsız rolü verir. |
@@ -73,8 +91,10 @@ Oyun listesi proje kökündeki [`games.config.js`](games.config.js) dosyasından
 Bot aynı Node.js sürecinde Express ile REST API sunar. `/api/health` dışındaki tüm uç noktalar `Authorization: Bearer <API_SECRET>` gerektirir.
 
 ### 📌 Önemli Endpoint ve Alanlar
+* **`GET /api/games`**: Web kayıt formu için etkin oyunları (`id`, `emoji`, `name`, `buttonLabel`, `usernameLabel`, `usernamePlaceholder`, `validate`, `verifier`) döndürür (`roleId` döndürülmez).
+* **`GET /api/roblox/lookup?query=...`**: Aktör doğrulamalı (`X-Actor-Id`, aktör başına dakikada max 10 istek) canlı Roblox profil ön izleme ve çakışma kontrolü sunar (`status`: `FOUND` | `NOT_FOUND` | `BANNED` | `TEMPORARY_ERROR`, `alreadyRegistered` boolean; başka üyenin Discord ID'si asla sızdırılmaz).
 * **`POST /api/register`**:
-  - **Yeni Gövde:** `{ discordId?, name, gender: "male" | "female", games: [{ id, username }], lang: "tr" | "en" }`
+  - **Yeni Gövde:** `{ discordId?, name, gender: "male" | "female", games: [{ id, username }], lang: "tr" | "en" }` (Not: `lang` yalnızca bu başvuru için kullanılır, kalıcı dil tercihini değiştirmez).
   - **Geriye Dönük Uyum:** Eski `{ realName, robloxInput, gender }` gövdesi de desteklenir.
   - **Hata Kodları (`{ error, code, details? }`):** `NO_GAME_SELECTED`, `NAME_INVALID`, `GAME_USERNAME_INVALID` (`details.game`), `ROBLOX_NOT_FOUND`, `ROBLOX_BANNED`, `ROBLOX_LOOKUP_FAILED` (503 geçici hata), `ROBLOX_ALREADY_REGISTERED`, `ALREADY_REGISTERED`, `RATE_LIMITED`.
 * **`GET /api/register/status/:id`**, **`GET /api/member/:id/profile`**, **`GET /api/admin/members`**, **`GET /api/admin/members/:id`**:

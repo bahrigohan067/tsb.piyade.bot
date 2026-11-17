@@ -36,6 +36,7 @@ test.beforeEach(() => {
   database.data.activeApplications = {};
   database.data.rejectedApplications = {};
   database.data.languagePrefs = {};
+  database.data.localeHints = {};
   database.save();
   clearRegistrationRateLimits();
   profilimCmd.resetProfileCooldowns();
