@@ -23,7 +23,7 @@ module.exports = {
     ),
 
   async execute(interaction) {
-    const isEn = resolveLang(interaction.member) === 'en';
+    const isEn = resolveLang(interaction) === 'en';
 
     // 1. Yetki Kontrolü: Kayıt Yetkilisi, Genel Yetkili, Yönetmenlik, Developer, Kurucu veya Yönetici
     const isStaff = interaction.member.roles.cache.has(config.ROLES.STAFF);

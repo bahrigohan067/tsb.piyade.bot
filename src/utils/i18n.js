@@ -1,12 +1,36 @@
-const database = require('./database');
 const config = require('../../config');
+const database = require('./database');
 
 /**
  * Desteklenen Diller Listesi (Merkezi Yapı)
- * Yeni dil eklemek = bu listeye kod eklemek
  */
 const SUPPORTED_LANGUAGES = ['tr', 'en'];
 const DEFAULT_LANGUAGE = 'tr';
+
+/**
+ * Sunucuda mevcut 🇬🇧 English rolünü (oluşturmadan) arar.
+ */
+function findEnglishRoleInGuild(guild) {
+  if (!guild || !guild.roles || !guild.roles.cache) return null;
+
+  const candidateIds = [config.ROLES?.ENGLISH, database.getEnglishRoleId()].filter(Boolean);
+  for (const id of candidateIds) {
+    if (guild.roles.cache.has(id)) {
+      return guild.roles.cache.get(id);
+    }
+  }
+
+  return (
+    guild.roles.cache.find(
+      (r) =>
+        r &&
+        r.name &&
+        (r.name.toLowerCase() === '🇬🇧 english' ||
+          r.name.toLowerCase() === 'english' ||
+          r.name.toLowerCase() === 'en')
+    ) || null
+  );
+}
 
 /**
  * Sunucuda "🇬🇧 English" rolünü bulur veya yoksa otomatik oluşturur.
@@ -14,21 +38,11 @@ const DEFAULT_LANGUAGE = 'tr';
 async function ensureEnglishRole(guild) {
   if (!guild) return null;
 
-  const savedId = database.getEnglishRoleId();
-  const targetId = savedId || config.ROLES?.ENGLISH;
-  if (targetId && guild.roles.cache.has(targetId)) {
-    return guild.roles.cache.get(targetId);
-  }
-
-  const existing = guild.roles.cache.find(
-    (r) =>
-      r.name.toLowerCase() === '🇬🇧 english' ||
-      r.name.toLowerCase() === 'english' ||
-      r.name.toLowerCase() === 'en'
-  );
-
+  const existing = findEnglishRoleInGuild(guild);
   if (existing) {
-    database.setEnglishRoleId(existing.id);
+    if (database.getEnglishRoleId() !== existing.id) {
+      database.setEnglishRoleId(existing.id);
+    }
     return existing;
   }
 
@@ -49,85 +63,225 @@ async function ensureEnglishRole(guild) {
 }
 
 /**
- * Kullanıcının dil tercihini ('tr' veya 'en') kaydeder ve gerekirse 🇬🇧 English rolünü senkronize eder.
+ * Discord istemci dilinden ('tr' veya 'en') dil kodunu türetir; geçerli locale yoksa null döner.
  */
-async function setMemberLanguage(member, lang) {
-  const cleanLang = lang === 'en' ? 'en' : 'tr';
-  const userId = member?.id || member?.user?.id;
+function deriveLangFromLocale(rawLocale) {
+  if (typeof rawLocale !== 'string') return null;
+  const clean = rawLocale.trim().toLowerCase();
+  if (!clean) return null;
+  return clean.startsWith('tr') ? 'tr' : 'en';
+}
+
+/**
+ * Kullanıcının dil tercihini bilerek ('tr' | 'en' | 'auto') kaydeder ve English rolünü senkronize eder.
+ * NOT: Yalnızca /dil komutu tarafından çağrılmalıdır.
+ * Rol senkronizasyonu başarısız olursa hata fırlatmaz, sadece loglar.
+ */
+async function setMemberLanguage(targetMemberOrId, choice) {
+  const userId =
+    typeof targetMemberOrId === 'string'
+      ? targetMemberOrId
+      : targetMemberOrId?.id || targetMemberOrId?.user?.id || null;
+  const member =
+    targetMemberOrId && typeof targetMemberOrId === 'object' && targetMemberOrId.roles
+      ? targetMemberOrId
+      : null;
+
+  const cleanChoice = choice === 'en' ? 'en' : choice === 'auto' ? 'auto' : 'tr';
+  let roleSynced = true;
+  let roleAction = 'none';
+
+  if (cleanChoice === 'auto') {
+    if (userId) {
+      database.clearUserLang(userId);
+    }
+    if (member && member.guild && member.roles) {
+      const enRole = findEnglishRoleInGuild(member.guild);
+      if (enRole && member.roles.cache?.has?.(enRole.id)) {
+        try {
+          await member.roles.remove(enRole.id, 'Dil tercihi: Otomatik (Discord dili)');
+          roleAction = 'removed';
+        } catch (err) {
+          roleSynced = false;
+          console.warn(
+            `[DİL ROL SENKRON HATASI] ${userId} kullanıcısından English rolü alınamadı:`,
+            err.message
+          );
+        }
+      }
+    }
+    return { lang: 'auto', roleSynced, roleAction };
+  }
+
   if (userId) {
-    database.setUserLang(userId, cleanLang);
+    database.setUserLang(userId, cleanChoice, 'manual');
   }
 
   if (member && member.guild && member.roles) {
-    const enRole = await ensureEnglishRole(member.guild);
-    if (enRole) {
-      if (cleanLang === 'en' && !member.roles.cache.has(enRole.id)) {
-        await member.roles.add(enRole.id, 'Dil tercihi: English').catch(() => {});
-      } else if (cleanLang === 'tr' && member.roles.cache.has(enRole.id)) {
-        await member.roles.remove(enRole.id, 'Dil tercihi: Türkçe').catch(() => {});
+    if (cleanChoice === 'en') {
+      const enRole = await ensureEnglishRole(member.guild);
+      if (enRole && !member.roles.cache?.has?.(enRole.id)) {
+        try {
+          await member.roles.add(enRole.id, 'Dil tercihi: English (/dil)');
+          roleAction = 'added';
+        } catch (err) {
+          roleSynced = false;
+          console.warn(
+            `[DİL ROL SENKRON HATASI] ${userId} kullanıcısına English rolü verilemedi:`,
+            err.message
+          );
+        }
+      }
+    } else if (cleanChoice === 'tr') {
+      const enRole = findEnglishRoleInGuild(member.guild);
+      if (enRole && member.roles.cache?.has?.(enRole.id)) {
+        try {
+          await member.roles.remove(enRole.id, 'Dil tercihi: Türkçe (/dil)');
+          roleAction = 'removed';
+        } catch (err) {
+          roleSynced = false;
+          console.warn(
+            `[DİL ROL SENKRON HATASI] ${userId} kullanıcısından English rolü alınamadı:`,
+            err.message
+          );
+        }
       }
     }
   }
 
-  return cleanLang;
+  return { lang: cleanChoice, roleSynced, roleAction };
 }
 
 /**
  * Etkileşim, üye, mesaj veya kullanıcı ID'sinden kullanıcının dilini ('tr' | 'en') çözümler.
+ * TAMAMEN YAN ETKİSİZDİR (hiçbir koşulda veritabanına yazmaz ve English rolüne bakmaz).
+ *
  * Öncelik sırası:
- * 1. Explicit parametre ('en' / 'tr')
- * 2. Veritabanında kayıtlı dil tercihi
- * 3. Üyede 🇬🇧 English rolü bulunması
- * 4. Discord istemci dili (interaction.locale)
- * 5. Varsayılan: 'tr'
+ * 1. sessionLang ('tr'|'en') verilmişse (oturum/customId/başvuru içi)
+ * 2. Veritabanında source === 'manual' olan kayıtlı tercih
+ * 3. Etkileşimin Discord istemci dili (interaction.locale: 'tr*' -> 'tr', diğer -> 'en')
+ * 4. localeHints[userId] (etkileşimi olmayan DM/zamanlayıcı bağlamları için)
+ * 5. source === 'legacy' olan eski kayıt
+ * 6. 'tr'
  */
-function resolveLang(context, explicitLang = null) {
+function resolveLang(context, sessionLang = null) {
+  if (sessionLang === 'en' || sessionLang === 'tr') {
+    return sessionLang;
+  }
+
   let userId = null;
-  let member = null;
   let locale = null;
 
   if (typeof context === 'string') {
     userId = context;
   } else if (context && typeof context === 'object') {
     userId = context.user?.id || context.author?.id || context.id || null;
-    member = context.member || (context.roles ? context : null);
     locale = context.locale || null;
   }
 
-  if (explicitLang === 'en' || explicitLang === 'tr') {
-    if (userId) database.setUserLang(userId, explicitLang);
-    return explicitLang;
+  const langInfo = userId ? database.getUserLangInfo(userId) : null;
+
+  // 2. Bilerek (/dil) seçilmiş kayıtlı tercih
+  if (langInfo && langInfo.source === 'manual') {
+    return langInfo.lang;
   }
 
-  if (userId) {
-    const saved = database.getUserLang(userId);
-    if (saved === 'en' || saved === 'tr') {
-      return saved;
+  // 3. Bu etkileşimin Discord istemci dili
+  const localeLang = deriveLangFromLocale(locale);
+  if (localeLang) {
+    return localeLang;
+  }
+
+  // 4. Daha önceki etkileşimlerden bilinen istemci dili ipucu
+  const hint = userId ? database.getLocaleHint(userId) : null;
+  if (hint === 'tr' || hint === 'en') {
+    return hint;
+  }
+
+  // 5. Eski (legacy) kayıt (yukarıdakilerin hiçbiri yoksa)
+  if (langInfo && langInfo.source === 'legacy') {
+    return langInfo.lang;
+  }
+
+  // 6. Varsayılan
+  return DEFAULT_LANGUAGE;
+}
+
+/**
+ * Etkileşimdeki Discord istemci dilinden localeHints kaydını (yalnızca değiştiyse) günceller.
+ */
+function updateLocaleHintFromInteraction(interaction) {
+  if (!interaction || !interaction.user || !interaction.user.id) return false;
+  const derived = deriveLangFromLocale(interaction.locale);
+  if (!derived) return false;
+  return database.setLocaleHint(interaction.user.id, derived);
+}
+
+/**
+ * Eski (source === 'legacy') dil kaydı olan bir kullanıcı Türkçe Discord istemcisiyle
+ * etkileşime geçtiğinde kaydını sessizce 'tr' yapar ve varsa 🇬🇧 English rolünü kaldırır.
+ */
+async function healLegacyLanguageOnInteraction(interaction) {
+  if (!interaction || !interaction.user || !interaction.user.id) return { healed: false };
+
+  const localeLang = deriveLangFromLocale(interaction.locale);
+  if (localeLang !== 'tr') return { healed: false };
+
+  const userId = String(interaction.user.id);
+  const info = database.getUserLangInfo(userId);
+  if (!info || info.source !== 'legacy') return { healed: false };
+
+  if (info.lang !== 'tr') {
+    database.setUserLang(userId, 'tr', 'legacy');
+  }
+
+  let removedRole = false;
+  const member = interaction.member;
+  if (member && member.guild && member.roles && member.roles.cache) {
+    const enRole = findEnglishRoleInGuild(member.guild);
+    if (enRole && member.roles.cache.has(enRole.id)) {
+      try {
+        await member.roles.remove(
+          enRole.id,
+          'Eski dil kaydı Türkçe Discord istemcisiyle eşleştiği için English rolü kaldırıldı'
+        );
+        removedRole = true;
+        console.log(
+          `[DİL OTO-DÜZELTME] ${interaction.user.tag || userId} (locale=${interaction.locale}) legacy dil kaydı düzeltildi ve 🇬🇧 English rolü kaldırıldı.`
+        );
+      } catch (err) {
+        // En iyi çaba: yetki vb. hatada kullanıcıyı engelleme
+      }
     }
   }
 
-  if (member && member.roles && member.roles.cache) {
-    const enRoleId = database.getEnglishRoleId();
-    const cacheValues = Array.from(member.roles.cache.values());
-    const hasEnRole =
-      (enRoleId && member.roles.cache.has(enRoleId)) ||
-      cacheValues.some(
-        (r) =>
-          r && r.name &&
-          (r.name.toLowerCase() === '🇬🇧 english' ||
-           r.name.toLowerCase() === 'english')
-      );
-    if (hasEnRole) {
-      if (userId) database.setUserLang(userId, 'en');
-      return 'en';
+  return { healed: true, removedRole };
+}
+
+/**
+ * Açılışta veritabanındaki legacy dil kaydı sayısını ve English rolü üye sayısını tek satırda loglar.
+ */
+function logLanguageStartupStats(guild) {
+  const legacyCount = database.getLegacyLangCount();
+  let englishRoleCount = 0;
+
+  if (guild) {
+    const enRole = findEnglishRoleInGuild(guild);
+    if (enRole) {
+      if (enRole.members && typeof enRole.members.size === 'number') {
+        englishRoleCount = enRole.members.size;
+      } else if (guild.members?.cache) {
+        englishRoleCount = Array.from(guild.members.cache.values()).filter((m) =>
+          m.roles?.cache?.has?.(enRole.id)
+        ).length;
+      }
     }
   }
 
-  if (locale && typeof locale === 'string' && !locale.toLowerCase().startsWith('tr')) {
-    return 'en';
-  }
-
-  return 'tr';
+  console.log(
+    `[DİL SİSTEMİ] Açılış raporu: ${legacyCount} eski (legacy) dil kaydı, ${englishRoleCount} üyede 🇬🇧 English rolü bulunuyor.`
+  );
+  return { legacyCount, englishRoleCount };
 }
 
 /**
@@ -184,7 +338,7 @@ function parseGenderInput(rawInput, fallbackCustomId = '') {
 const translationCache = new Map();
 
 /**
- * Türkçe serbest metinleri (Örn: Tryout değerlendirme açıklaması) İngilizceye çevirir.
+ * Türkçe serbest metinleri (örn: uyarı gerekçesi) İngilizceye çevirir.
  * @param {string} text
  * @returns {Promise<string>}
  */
@@ -232,9 +386,14 @@ async function translateToEnglish(text) {
 module.exports = {
   SUPPORTED_LANGUAGES,
   DEFAULT_LANGUAGE,
+  findEnglishRoleInGuild,
   ensureEnglishRole,
+  deriveLangFromLocale,
   setMemberLanguage,
   resolveLang,
+  updateLocaleHintFromInteraction,
+  healLegacyLanguageOnInteraction,
+  logLanguageStartupStats,
   parseGenderInput,
   translateToEnglish,
 };

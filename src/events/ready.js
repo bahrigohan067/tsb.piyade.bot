@@ -3,7 +3,7 @@ const config = require('../../config');
 const { validateGamesConfig } = require('../../games.config');
 const { ensureColorPanelMessage } = require('../utils/colorManager');
 const { ensureRegisterPanelMessage } = require('../utils/panel');
-const { ensureEnglishRole } = require('../utils/i18n');
+const { ensureEnglishRole, logLanguageStartupStats } = require('../utils/i18n');
 const { checkFeedbackChannelOnStartup } = require('../utils/feedbackManager');
 const {
   ensureWarningPanelMessage,
@@ -48,9 +48,10 @@ module.exports = {
           await guild.commands.set(commandsData);
           console.log(`[SLASH KOMUTLAR] ${commandsData.length} komut '${guild.name}' sunucusuna başarıyla yüklendi.`);
 
-          // Sunucu açılışında Kayıt Paneli, Renk Paneli ve Uyarı Panelini güncelle/kur
-          setTimeout(() => {
-            ensureEnglishRole(guild).catch(() => {});
+          // Sunucu açılışında Kayıt Paneli, Renk Paneli, Uyarı Paneli ve Dil Raporunu güncelle/kur
+          setTimeout(async () => {
+            await ensureEnglishRole(guild).catch(() => {});
+            logLanguageStartupStats(guild);
             ensureRegisterPanelMessage(guild).catch(() => {});
             ensureColorPanelMessage(guild).catch(() => {});
             ensureWarningPanelMessage(guild).catch(() => {});

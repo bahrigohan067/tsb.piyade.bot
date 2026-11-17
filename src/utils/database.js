@@ -21,7 +21,8 @@ class DatabaseManager {
       warningRoles: {},               // Otomatik oluşturulan Uyarı / Yetkili Uyarı rol ID'leri
       warningStats: {},               // { [userId]: { userId, points, tier, staffWarnings, totalWarnings, lastWarnedAt, suspendedUntil } }
       warnings: {},                   // { [warnId]: { id, type, userId, staffId, ruleCode, reason, ... } }
-      languagePrefs: {},              // { [userId]: 'tr' | 'en' }
+      languagePrefs: {},              // { [userId]: { lang: 'tr'|'en', source: 'manual'|'legacy', updatedAt } }
+      localeHints: {},                // { [userId]: 'tr' | 'en' } (Discord istemci dilinden türetilen son ipucu)
       englishRoleId: null,            // Otomatik veya tanımlı 🇬🇧 English rolü ID'si
       lockedChannels: {},             // { [channelId]: { channelId, lockedBy, lockedAt, overwrites: [...] } }
       feedback: [],                   // [{ id, userId, usernameSnapshot, message, page, lang, createdAt, status, channelId, messageId }]
@@ -77,6 +78,26 @@ class DatabaseManager {
           }
         }
 
+        // Eski dil verilerini (languagePrefs ve varsa userLang) veri kaybı olmadan normalize ederek yükle
+        const mergedRawLangs = {
+          ...(parsed.userLang && typeof parsed.userLang === 'object' ? parsed.userLang : {}),
+          ...(parsed.languagePrefs && typeof parsed.languagePrefs === 'object' ? parsed.languagePrefs : {}),
+        };
+        const normalizedLanguagePrefs = {};
+        for (const [uid, rawVal] of Object.entries(mergedRawLangs)) {
+          const norm = this.normalizeUserLangEntry(rawVal);
+          if (norm) normalizedLanguagePrefs[String(uid)] = norm;
+        }
+
+        const normalizedLocaleHints = {};
+        if (parsed.localeHints && typeof parsed.localeHints === 'object') {
+          for (const [uid, hint] of Object.entries(parsed.localeHints)) {
+            if (hint === 'tr' || hint === 'en') {
+              normalizedLocaleHints[String(uid)] = hint;
+            }
+          }
+        }
+
         // Yalnızca bilinen temel veri yapılarını koruyarak yükle (registrations/activeApplications içindeki tüm yeni alanlar dahil)
         this.data = {
           ...parsed,
@@ -93,11 +114,15 @@ class DatabaseManager {
           warningRoles: parsed.warningRoles || {},
           warningStats: parsed.warningStats || {},
           warnings: parsed.warnings || {},
-          languagePrefs: parsed.languagePrefs || {},
+          languagePrefs: normalizedLanguagePrefs,
+          localeHints: normalizedLocaleHints,
           englishRoleId: parsed.englishRoleId || null,
           lockedChannels: parsed.lockedChannels || {},
           feedback: Array.isArray(parsed.feedback) ? parsed.feedback : [],
         };
+        if ('userLang' in this.data) {
+          delete this.data.userLang;
+        }
       } else {
         this.save();
       }
@@ -798,18 +823,115 @@ class DatabaseManager {
   // DİL TERCİHİ (TR / EN) BÖLÜMÜ
   // ==========================================
 
-  getUserLang(userId) {
-    if (!userId) return null;
-    return (this.data.languagePrefs && this.data.languagePrefs[String(userId)]) || null;
+  /**
+   * Eski string ('tr'|'en') veya yeni nesne yapısındaki dil kaydını okunur forma normalize eder.
+   */
+  normalizeUserLangEntry(raw) {
+    if (!raw) return null;
+    if (typeof raw === 'string') {
+      const clean = raw.trim().toLowerCase();
+      if (clean !== 'tr' && clean !== 'en') return null;
+      return {
+        lang: clean,
+        source: 'legacy',
+        updatedAt: null,
+      };
+    }
+    if (typeof raw === 'object') {
+      const clean = raw.lang === 'en' ? 'en' : raw.lang === 'tr' ? 'tr' : null;
+      if (!clean) return null;
+      return {
+        lang: clean,
+        source: raw.source === 'manual' ? 'manual' : 'legacy',
+        updatedAt: typeof raw.updatedAt === 'number' ? raw.updatedAt : null,
+      };
+    }
+    return null;
   }
 
-  setUserLang(userId, lang) {
+  /**
+   * Kullanıcının detaylı dil tercihi nesnesini ({ lang, source, updatedAt }) döndürür.
+   */
+  getUserLangInfo(userId) {
+    if (!userId || !this.data.languagePrefs) return null;
+    return this.normalizeUserLangEntry(this.data.languagePrefs[String(userId)]);
+  }
+
+  /**
+   * Geriye dönük imza: kullanıcının kayıtlı dil kodunu ('tr'|'en'|null) döndürür.
+   */
+  getUserLang(userId) {
+    const info = this.getUserLangInfo(userId);
+    return info ? info.lang : null;
+  }
+
+  /**
+   * Kullanıcının dil tercihini kaynağını ('manual' | 'legacy') belirterek kaydeder.
+   */
+  setUserLang(userId, lang, source = 'manual') {
     if (!userId) return null;
     if (!this.data.languagePrefs) this.data.languagePrefs = {};
-    const clean = lang === 'en' ? 'en' : 'tr';
-    this.data.languagePrefs[String(userId)] = clean;
+    const cleanLang = lang === 'en' ? 'en' : 'tr';
+    const cleanSource = source === 'legacy' ? 'legacy' : 'manual';
+    this.data.languagePrefs[String(userId)] = {
+      lang: cleanLang,
+      source: cleanSource,
+      updatedAt: Date.now(),
+    };
     this.save();
-    return clean;
+    return cleanLang;
+  }
+
+  /**
+   * Kullanıcının kayıtlı dil tercihini tamamen temizler (otomatik / sıfırlama için).
+   */
+  clearUserLang(userId) {
+    if (!userId || !this.data.languagePrefs) return false;
+    const uid = String(userId);
+    if (Object.prototype.hasOwnProperty.call(this.data.languagePrefs, uid)) {
+      delete this.data.languagePrefs[uid];
+      this.save();
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Kullanıcının Discord istemci dilinden türetilen son dil ipucunu döndürür.
+   */
+  getLocaleHint(userId) {
+    if (!userId || !this.data.localeHints) return null;
+    const val = this.data.localeHints[String(userId)];
+    return val === 'tr' || val === 'en' ? val : null;
+  }
+
+  /**
+   * Discord istemci dilinden türetilen ipucunu yalnızca değer değiştiyse diske yazar.
+   */
+  setLocaleHint(userId, lang) {
+    if (!userId) return false;
+    if (!this.data.localeHints) this.data.localeHints = {};
+    const uid = String(userId);
+    const cleanLang = lang === 'en' ? 'en' : 'tr';
+    if (this.data.localeHints[uid] === cleanLang) {
+      return false;
+    }
+    this.data.localeHints[uid] = cleanLang;
+    this.save();
+    return true;
+  }
+
+  /**
+   * Veritabanındaki eski (source === 'legacy') dil kaydı sayısını döndürür.
+   */
+  getLegacyLangCount() {
+    if (!this.data.languagePrefs) return 0;
+    let count = 0;
+    for (const rawVal of Object.values(this.data.languagePrefs)) {
+      const info = this.normalizeUserLangEntry(rawVal);
+      if (info && info.source === 'legacy') count++;
+    }
+    return count;
   }
 
   getEnglishRoleId() {
