@@ -135,27 +135,48 @@ function resolveLang(context, explicitLang = null) {
  */
 function parseGenderInput(rawInput, fallbackCustomId = '') {
   const raw = String(rawInput || '').trim().toLowerCase();
-  const cid = String(fallbackCustomId || '').toLowerCase();
+  const cid = String(fallbackCustomId || '').trim().toLowerCase();
 
-  const checkStr = raw || cid;
-  const isFemale =
-    checkStr.includes('kız') ||
-    checkStr.includes('kiz') ||
-    checkStr.includes('kadın') ||
-    checkStr.includes('kadin') ||
-    checkStr.includes('bayan') ||
-    checkStr.includes('female') ||
-    checkStr.includes('woman') ||
-    checkStr.includes('girl') ||
-    checkStr === 'k' ||
-    checkStr === 'f';
+  let isFemale = false;
+  if (raw) {
+    if (
+      raw === 'm' ||
+      raw === 'male' ||
+      raw.includes('erkek') ||
+      raw === 'boy' ||
+      raw === 'man' ||
+      raw === 'e'
+    ) {
+      isFemale = false;
+    } else {
+      isFemale =
+        raw.includes('kız') ||
+        raw.includes('kiz') ||
+        raw.includes('kadın') ||
+        raw.includes('kadin') ||
+        raw.includes('bayan') ||
+        raw.includes('female') ||
+        raw.includes('woman') ||
+        raw.includes('girl') ||
+        raw === 'k' ||
+        raw === 'f';
+    }
+  } else if (cid) {
+    isFemale =
+      cid.includes('kız') ||
+      cid.includes('kiz') ||
+      cid.includes('female') ||
+      cid.includes(':f:') ||
+      cid.endsWith(':f');
+  }
 
   return {
     isFemale,
-    tr: isFemale ? '👩 Kız' : '👨 Erkek',
-    en: isFemale ? '👩 Female' : '👨 Male',
-    genderTr: isFemale ? '👩 Kız' : '👨 Erkek',
-    genderEn: isFemale ? '👩 Female' : '👨 Male',
+    code: isFemale ? 'f' : 'm',
+    tr: isFemale ? '👧 Kız' : '👦 Erkek',
+    en: isFemale ? '👧 Female' : '👦 Male',
+    genderTr: isFemale ? '👧 Kız' : '👦 Erkek',
+    genderEn: isFemale ? '👧 Female' : '👦 Male',
   };
 }
 

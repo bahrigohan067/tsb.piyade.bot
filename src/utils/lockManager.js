@@ -204,7 +204,7 @@ async function handleLockCommand(message) {
         `🇬🇧 This channel has been **locked** by <@${message.author.id}>.\n` +
         `> Only authorized staff members can send messages until the channel is unlocked.`
       )
-      .setFooter({ text: 'Piyade Team • Kanal Yönetim Sistemi (!unlock ile açılabilir)' })
+      .setFooter({ text: `${config.BRAND_NAME} • Kanal Yönetim Sistemi (!unlock ile açılabilir)` })
       .setTimestamp();
 
     await channel.send({
@@ -296,7 +296,7 @@ async function handleUnlockCommand(message) {
         `🇬🇧 This channel has been **unlocked** by <@${message.author.id}>.\n` +
         `> Members can send messages again.`
       )
-      .setFooter({ text: 'Piyade Team • Kanal Yönetim Sistemi' })
+      .setFooter({ text: `${config.BRAND_NAME} • Kanal Yönetim Sistemi` })
       .setTimestamp();
 
     await channel.send({

@@ -174,7 +174,7 @@ let aiBackoffUntil = 0;              // 429 durumunda bekleme
 const AI_MAX_PER_MINUTE = 20;
 const AI_USER_GAP_MS = 4000;
 
-const SYSTEM_PROMPT = `Sen bir Discord sunucusunun (The Strongest Battlegrounds adlı Roblox dövüş oyunu topluluğu) Türkçe/İngilizce içerik moderasyon sınıflandırıcısısın.
+const SYSTEM_PROMPT = `Sen Piyade adlı çok oyunlu oyuncu topluluğunun (Roblox, CS2, Zula, Minecraft vb.) Türkçe/İngilizce içerik moderasyon sınıflandırıcısısın.
 Görevin: Kullanıcı mesajında küfür, hakaret, argo, cinsel içerikli küfür, nefret söylemi veya tehdit olup olmadığını belirlemek.
 
 Kurallar:

@@ -76,8 +76,8 @@ function buildWarningDm(message, result, violationCount) {
     )
     .setFooter({
       text: isEn
-        ? 'Piyade Team • Automated Chat Protection System'
-        : 'Piyade Team • Otomatik Sohbet Koruma Sistemi',
+        ? `${config.BRAND_NAME} • Automated Chat Protection System`
+        : `${config.BRAND_NAME} • Otomatik Sohbet Koruma Sistemi`,
     })
     .setTimestamp();
 

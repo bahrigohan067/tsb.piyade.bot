@@ -77,10 +77,18 @@ class DatabaseManager {
           }
         }
 
+        // Yalnızca bilinen temel veri yapılarını koruyarak yükle (registrations/activeApplications içindeki tüm yeni alanlar dahil)
         this.data = {
-          registrations: parsed.registrations || [],
-          activeApplications: parsed.activeApplications || {},
-          rejectedApplications: parsed.rejectedApplications || {},
+          ...parsed,
+          registrations: Array.isArray(parsed.registrations) ? parsed.registrations : [],
+          activeApplications:
+            parsed.activeApplications && typeof parsed.activeApplications === 'object'
+              ? parsed.activeApplications
+              : {},
+          rejectedApplications:
+            parsed.rejectedApplications && typeof parsed.rejectedApplications === 'object'
+              ? parsed.rejectedApplications
+              : {},
           profanityStats: parsed.profanityStats || {},
           warningRoles: parsed.warningRoles || {},
           warningStats: parsed.warningStats || {},
@@ -89,8 +97,6 @@ class DatabaseManager {
           englishRoleId: parsed.englishRoleId || null,
           lockedChannels: parsed.lockedChannels || {},
           feedback: Array.isArray(parsed.feedback) ? parsed.feedback : [],
-          // Eski verileri JSON içinde koru ama kod içinde aktif kullanma
-          ...parsed,
         };
       } else {
         this.save();
@@ -126,27 +132,186 @@ class DatabaseManager {
   // KAYIT SİSTEMİ BÖLÜMÜ
   // ==========================================
 
+  /**
+   * Okuma sırasında eski kayıtları (games alanı yok, robloxUsername var)
+   * bellekte çoklu oyun formatına dönüştürür (dosyayı yeniden yazmaz).
+   */
+  normalizeGamesForRead(record) {
+    if (!record || typeof record !== 'object') return [];
+
+    if (Array.isArray(record.games)) {
+      return record.games
+        .filter((g) => g && g.id && g.username)
+        .map((g) => {
+          const id = String(g.id).trim().toLowerCase();
+          const username = String(g.username);
+          const robloxId = g.robloxId ? String(g.robloxId) : null;
+          const profileUrl =
+            g.robloxProfileUrl ||
+            (id === 'roblox' && robloxId ? `https://www.roblox.com/users/${robloxId}/profile` : null);
+          return {
+            id,
+            username,
+            verified: id === 'roblox' ? g.verified !== false : Boolean(g.verified),
+            ...(robloxId ? { robloxId } : {}),
+            ...(profileUrl ? { robloxProfileUrl: profileUrl } : {}),
+          };
+        });
+    }
+
+    // Geriye dönük uyumluluk: Eski kayıtta games yoksa robloxUsername üzerinden üret
+    if (record.robloxUsername) {
+      const rId = record.robloxId ? String(record.robloxId) : null;
+      return [
+        {
+          id: 'roblox',
+          username: String(record.robloxUsername),
+          verified: Boolean(rId),
+          ...(rId
+            ? {
+                robloxId: rId,
+                robloxProfileUrl: `https://www.roblox.com/users/${rId}/profile`,
+              }
+            : {}),
+        },
+      ];
+    }
+
+    return [];
+  }
+
+  /**
+   * Kayıt nesnesini okuma için normalize eder (displayName + games dahil), ham veriyi bozmaz.
+   */
+  normalizeRegistrationForRead(raw) {
+    if (raw === undefined) return undefined;
+    if (raw === null) return null;
+    const displayName = raw.displayName || raw.realName || null;
+    return {
+      ...raw,
+      displayName,
+      realName: raw.realName || displayName,
+      games: this.normalizeGamesForRead(raw),
+    };
+  }
+
   // Multi-Hesap Kontrolü: Bu Roblox ID'si başka bir Discord kullanıcısına kayıtlı mı?
   getRegistrationByRobloxId(robloxId) {
     if (!robloxId) return null;
-    return this.data.registrations.find(
-      (reg) => String(reg.robloxId) === String(robloxId)
-    );
+    const targetId = String(robloxId);
+    const found = (this.data.registrations || []).find((reg) => {
+      if (reg.robloxId && String(reg.robloxId) === targetId) return true;
+      if (Array.isArray(reg.games)) {
+        return reg.games.some((g) => g && g.id === 'roblox' && g.robloxId && String(g.robloxId) === targetId);
+      }
+      return false;
+    });
+    return this.normalizeRegistrationForRead(found);
   }
 
   // Discord ID ile kayıt sorgulama
   getRegistrationByDiscordId(discordId) {
     if (!discordId) return null;
-    return this.data.registrations.find(
+    const found = (this.data.registrations || []).find(
       (reg) => String(reg.discordId) === String(discordId)
     );
+    return this.normalizeRegistrationForRead(found);
+  }
+
+  /**
+   * Belirli bir oyuna kayıtlı tüm üyeleri döndürür (opsiyonel olarak bir Discord ID hariç tutulur).
+   */
+  findRegistrationsByGame(gameId, { excludeDiscordId = null } = {}) {
+    const cleanGame = String(gameId || '').trim().toLowerCase();
+    if (!cleanGame) return [];
+    const exId = excludeDiscordId ? String(excludeDiscordId) : null;
+
+    return (this.data.registrations || [])
+      .map((r) => this.normalizeRegistrationForRead(r))
+      .filter((reg) => {
+        if (!reg) return false;
+        if (exId && String(reg.discordId) === exId) return false;
+        return reg.games.some((g) => g.id === cleanGame);
+      });
+  }
+
+  /**
+   * Belirli bir oyunda aynı kullanıcı adına sahip başka kayıtları arar (büyük/küçük harf duyarsız).
+   */
+  findRegistrationsByGameUsername(gameId, username, { excludeDiscordId = null } = {}) {
+    const cleanGame = String(gameId || '').trim().toLowerCase();
+    const targetName = String(username || '').trim().toLowerCase();
+    if (!cleanGame || !targetName) return [];
+    const exId = excludeDiscordId ? String(excludeDiscordId) : null;
+
+    return (this.data.registrations || [])
+      .map((r) => this.normalizeRegistrationForRead(r))
+      .filter((reg) => {
+        if (!reg) return false;
+        if (exId && String(reg.discordId) === exId) return false;
+        return reg.games.some(
+          (g) => g.id === cleanGame && String(g.username || '').trim().toLowerCase() === targetName
+        );
+      });
   }
 
   // Yeni başarılı kaydı ekleme
   addRegistration(record) {
+    const displayName = record.displayName || record.realName || null;
+    const realName = record.realName || displayName;
+
+    let gamesToStore;
+    if (Array.isArray(record.games)) {
+      gamesToStore = record.games
+        .filter((g) => g && g.id && g.username)
+        .map((g) => {
+          const id = String(g.id).trim().toLowerCase();
+          const rId = g.robloxId ? String(g.robloxId) : (id === 'roblox' && record.robloxId ? String(record.robloxId) : null);
+          const profileUrl =
+            g.robloxProfileUrl ||
+            (id === 'roblox' && rId ? `https://www.roblox.com/users/${rId}/profile` : null);
+          return {
+            id,
+            username: String(g.username),
+            verified: id === 'roblox' ? g.verified !== false : Boolean(g.verified),
+            ...(rId ? { robloxId: rId } : {}),
+            ...(profileUrl ? { robloxProfileUrl: profileUrl } : {}),
+          };
+        });
+    } else if (record.robloxUsername) {
+      const rId = record.robloxId ? String(record.robloxId) : null;
+      gamesToStore = [
+        {
+          id: 'roblox',
+          username: String(record.robloxUsername),
+          verified: Boolean(rId),
+          ...(rId ? { robloxId: rId, robloxProfileUrl: `https://www.roblox.com/users/${rId}/profile` } : {}),
+        },
+      ];
+    } else {
+      gamesToStore = [];
+    }
+
+    const robloxEntry = gamesToStore.find((g) => g.id === 'roblox');
+    const robloxId = robloxEntry?.robloxId || record.robloxId || null;
+    const robloxUsername = robloxEntry?.username || record.robloxUsername || null;
+
     const cleanRecord = {
       ...record,
+      displayName,
+      realName,
+      gender: record.gender || null,
+      lang: record.lang === 'en' ? 'en' : 'tr',
+      games: gamesToStore,
+      robloxId,
+      robloxUsername,
+      approvedAt: record.approvedAt || Date.now(),
+      approvedBy: record.approvedBy || null,
     };
+
+    if (!Array.isArray(this.data.registrations)) {
+      this.data.registrations = [];
+    }
 
     const index = this.data.registrations.findIndex(
       (r) => String(r.discordId) === String(cleanRecord.discordId)
@@ -161,24 +326,24 @@ class DatabaseManager {
     } else {
       this.data.registrations.push({
         ...cleanRecord,
-        registeredAt: Date.now(),
+        registeredAt: record.registeredAt || Date.now(),
       });
     }
 
     this.save();
   }
 
-  // Kayıt silme / sıfırlama (Roblox hesabı ve kayıt geçmişini bellekten kaldırır)
+  // Kayıt silme / sıfırlama (Roblox hesabı, tüm oyun bilgileri ve kayıt geçmişini bellekten kaldırır)
   removeRegistration(discordId) {
     if (!discordId) return { success: false, removedRecord: null };
     const strId = String(discordId);
-    const existingIndex = this.data.registrations.findIndex(
+    const existingIndex = (this.data.registrations || []).findIndex(
       (r) => String(r.discordId) === strId
     );
 
     let removedRecord = null;
     if (existingIndex !== -1) {
-      removedRecord = { ...this.data.registrations[existingIndex] };
+      removedRecord = this.normalizeRegistrationForRead({ ...this.data.registrations[existingIndex] });
       this.data.registrations.splice(existingIndex, 1);
     }
 
@@ -197,22 +362,28 @@ class DatabaseManager {
   // Aktif kayıt başvuru kontrolleri
   getActiveApplication(discordId) {
     if (!discordId) return null;
-    const app = this.data.activeApplications[String(discordId)];
+    const app = this.data.activeApplications?.[String(discordId)];
     if (!app) return null;
+    const displayName = app.displayName || app.realName || null;
     return {
-      registrationType: 'own',
-      clanTypedName: null,
-      clanResolution: null,
       ...app,
+      displayName,
+      realName: app.realName || displayName,
+      games: this.normalizeGamesForRead(app),
     };
   }
 
   setActiveApplication(discordId, appData) {
+    if (!this.data.activeApplications) this.data.activeApplications = {};
     const existing = this.data.activeApplications[String(discordId)] || {};
+    const displayName = appData.displayName || appData.realName || existing.displayName || existing.realName || null;
     this.data.activeApplications[String(discordId)] = {
       ...existing,
       ...appData,
-      registrationType: appData.registrationType || existing.registrationType || 'own',
+      displayName,
+      realName: appData.realName || displayName,
+      games: Array.isArray(appData.games) ? appData.games : (existing.games || []),
+      lang: appData.lang || existing.lang || 'tr',
       createdAt: existing.createdAt || Date.now(),
       updatedAt: Date.now(),
     };
@@ -220,7 +391,7 @@ class DatabaseManager {
   }
 
   removeActiveApplication(discordId) {
-    if (this.data.activeApplications[String(discordId)]) {
+    if (this.data.activeApplications && this.data.activeApplications[String(discordId)]) {
       delete this.data.activeApplications[String(discordId)];
       this.save();
     }
@@ -248,7 +419,7 @@ class DatabaseManager {
   }
 
   getAllRegistrations() {
-    return this.data.registrations || [];
+    return (this.data.registrations || []).map((r) => this.normalizeRegistrationForRead(r));
   }
 
   /**

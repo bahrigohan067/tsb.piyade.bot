@@ -106,30 +106,30 @@ module.exports = {
       '1559604702143062016', // ♾️| Cengaver
     ],
 
-    // Diğer klan rolü (Geriye dönük test uyumluluğu için)
+    // Arşiv test uyumluluğu için yedek rol sabiti
     OTHER_CLAN: '1570460155437518960',
 
     // -------------------------------------------------------------
-    // 6. Dil Rolleri
+    // 6. Oyun Rolleri (Kayıt Onayında Seçilen Oyunlara Göre Verilir)
+    // -------------------------------------------------------------
+    GAME_ROBLOX: process.env.GAME_ROLE_ROBLOX || '1571915640976056390',
+    GAME_CS2: process.env.GAME_ROLE_CS2 || '1571915951946076323',
+    GAME_ZULA: process.env.GAME_ROLE_ZULA || '1571915745884115005',
+    GAME_MINECRAFT: process.env.GAME_ROLE_MINECRAFT || '1571915841832886382',
+    GAME_ROLES: {
+      roblox: process.env.GAME_ROLE_ROBLOX || '1571915640976056390',
+      cs2: process.env.GAME_ROLE_CS2 || '1571915951946076323',
+      zula: process.env.GAME_ROLE_ZULA || '1571915745884115005',
+      minecraft: process.env.GAME_ROLE_MINECRAFT || '1571915841832886382',
+    },
+
+    // -------------------------------------------------------------
+    // 7. Dil Rolleri
     // -------------------------------------------------------------
     ENGLISH: '1567541917028458557',            // #37 🇬🇧 English
 
     // -------------------------------------------------------------
-    // 7. Oyun Rolleri (Kayıt Onayından Sonra Seçilen Oyunlara Göre Verilir)
-    // -------------------------------------------------------------
-    GAME_ROBLOX: '1571915640976056390',        // | Roblox
-    GAME_ZULA: '1571915745884115005',          // | Zula
-    GAME_MINECRAFT: '1571915841832886382',     // | Minecraft
-    GAME_CS2: '1571915951946076323',           // CS2 (Counter Strike 2)
-    GAME_ROLES: {
-      roblox: '1571915640976056390',
-      cs2: '1571915951946076323',
-      zula: '1571915745884115005',
-      minecraft: '1571915841832886382',
-    },
-
-    // -------------------------------------------------------------
-    // 7. Ceza ve Uyarı Sistemi Rolleri
+    // 8. Ceza ve Uyarı Sistemi Rolleri
     // -------------------------------------------------------------
     SUSPENDED: '1563922256525000895',          // #26 | Askıda (1 Haftalık Karantina/Jail)
 
@@ -228,6 +228,7 @@ module.exports = {
   COLORS: {
     PRIMARY: 0x0099FF,       // Canlı Mavi
     BLUE: 0x0099FF,          // Mavi
+    PURPLE: 0x9B59B6,        // Marka Mor Tonu (/profilim vb.)
     PENDING: 0x0099FF,       // İnceleme / Başvuru Kartı (Mavi)
     SUCCESS: 0x2ECC71,       // Yeşil / Onaylandı
     DANGER: 0xE74C3C,        // Kırmızı / Reddedildi
@@ -235,6 +236,12 @@ module.exports = {
     NAVY: 0x0A2540,          // Lacivert
     WARNING_ORANGE: 0xFF7A00, // Turuncu (Kullanıcı Uyarı DM'i & Sözlü Uyarı için)
     DARK_RED: 0x8B0000,      // Koyu Kırmızı (Yetkili Uyarıları için)
+  },
+
+  // /profilim Komutu Yapılandırması
+  PROFILE: {
+    COOLDOWN_SEC: Number(process.env.PROFILE_COOLDOWN_SEC) > 0 ? Number(process.env.PROFILE_COOLDOWN_SEC) : 30,
+    SHOW_NAME: process.env.PROFILE_SHOW_NAME !== 'false',
   },
 
   // Özel Discord Emojileri
