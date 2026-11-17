@@ -1,5 +1,6 @@
 const { Events, ActivityType } = require('discord.js');
 const config = require('../../config');
+const { validateGamesConfig } = require('../../games.config');
 const { ensureColorPanelMessage } = require('../utils/colorManager');
 const { ensureRegisterPanelMessage } = require('../utils/panel');
 const { ensureEnglishRole } = require('../utils/i18n');
@@ -19,6 +20,9 @@ module.exports = {
     console.log(`🆔 Bot ID: ${client.user.id}`);
     console.log(`🌐 Sunucu Sayısı: ${client.guilds.cache.size}`);
     console.log(`=========================================`);
+
+    // Oyun yapılandırması doğrulaması (4+ oyun uyarısı ve alan limitleri)
+    validateGamesConfig();
 
     // Bot durumu ayarlama
     client.user.setPresence({
