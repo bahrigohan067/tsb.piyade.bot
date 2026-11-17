@@ -23,11 +23,11 @@ function createRegisterPanel() {
 
   const trSection =
     `## 🇹🇷 📋 Nasıl Kayıt Olunur?\n` +
-    `> **1️⃣** Aşağıdaki **"✅ Kayıt Ol"** butonuna tıkla.\n` +
+    `> **1️⃣** Aşağıdaki **"✅ Kayıt Ol (Türkçe)"** butonuna tıkla.\n` +
     `> **2️⃣** Oynadığın oyunları seç: ${gamesTr}.\n` +
     `> *Birden fazla seçebilirsin; her oyunu bir kez seçebilirsin. Sonra **"Devam"** butonuna bas.*\n` +
     `> **3️⃣** Cinsiyetini seç (**👦 Erkek** / **👧 Kız**).\n` +
-    `> **4️⃣** Formu doldur: adın *(istersen takma ad)* ve seçtiğin oyunların kullanıcı adları.\n` +
+    `> **4️⃣** Formu doldur: adın *(istersen takma ad)* ve seçtiğin oyunların kullanıcı adları. *(Yanlış dilde açılırsa **Esc** ile kapatıp önceki mesajdaki dil butonunu kullanabilirsin)*\n` +
     `> **5️⃣** Roblox seçtiysen hesabın otomatik doğrulanır; hesap bulunamazsa başvuru reddedilir.\n` +
     `> **6️⃣** Yetkililer onaylayınca rollerin otomatik verilir: **🎭 Cengaver**, **✅ Hesabı Onaylı** ve seçtiğin oyunların rolleri.\n\n` +
     `### ⚠️ Önemli\n` +
@@ -42,7 +42,7 @@ function createRegisterPanel() {
     `> **2️⃣** Pick the games you play: ${gamesEn}.\n` +
     `> *You can select multiple games (each once). Then click **"Continue"**.*\n` +
     `> **3️⃣** Choose your gender (**👦 Male** / **👧 Female**).\n` +
-    `> **4️⃣** Fill out the survey: your name *(or nickname)* and the usernames for your selected games.\n` +
+    `> **4️⃣** Fill out the survey: your name *(or nickname)* and the usernames for your selected games. *(If it opens in the wrong language, press **Esc** and use the language button on the previous message)*\n` +
     `> **5️⃣** If you selected Roblox, your account is verified automatically; missing accounts are rejected.\n` +
     `> **6️⃣** Once approved by staff, your roles are assigned automatically: **🎭 Cengaver**, **✅ Verified Account**, and your selected game roles.\n\n` +
     `### ⚠️ Important\n` +
@@ -51,12 +51,15 @@ function createRegisterPanel() {
     `• Enter accurate and complete information\n` +
     `💡 *After registering, use \`/profile\` to share your games and usernames with everyone.*`;
 
-  const fullDescription = `${trSection}\n\n━━━━━━━━━━━━━━━━━━━━\n\n${enSection}`;
+  const langHintLine =
+    `🌐 *Yanlış dili mi seçtin? Kayıt sırasında dil butonuna basarak değiştirebilirsin. / Chose the wrong language? Use the language button during registration.*`;
+
+  const fullDescription = `${trSection}\n\n━━━━━━━━━━━━━━━━━━━━\n\n${enSection}\n\n${langHintLine}`;
 
   const row = new ActionRowBuilder().addComponents(
     new ButtonBuilder()
       .setCustomId('btn_kayit_ol')
-      .setLabel('✅ Kayıt Ol')
+      .setLabel('✅ Kayıt Ol (Türkçe)')
       .setStyle(ButtonStyle.Primary),
     new ButtonBuilder()
       .setCustomId('btn_kayit_ol_en')

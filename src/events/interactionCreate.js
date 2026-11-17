@@ -30,7 +30,12 @@ const {
   checkRegistrationRateLimit,
   recordRegistrationAttempt,
 } = require('../services/registrationService');
-const { resolveLang, setMemberLanguage, parseGenderInput } = require('../utils/i18n');
+const {
+  resolveLang,
+  parseGenderInput,
+  updateLocaleHintFromInteraction,
+  healLegacyLanguageOnInteraction,
+} = require('../utils/i18n');
 const { sanitizeInlineCode, escapeEmbedText } = require('../utils/inputSanitizer');
 
 // Eşzamanlı onay kilitleri (Aynı kullanıcıya çift tıklamayı engeller)
@@ -189,9 +194,12 @@ function buildGameSelectionPayload(mask = 0, lang = 'tr', userId = null) {
       .setDisabled(validMask === 0)
   );
 
+  // 3. Satır: Dil değiştirme butonu (veritabanına kalıcı YAZMAZ, sadece mevcut akış için)
+  const langRow = buildLanguageToggleRow('g', validMask, '-', lang);
+
   return {
     content: `${headerText}${selectedLine}`,
-    components: [gameRow, controlRow],
+    components: [gameRow, controlRow, langRow],
     allowedMentions: { parse: [] },
   };
 }
@@ -201,10 +209,11 @@ function buildGameSelectionPayload(mask = 0, lang = 'tr', userId = null) {
  */
 function buildGenderSelectPayload(mask, lang = 'tr') {
   const isEn = lang === 'en';
-  const selectedText = gamesConfig.formatGamesFromMask(mask, lang);
+  const validMask = gamesConfig.parseMask(mask, { allowZero: false }) ?? mask;
+  const selectedText = gamesConfig.formatGamesFromMask(validMask, lang);
 
   const genderSelect = new StringSelectMenuBuilder()
-    .setCustomId(`reg_gender:${mask}:${lang}`)
+    .setCustomId(`reg_gender:${validMask}:${lang}`)
     .setPlaceholder(isEn ? 'Select your gender...' : 'Cinsiyetini seç...')
     .addOptions(
       new StringSelectMenuOptionBuilder()
@@ -220,12 +229,13 @@ function buildGenderSelectPayload(mask, lang = 'tr') {
     );
 
   const row = new ActionRowBuilder().addComponents(genderSelect);
+  const langRow = buildLanguageToggleRow('s', validMask, '-', lang);
 
   return {
     content: isEn
       ? `🎮 **Selected Games:** ${selectedText}\n\n⚧ Now select your **Gender** from the menu below to open the registration survey:`
       : `🎮 **Seçilen Oyunlar:** ${selectedText}\n\n⚧ Kayıt anketini açmak için şimdi aşağıdan **Cinsiyetini** seç:`,
-    components: [row],
+    components: [row, langRow],
     allowedMentions: { parse: [] },
   };
 }
@@ -306,17 +316,102 @@ function buildRegistrationModal({ mask, genderCode, lang = 'tr', prefill = null 
 }
 
 /**
- * Tekrar dene butonu satırını üretir.
+ * Kayıt akışı içinde veritabanına yazmadan anlık dil değiştiren butonu oluşturur.
+ * Format: reg_lang:<adım>:<mask>:<m|f|->:<yeniDil> (customId <= 100 karakter)
  */
-function buildRetryRow(mask, genderCode, lang = 'tr') {
-  const isEn = lang === 'en';
+function buildLanguageToggleButton(step, mask = 0, genderCode = '-', currentLang = 'tr') {
+  const targetLang = currentLang === 'en' ? 'tr' : 'en';
+  const safeStep = String(step || 'g').slice(0, 8);
+  const safeMask = Number.isInteger(Number(mask)) && Number(mask) >= 0 ? Number(mask) : 0;
+  const safeGender = genderCode === 'm' || genderCode === 'f' ? genderCode : '-';
+
+  return new ButtonBuilder()
+    .setCustomId(`reg_lang:${safeStep}:${safeMask}:${safeGender}:${targetLang}`)
+    .setLabel(currentLang === 'en' ? '🇹🇷 Türkçe' : '🇬🇧 English')
+    .setStyle(ButtonStyle.Secondary);
+}
+
+/**
+ * Dil değiştirme butonunu tek satırlık ActionRow olarak döndürür.
+ */
+function buildLanguageToggleRow(step, mask = 0, genderCode = '-', currentLang = 'tr') {
   return new ActionRowBuilder().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`reg_retry:${mask}:${genderCode}:${lang}`)
-      .setLabel(isEn ? 'Try again' : 'Tekrar dene')
-      .setEmoji('🔁')
-      .setStyle(ButtonStyle.Primary)
+    buildLanguageToggleButton(step, mask, genderCode, currentLang)
   );
+}
+
+/**
+ * Tekrar dene + dil değiştirme butonlarını TEK satırda (<= 5 buton) döndürür.
+ */
+function buildRetryRow(mask, genderCode, lang = 'tr', { canRetry = true } = {}) {
+  const isEn = lang === 'en';
+  const row = new ActionRowBuilder();
+
+  if (canRetry) {
+    row.addComponents(
+      new ButtonBuilder()
+        .setCustomId(`reg_retry:${mask}:${genderCode}:${lang}`)
+        .setLabel(isEn ? 'Try again' : 'Tekrar dene')
+        .setEmoji('🔁')
+        .setStyle(ButtonStyle.Primary)
+    );
+  }
+
+  row.addComponents(buildLanguageToggleButton('r', mask, genderCode, lang));
+  return row;
+}
+
+/**
+ * Kayıt ön kontrol ve hız sınırı hatalarını dil değiştirme butonuyla üretir.
+ */
+function buildPrecheckErrorPayload(stepCode, lang = 'tr', extra = {}) {
+  const isEn = lang === 'en';
+  let content = '';
+
+  if (stepCode === 'p0') {
+    content = isEn
+      ? '❌ You are already registered on our server! You cannot submit another application.'
+      : '❌ Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.';
+  } else if (stepCode === 'p1') {
+    const threadPart = extra.threadId
+      ? `<#${extra.threadId}>`
+      : isEn
+        ? 'your registration channel'
+        : 'kayıt odanızı';
+    content = isEn
+      ? `⚠️ You already have an active registration application! Please check your registration thread: ${threadPart}`
+      : `⚠️ Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: ${threadPart}`;
+  } else if (stepCode === 'p3') {
+    const sec = Number.isFinite(Number(extra.retryAfterSec)) ? Math.max(1, Number(extra.retryAfterSec)) : 1;
+    content = isEn
+      ? `⏳ You have submitted too many forms recently. Please wait **${sec} seconds** and try again.`
+      : `⏳ Son 10 dakikada çok fazla kayıt formu gönderdin. Lütfen **${sec} saniye** bekleyip tekrar dene.`;
+  } else {
+    const sec = Number.isFinite(Number(extra.retryAfterSec)) ? Math.max(1, Number(extra.retryAfterSec)) : 1;
+    content = isEn
+      ? `⏳ You have submitted too many registration attempts recently. Please try again in **${sec} seconds**.`
+      : `⏳ Çok sık kayıt başvurusu denemesi yaptın. Lütfen **${sec} saniye** sonra tekrar dene.`;
+  }
+
+  return {
+    content,
+    components: [buildLanguageToggleRow(stepCode, 0, '-', lang)],
+    allowedMentions: { parse: [] },
+  };
+}
+
+/**
+ * Modal gönderim hatası veya doğrulama hatası yükünü Tekrar Dene + Dil Değiştir butonlarıyla üretir.
+ */
+function buildModalErrorPayload({ mask, genderCode, lang = 'tr', message = '', canRetry = true }) {
+  const cleanMsg = String(message || '').trim();
+  const prefix = cleanMsg.startsWith('⚠️') || cleanMsg.startsWith('❌') ? '' : '❌ ';
+
+  return {
+    content: `${prefix}${cleanMsg}`,
+    components: [buildRetryRow(mask, genderCode, lang, { canRetry })],
+    allowedMentions: { parse: [] },
+  };
 }
 
 /**
@@ -341,7 +436,11 @@ module.exports = {
   buildGameSelectionPayload,
   buildGenderSelectPayload,
   buildRegistrationModal,
+  buildLanguageToggleButton,
+  buildLanguageToggleRow,
   buildRetryRow,
+  buildPrecheckErrorPayload,
+  buildModalErrorPayload,
   saveRetryDraft,
   getRetryDraft,
   clearRetryDraft,
@@ -356,6 +455,10 @@ module.exports = {
 
   async execute(interaction) {
     try {
+      // Kullanıcının Discord istemci dilini arka planda hatırla ve eski (legacy) Türkçe kayıtları iyileştir
+      updateLocaleHintFromInteraction(interaction);
+      await healLegacyLanguageOnInteraction(interaction);
+
       // 0. AUTOCOMPLETE ETKİLEŞİMLERİ
       if (interaction.isAutocomplete()) {
         const command = interaction.client.commands.get(interaction.commandName);
@@ -394,21 +497,16 @@ module.exports = {
 
       // 3. BUTON ETKİLEŞİMLERİ
       if (interaction.isButton()) {
-        // [A1] Kayıt Paneli Butonları: "✅ Kayıt Ol" ve "🇬🇧 Register (English)"
+        // [A1] Kayıt Paneli Butonları: "✅ Kayıt Ol (Türkçe)" ve "🇬🇧 Register (English)"
         if (interaction.customId === 'btn_kayit_ol' || interaction.customId === 'btn_kayit_ol_en') {
           const isEnClick = interaction.customId === 'btn_kayit_ol_en';
-          if (isEnClick) {
-            await setMemberLanguage(interaction.member, 'en').catch(() => {});
-          }
-          const lang = isEnClick || resolveLang(interaction) === 'en' ? 'en' : 'tr';
-          const isEn = lang === 'en';
+          // Dil seçimi YALNIZCA bu kayıt akışı içindir; kalıcı veritabanına ve role YAZILMAZ.
+          const lang = isEnClick ? 'en' : resolveLang(interaction);
 
           // Ön kontrol 1: Zaten kayıtlı mı?
           if (config.isRegisteredMember(interaction.member)) {
             return interaction.reply({
-              content: isEn
-                ? '❌ You are already registered on our server! You cannot submit another application.'
-                : '❌ Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
+              ...buildPrecheckErrorPayload('p0', lang),
               ephemeral: true,
             });
           }
@@ -421,9 +519,7 @@ module.exports = {
               .catch(() => null);
             if (existingThread) {
               return interaction.reply({
-                content: isEn
-                  ? `⚠️ You already have an active registration application! Please check your registration thread: <#${activeApp.threadId}>`
-                  : `⚠️ Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: <#${activeApp.threadId}>`,
+                ...buildPrecheckErrorPayload('p1', lang, { threadId: activeApp.threadId }),
                 ephemeral: true,
               });
             }
@@ -434,9 +530,7 @@ module.exports = {
           const rateCheck = checkRegistrationRateLimit(interaction.user.id);
           if (rateCheck.limited) {
             return interaction.reply({
-              content: isEn
-                ? `⏳ You have submitted too many registration attempts recently. Please try again in **${rateCheck.retryAfterSec} seconds**.`
-                : `⏳ Çok sık kayıt başvurusu denemesi yaptın. Lütfen **${rateCheck.retryAfterSec} saniye** sonra tekrar dene.`,
+              ...buildPrecheckErrorPayload('p2', lang, { retryAfterSec: rateCheck.retryAfterSec }),
               ephemeral: true,
             });
           }
@@ -446,6 +540,95 @@ module.exports = {
             ...payload,
             ephemeral: true,
           });
+        }
+
+        // [A6] Akış İçi Dil Değiştirme Butonu: reg_lang:<adım>:<mask>:<m|f|->:<yeniDil>
+        if (interaction.customId.startsWith('reg_lang:')) {
+          const parts = interaction.customId.split(':');
+          const step = parts[1];
+          const rawMask = parts[2];
+          const rawGender = parts[3];
+          const targetLang = parts[4] === 'en' ? 'en' : parts[4] === 'tr' ? 'tr' : null;
+
+          if (parts.length !== 5 || !step || !targetLang) {
+            return interaction.reply(getExpiredMenuPayload(resolveLang(interaction)));
+          }
+
+          if (step === 'g') {
+            const mask = gamesConfig.parseMask(rawMask, { allowZero: true });
+            if (mask === null) {
+              return interaction.reply(getExpiredMenuPayload(targetLang));
+            }
+            return interaction.update(buildGameSelectionPayload(mask, targetLang, interaction.user.id));
+          }
+
+          if (step === 's') {
+            const mask = gamesConfig.parseMask(rawMask, { allowZero: false });
+            if (mask === null) {
+              return interaction.reply(getExpiredMenuPayload(targetLang));
+            }
+            return interaction.update(buildGenderSelectPayload(mask, targetLang));
+          }
+
+          if (step === 'r') {
+            const mask = gamesConfig.parseMask(rawMask, { allowZero: false });
+            const genderCode = rawGender === 'm' || rawGender === 'f' ? rawGender : null;
+            if (mask === null || !genderCode) {
+              return interaction.reply(getExpiredMenuPayload(targetLang));
+            }
+
+            const draft = getRetryDraft(interaction.user.id);
+            const matchingDraft = draft && draft.mask === mask ? draft : null;
+            if (matchingDraft) {
+              // Bellekteki taslağın dilini güncelle; veritabanına ASLA yazma
+              saveRetryDraft(interaction.user.id, {
+                ...matchingDraft,
+                lang: targetLang,
+              });
+              const translatedMsg =
+                matchingDraft.errorBilingual?.[targetLang] ||
+                matchingDraft.errorMessage ||
+                (targetLang === 'en'
+                  ? 'Please review your details and try again.'
+                  : 'Lütfen bilgilerini kontrol edip tekrar dene.');
+              return interaction.update(
+                buildModalErrorPayload({
+                  mask,
+                  genderCode,
+                  lang: targetLang,
+                  message: translatedMsg,
+                  canRetry: matchingDraft.canRetry !== false,
+                })
+              );
+            }
+
+            return interaction.update(
+              buildModalErrorPayload({
+                mask,
+                genderCode,
+                lang: targetLang,
+                message:
+                  targetLang === 'en'
+                    ? 'Your previous details may have expired; you can press Try again to re-enter them.'
+                    : 'Önceki hata detayı süresi dolmuş olabilir; Tekrar dene butonuna basarak yeniden gönderebilirsin.',
+                canRetry: true,
+              })
+            );
+          }
+
+          if (step === 'p0' || step === 'p1' || step === 'p2' || step === 'p3') {
+            const extra = {};
+            if (step === 'p1') {
+              const activeApp = database.getActiveApplication(interaction.user.id);
+              extra.threadId = activeApp?.threadId || null;
+            } else if (step === 'p2' || step === 'p3') {
+              const rateCheck = checkRegistrationRateLimit(interaction.user.id);
+              extra.retryAfterSec = rateCheck.retryAfterSec || 1;
+            }
+            return interaction.update(buildPrecheckErrorPayload(step, targetLang, extra));
+          }
+
+          return interaction.reply(getExpiredMenuPayload(targetLang));
         }
 
         // [A2] Oyun Seçim Butonları: reg_g:<oyunId>:<mask>:<dil>
@@ -525,9 +708,8 @@ module.exports = {
           return interaction.showModal(modal);
         }
 
-        // [B] İSİM RENGİ İNGİLİZCE REHBER BUTONU
+        // [B] İSİM RENGİ İNGİLİZCE REHBER BUTONU (Kalıcı dil yazmaz)
         if (interaction.customId === 'btn_color_en_info') {
-          await setMemberLanguage(interaction.member, 'en').catch(() => {});
           return interaction.reply({
             embeds: [createEnglishColorGuideEmbed()],
             ephemeral: true,
@@ -677,12 +859,9 @@ async function handleRegistrationModalSubmit(interaction) {
   // Hız sınırı kontrolü (kullanıcı başına 10 dakikada max 5 form gönderimi, başarısızlar dahil)
   const rateCheck = checkRegistrationRateLimit(interaction.user.id);
   if (rateCheck.limited) {
-    return interaction.editReply({
-      content: isEn
-        ? `⏳ You have submitted too many forms recently. Please wait **${rateCheck.retryAfterSec} seconds** and try again.`
-        : `⏳ Son 10 dakikada çok fazla kayıt formu gönderdin. Lütfen **${rateCheck.retryAfterSec} saniye** bekleyip tekrar dene.`,
-      allowedMentions: { parse: [] },
-    });
+    return interaction.editReply(
+      buildPrecheckErrorPayload('p3', lang, { retryAfterSec: rateCheck.retryAfterSec })
+    );
   }
   recordRegistrationAttempt(interaction.user.id);
 
@@ -726,13 +905,25 @@ async function handleRegistrationModalSubmit(interaction) {
   });
 
   if (!result.success) {
-    const prefix = result.message?.startsWith('⚠️') || result.message?.startsWith('❌') ? '' : '❌ ';
-    const components = result.canRetry ? [buildRetryRow(mask, genderCode, lang)] : [];
-    return interaction.editReply({
-      content: `${prefix}${result.message}`,
-      components,
-      allowedMentions: { parse: [] },
+    saveRetryDraft(interaction.user.id, {
+      mask,
+      genderCode,
+      lang,
+      name: rawName,
+      games: gamesDraftMap,
+      canRetry: Boolean(result.canRetry),
+      errorMessage: result.message,
+      errorBilingual: result.errorBilingual || { tr: result.message, en: result.message },
     });
+    return interaction.editReply(
+      buildModalErrorPayload({
+        mask,
+        genderCode,
+        lang,
+        message: result.message,
+        canRetry: Boolean(result.canRetry),
+      })
+    );
   }
 
   clearRetryDraft(interaction.user.id);
@@ -784,10 +975,7 @@ async function handleApprove(interaction, applicantId) {
     }
 
     const isApplicantEn =
-      activeApp?.lang === 'en' || resolveLang(applicantMember || applicantId) === 'en';
-    if (isApplicantEn) {
-      await setMemberLanguage(applicantMember, 'en').catch(() => {});
-    }
+      resolveLang(applicantMember || applicantId, activeApp?.lang || null) === 'en';
 
     const displayName = activeApp.displayName || activeApp.realName || applicantMember.user.username;
     const appGames =
@@ -1111,7 +1299,7 @@ async function handleRejectModalSubmit(interaction, applicantId) {
 
   // 2. Özel Kayıt Odasına Bilgilendirme Gönder ve 5 Dakika Sonra Sil
   const isApplicantEn =
-    activeApp?.lang === 'en' || resolveLang(applicantMember || applicantId) === 'en';
+    resolveLang(applicantMember || applicantId, activeApp?.lang || null) === 'en';
 
   const appGames = Array.isArray(activeApp?.games) ? activeApp.games : [];
   const gamesText =

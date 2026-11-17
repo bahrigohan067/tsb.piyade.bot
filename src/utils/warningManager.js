@@ -11,7 +11,7 @@ const {
 
 const config = require('../../config');
 const database = require('./database');
-const { resolveLang, setMemberLanguage, translateToEnglish } = require('./i18n');
+const { resolveLang, translateToEnglish } = require('./i18n');
 
 const LINE_DIVIDER = '────────────────────────────────────────────────────';
 
@@ -1776,7 +1776,6 @@ async function translateActionTakenText(actionTaken) {
  */
 async function handleWarningLogEnglishButton(interaction, rawWarnId) {
   await interaction.deferReply({ ephemeral: true });
-  await setMemberLanguage(interaction.member, 'en').catch(() => {});
 
   const msgEmbed = interaction.message?.embeds?.[0];
 

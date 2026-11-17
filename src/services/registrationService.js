@@ -10,7 +10,7 @@ const config = require('../../config');
 const gamesConfig = require('../../games.config');
 const database = require('../utils/database');
 const robloxService = require('./roblox');
-const { resolveLang, setMemberLanguage, parseGenderInput } = require('../utils/i18n');
+const { resolveLang, parseGenderInput } = require('../utils/i18n');
 const {
   validateDisplayName,
   validateGameUsername,
@@ -362,22 +362,21 @@ async function createRegistrationApplication({
   const userLang = resolveLang(member, lang);
   const isEn = userLang === 'en';
 
-  if (lang === 'en') {
-    await setMemberLanguage(member, 'en').catch(() => {});
-  }
-
   const genderInfo = parseGenderInput(gender);
   const normalizedGender = genderInfo.tr;
 
   // 1. Zaten Kayıtlı mı?
   if (config.isRegisteredMember(member)) {
+    const errorBilingual = {
+      tr: 'Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
+      en: 'You are already registered on our server! You cannot submit another application.',
+    };
     return {
       success: false,
       httpStatus: 400,
       code: 'ALREADY_REGISTERED',
-      message: isEn
-        ? 'You are already registered on our server! You cannot submit another application.'
-        : 'Zaten sunucumuza kayıtlısınız! Tekrar başvuru yapamazsınız.',
+      message: isEn ? errorBilingual.en : errorBilingual.tr,
+      errorBilingual,
     };
   }
 
@@ -386,13 +385,16 @@ async function createRegistrationApplication({
   if (activeApp && activeApp.threadId) {
     const existingThread = await guild.channels.fetch(activeApp.threadId).catch(() => null);
     if (existingThread) {
+      const errorBilingual = {
+        tr: `Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: <#${activeApp.threadId}>`,
+        en: `You already have an active registration application! Please check your registration thread: <#${activeApp.threadId}>`,
+      };
       return {
         success: false,
         httpStatus: 400,
         code: 'ACTIVE_APPLICATION',
-        message: isEn
-          ? `You already have an active registration application! Please check your registration thread: <#${activeApp.threadId}>`
-          : `Devam eden bir başvurunuz bulunmaktadır! Lütfen kayıt odanızı kontrol edin: <#${activeApp.threadId}>`,
+        message: isEn ? errorBilingual.en : errorBilingual.tr,
+        errorBilingual,
         threadId: activeApp.threadId,
       };
     } else {
@@ -410,6 +412,7 @@ async function createRegistrationApplication({
       code: 'NAME_INVALID',
       canRetry: true,
       message: isEn ? nameCheck.error.en : nameCheck.error.tr,
+      errorBilingual: nameCheck.error,
     };
   }
   const cleanDisplayName = nameCheck.value;
@@ -421,13 +424,16 @@ async function createRegistrationApplication({
   }
 
   if (!Array.isArray(rawGamesList) || rawGamesList.length === 0) {
+    const errorBilingual = {
+      tr: 'Kayıt olmak için lütfen en az bir oyun seçiniz.',
+      en: 'Please select at least one game to register.',
+    };
     return {
       success: false,
       httpStatus: 400,
       code: 'NO_GAME_SELECTED',
-      message: isEn
-        ? 'Please select at least one game to register.'
-        : 'Kayıt olmak için lütfen en az bir oyun seçiniz.',
+      message: isEn ? errorBilingual.en : errorBilingual.tr,
+      errorBilingual,
     };
   }
 
@@ -438,15 +444,18 @@ async function createRegistrationApplication({
     const gid = String(item.id || '').trim().toLowerCase();
     const gameCfg = gamesConfig.getGameById(gid);
     if (!gameCfg || gameCfg.enabled === false) {
+      const errorBilingual = {
+        tr: `Desteklenmeyen veya kapalı oyun: ${gid || 'bilinmiyor'}`,
+        en: `Unsupported or disabled game: ${gid || 'unknown'}`,
+      };
       return {
         success: false,
         httpStatus: 400,
         code: 'GAME_USERNAME_INVALID',
         details: { game: gid || 'unknown' },
         canRetry: true,
-        message: isEn
-          ? `Unsupported or disabled game: ${gid || 'unknown'}`
-          : `Desteklenmeyen veya kapalı oyun: ${gid || 'bilinmiyor'}`,
+        message: isEn ? errorBilingual.en : errorBilingual.tr,
+        errorBilingual,
       };
     }
     inputMap.set(gid, item);
@@ -466,6 +475,7 @@ async function createRegistrationApplication({
         details: { game: cfg.id },
         canRetry: true,
         message: isEn ? userCheck.error.en : userCheck.error.tr,
+        errorBilingual: userCheck.error,
       };
     }
 
@@ -478,13 +488,16 @@ async function createRegistrationApplication({
   }
 
   if (orderedGames.length === 0) {
+    const errorBilingual = {
+      tr: 'Lütfen desteklenen en az bir oyun seçiniz.',
+      en: 'Please select at least one supported game.',
+    };
     return {
       success: false,
       httpStatus: 400,
       code: 'NO_GAME_SELECTED',
-      message: isEn
-        ? 'Please select at least one supported game.'
-        : 'Lütfen desteklenen en az bir oyun seçiniz.',
+      message: isEn ? errorBilingual.en : errorBilingual.tr,
+      errorBilingual,
     };
   }
 
@@ -504,38 +517,47 @@ async function createRegistrationApplication({
             console.log(
               `[KAYIT ROBLOX NOT_FOUND] Kullanıcı: ${targetUser.tag || targetUser.id}, Girdi: "${gameItem.username}"`
             );
+            const errorBilingual = {
+              tr: "Başvurun reddedildi: Roblox'ta bu kullanıcı adıyla bir hesap bulunamadı. Lütfen görünen adını (Display Name) değil asıl @kullanıcı adını yazarak tekrar dene.",
+              en: 'Application rejected: No Roblox account was found with that username. Please enter your actual @username — not your Display Name — and try again.',
+            };
             return {
               success: false,
               httpStatus: 400,
               code: 'ROBLOX_NOT_FOUND',
               canRetry: true,
-              message: isEn
-                ? 'Application rejected: No Roblox account was found with that username. Please enter your actual @username — not your Display Name — and try again.'
-                : "Başvurun reddedildi: Roblox'ta bu kullanıcı adıyla bir hesap bulunamadı. Lütfen görünen adını (Display Name) değil asıl @kullanıcı adını yazarak tekrar dene.",
+              message: isEn ? errorBilingual.en : errorBilingual.tr,
+              errorBilingual,
             };
           }
 
           if (robloxResult.error === 'BANNED') {
+            const errorBilingual = {
+              tr: 'Başvurun reddedildi: Bu Roblox hesabı Roblox platformunda kalıcı olarak yasaklanmıştır (Banned)!',
+              en: 'Application rejected: This Roblox account is permanently banned/terminated on Roblox!',
+            };
             return {
               success: false,
               httpStatus: 400,
               code: 'ROBLOX_BANNED',
               canRetry: false,
-              message: isEn
-                ? 'Application rejected: This Roblox account is permanently banned/terminated on Roblox!'
-                : 'Başvurun reddedildi: Bu Roblox hesabı Roblox platformunda kalıcı olarak yasaklanmıştır (Banned)!',
+              message: isEn ? errorBilingual.en : errorBilingual.tr,
+              errorBilingual,
             };
           }
 
           // Geçici API/zaman aşımı/limit hatası: kullanıcı yok sanma, reddetme
+          const errorBilingual = {
+            tr: 'Roblox şu an doğrulanamıyor, birkaç dakika sonra tekrar dene.',
+            en: 'Roblox cannot be verified right now. Please try again in a few minutes.',
+          };
           return {
             success: false,
             httpStatus: 503,
             code: 'ROBLOX_LOOKUP_FAILED',
             canRetry: true,
-            message: isEn
-              ? 'Roblox cannot be verified right now. Please try again in a few minutes.'
-              : 'Roblox şu an doğrulanamıyor, birkaç dakika sonra tekrar dene.',
+            message: isEn ? errorBilingual.en : errorBilingual.tr,
+            errorBilingual,
           };
         }
 
@@ -545,14 +567,17 @@ async function createRegistrationApplication({
       // Çoklu hesap koruması
       const existingReg = database.getRegistrationByRobloxId(rbUser.id);
       if (existingReg && String(existingReg.discordId) !== String(targetUser.id)) {
+        const errorBilingual = {
+          tr: `Bu Roblox hesabı ([${rbUser.name}](https://www.roblox.com/users/${rbUser.id}/profile)) sunucumuzda başka bir Discord kullanıcısına (<@${existingReg.discordId}>) zaten kayıtlıdır!`,
+          en: `This Roblox account ([${rbUser.name}](https://www.roblox.com/users/${rbUser.id}/profile)) is already registered to another Discord user (<@${existingReg.discordId}>)!`,
+        };
         return {
           success: false,
           httpStatus: 409,
           code: 'ROBLOX_ALREADY_REGISTERED',
           canRetry: true,
-          message: isEn
-            ? `This Roblox account ([${rbUser.name}](https://www.roblox.com/users/${rbUser.id}/profile)) is already registered to another Discord user (<@${existingReg.discordId}>)!`
-            : `Bu Roblox hesabı ([${rbUser.name}](https://www.roblox.com/users/${rbUser.id}/profile)) sunucumuzda başka bir Discord kullanıcısına (<@${existingReg.discordId}>) zaten kayıtlıdır!`,
+          message: isEn ? errorBilingual.en : errorBilingual.tr,
+          errorBilingual,
         };
       }
 
