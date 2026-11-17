@@ -9,6 +9,8 @@ const memberRoutes = require('./routes/member');
 const registerRoutes = require('./routes/register');
 const adminRoutes = require('./routes/admin');
 const feedbackRoutes = require('./routes/feedback');
+const gamesRoutes = require('./routes/games');
+const robloxRoutes = require('./routes/roblox');
 
 function createApp(client) {
   const app = express();
@@ -49,6 +51,8 @@ function createApp(client) {
   app.use('/api/register', registerRoutes);
   app.use('/api/admin', adminRoutes);
   app.use('/api/feedback', feedbackRoutes);
+  app.use('/api/games', gamesRoutes);
+  app.use('/api/roblox', robloxRoutes);
 
   // 404 Yakalayıcı (Tüm eşleşmeyen /api rotaları için)
   app.use('/api', (req, res) => {
