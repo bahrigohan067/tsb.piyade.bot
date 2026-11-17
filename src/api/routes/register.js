@@ -3,8 +3,13 @@ const router = express.Router();
 const config = require('../../../config');
 const gamesConfig = require('../../../games.config');
 const database = require('../../utils/database');
-const { createRegistrationApplication } = require('../../services/registrationService');
+const {
+  createRegistrationApplication,
+  checkRegistrationRateLimit,
+  recordRegistrationAttempt,
+} = require('../../services/registrationService');
 const { parseGenderInput } = require('../../utils/i18n');
+const { validateDisplayName, validateGameUsername } = require('../../utils/inputSanitizer');
 
 /**
  * GET /api/register/status/:id
@@ -28,10 +33,18 @@ async function getApplicationStatus(req, res) {
         inGuild: Boolean(member),
         status: 'approved',
         message: 'Kayıt onaylandı ve üyelik aktif.',
-        registration: regRecord || {
-          registered: true,
-          discordId: id,
-        },
+        registration: regRecord
+          ? {
+              ...regRecord,
+              displayName: regRecord.displayName || regRecord.realName || null,
+              games: Array.isArray(regRecord.games) ? regRecord.games : [],
+            }
+          : {
+              registered: true,
+              discordId: id,
+              displayName: null,
+              games: [],
+            },
       });
     }
 
@@ -44,11 +57,11 @@ async function getApplicationStatus(req, res) {
         message: 'Kayıt başvurunuz yetkili onayında bekliyor.',
         application: {
           threadId: activeApp.threadId || null,
-          robloxUsername: activeApp.robloxUsername || null,
-          games: activeApp.games || [],
-          gameUsernames: activeApp.gameUsernames || {},
+          displayName: activeApp.displayName || activeApp.realName || null,
           realName: activeApp.realName || null,
           gender: activeApp.gender || null,
+          games: Array.isArray(activeApp.games) ? activeApp.games : [],
+          robloxUsername: activeApp.robloxUsername || null,
           createdAt: activeApp.createdAt || null,
         },
       });
@@ -87,15 +100,17 @@ router.get('/:id', getApplicationStatus);
 
 /**
  * POST /api/register
- * Site kayıt formu (gerçek ad/takma ad, cinsiyet, seçilen oyunlar + kullanıcı adları veya robloxInput).
+ * Site kayıt formu.
+ * Yeni gövde: { name, gender ('male'|'female'), games: [{ id, username }], lang, discordId? }
+ * Geriye dönük uyumlu eski gövde: { realName, robloxInput, gender, lang, discordId? }
  */
 router.post('/', async (req, res) => {
-  const { realName, gender, robloxInput, games, gameUsernames, lang } = req.body;
-  const discordId = req.body.discordId || req.headers['x-actor-id'];
-  const reqLang = lang === 'en' ? 'en' : 'tr';
+  const body = req.body || {};
+  const discordId = body.discordId || req.headers['x-actor-id'];
+  const reqLang = body.lang === 'en' ? 'en' : 'tr';
   const isEn = reqLang === 'en';
 
-  // 1. Girdi Doğrulama
+  // 1. Discord ID Kontrolü
   if (!discordId || !/^\d{1,21}$/.test(String(discordId))) {
     return res.status(400).json({
       error: isEn
@@ -105,37 +120,78 @@ router.post('/', async (req, res) => {
     });
   }
 
-  if (!realName || typeof realName !== 'string' || realName.trim().length < 2 || realName.trim().length > 32) {
+  // 2. Geriye Dönük Uyumlu Alan Eşleme (name / realName ve games / robloxInput)
+  const rawName = body.name !== undefined ? body.name : body.realName;
+  let rawGames = [];
+  if (Array.isArray(body.games)) {
+    rawGames = body.games;
+  } else if (body.robloxInput !== undefined && body.robloxInput !== null && String(body.robloxInput).trim() !== '') {
+    rawGames = [{ id: 'roblox', username: body.robloxInput }];
+  }
+
+  // 3. Ad / Takma Ad Doğrulama
+  const nameCheck = validateDisplayName(rawName);
+  if (!nameCheck.ok) {
     return res.status(400).json({
-      error: isEn
-        ? 'Invalid real name (must be between 2 and 32 characters).'
-        : 'Geçersiz ad / takma ad (en az 2, en fazla 32 karakter olmalıdır).',
-      code: 'INVALID_REAL_NAME',
+      error: isEn ? nameCheck.error.en : nameCheck.error.tr,
+      code: 'NAME_INVALID',
     });
   }
 
-  const parsedGender = parseGenderInput(gender);
-  const formattedGender = parsedGender.tr;
-
-  let normalizedGames = gamesConfig.normalizeGameList(Array.isArray(games) ? games : []);
-  const cleanUsernames =
-    gameUsernames && typeof gameUsernames === 'object' ? { ...gameUsernames } : {};
-
-  if (normalizedGames.length === 0) {
-    if (!robloxInput || typeof robloxInput !== 'string' || robloxInput.trim().length < 1) {
-      return res.status(400).json({
-        error: isEn
-          ? 'Please select at least 1 game or provide Roblox info.'
-          : 'En az 1 oyun seçilmeli veya Roblox kullanıcı bilgisi girilmelidir.',
-        code: 'INVALID_ROBLOX_INPUT',
-      });
-    }
-    normalizedGames = ['roblox'];
-    cleanUsernames.roblox = robloxInput.trim();
+  // 4. Oyun Seçimi ve Oyun Kullanıcı Adı Doğrulama
+  if (rawGames.length === 0) {
+    return res.status(400).json({
+      error: isEn
+        ? 'Please select at least one game to register.'
+        : 'Kayıt olmak için lütfen en az bir oyun seçiniz.',
+      code: 'NO_GAME_SELECTED',
+    });
   }
 
+  const cleanGames = [];
+  const seenIds = new Set();
+  for (const item of rawGames) {
+    if (!item || typeof item !== 'object') {
+      return res.status(400).json({
+        error: isEn ? 'Invalid game entry format.' : 'Geçersiz oyun veri formatı.',
+        code: 'GAME_USERNAME_INVALID',
+        details: { game: 'unknown' },
+      });
+    }
+
+    const gid = String(item.id || '').trim().toLowerCase();
+    const gameCfg = gamesConfig.getGameById(gid);
+    if (!gameCfg || gameCfg.enabled === false) {
+      return res.status(400).json({
+        error: isEn ? `Unsupported game: ${gid || 'unknown'}` : `Desteklenmeyen oyun: ${gid || 'bilinmiyor'}`,
+        code: 'GAME_USERNAME_INVALID',
+        details: { game: gid || 'unknown' },
+      });
+    }
+
+    if (seenIds.has(gameCfg.id)) continue;
+    seenIds.add(gameCfg.id);
+
+    const userCheck = validateGameUsername(gameCfg, item.username);
+    if (!userCheck.ok) {
+      return res.status(400).json({
+        error: isEn ? userCheck.error.en : userCheck.error.tr,
+        code: 'GAME_USERNAME_INVALID',
+        details: { game: gameCfg.id },
+      });
+    }
+
+    cleanGames.push({
+      id: gameCfg.id,
+      username: userCheck.value,
+    });
+  }
+
+  const parsedGender = parseGenderInput(body.gender);
+  const formattedGender = parsedGender.tr;
+
   try {
-    const member = await req.guild.members.fetch(discordId).catch(() => null);
+    const member = req.guild ? await req.guild.members.fetch(discordId).catch(() => null) : null;
     if (!member) {
       return res.status(404).json({
         error: isEn
@@ -145,23 +201,34 @@ router.post('/', async (req, res) => {
       });
     }
 
+    const rateCheck = checkRegistrationRateLimit(member.id);
+    if (rateCheck.limited) {
+      return res.status(429).json({
+        error: isEn
+          ? `Too many registration attempts. Please try again in ${rateCheck.retryAfterSec} seconds.`
+          : `Çok fazla kayıt denemesi yaptınız. Lütfen ${rateCheck.retryAfterSec} saniye sonra tekrar deneyin.`,
+        code: 'RATE_LIMITED',
+        retryAfterSec: rateCheck.retryAfterSec,
+      });
+    }
+    recordRegistrationAttempt(member.id);
+
     const result = await createRegistrationApplication({
       guild: req.guild,
       member,
       user: member.user,
-      realName: realName.trim(),
+      name: nameCheck.value,
       gender: formattedGender,
-      games: normalizedGames,
-      gameUsernames: cleanUsernames,
-      robloxInput: cleanUsernames.roblox || (robloxInput ? String(robloxInput).trim() : null),
-      source: 'site',
+      games: cleanGames,
+      source: 'web',
       lang: reqLang,
     });
 
     if (!result.success) {
-      return res.status(400).json({
+      return res.status(result.httpStatus || 400).json({
         error: result.message,
         code: result.code,
+        ...(result.details ? { details: result.details } : {}),
       });
     }
 
@@ -170,8 +237,6 @@ router.post('/', async (req, res) => {
       message: result.message,
       threadId: result.threadId,
       threadUrl: result.threadUrl,
-      games: result.games,
-      gameUsernames: result.gameUsernames,
       robloxUser: result.robloxUser,
     });
   } catch (err) {

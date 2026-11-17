@@ -91,10 +91,10 @@ router.get('/:id/profile', async (req, res) => {
       },
       registration: {
         registered: Boolean(reg) || config.isRegisteredMember(member),
+        displayName: reg?.displayName || reg?.realName || null,
         realName: reg?.realName || null,
         gender: reg?.gender || null,
-        games: reg?.games || (reg?.robloxId ? ['roblox'] : []),
-        gameUsernames: reg?.gameUsernames || (reg?.robloxUsername ? { roblox: reg.robloxUsername } : {}),
+        games: Array.isArray(reg?.games) ? reg.games : [],
         robloxUsername: reg?.robloxUsername || null,
         robloxId: reg?.robloxId || null,
         robloxDisplayName: reg?.robloxDisplayName || null,

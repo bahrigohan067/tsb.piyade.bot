@@ -1,6 +1,7 @@
 const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
 const database = require('../utils/database');
 const config = require('../../config');
+const gamesConfig = require('../../games.config');
 const { resolveLang } = require('../utils/i18n');
 
 module.exports = {
@@ -24,14 +25,16 @@ module.exports = {
   async execute(interaction) {
     const isEn = resolveLang(interaction.member) === 'en';
 
-    // 1. Yetki Kontrolü: Kayıt Yetkilisi, Yönetmenlik, Developer veya Yönetici
+    // 1. Yetki Kontrolü: Kayıt Yetkilisi, Genel Yetkili, Yönetmenlik, Developer, Kurucu veya Yönetici
     const isStaff = interaction.member.roles.cache.has(config.ROLES.STAFF);
+    const isStaffGeneral = config.ROLES.STAFF_GENERAL && interaction.member.roles.cache.has(config.ROLES.STAFF_GENERAL);
     const isDev = interaction.member.roles.cache.has(config.ROLES.DEVELOPER);
     const isTryoutStaff = interaction.member.roles.cache.has(config.ROLES.TRYOUT_STAFF);
+    const isFounder = config.ROLES.FOUNDER && interaction.member.roles.cache.has(config.ROLES.FOUNDER);
     const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
     const isOwner = interaction.guild.ownerId === interaction.user.id;
 
-    if (!isStaff && !isDev && !isTryoutStaff && !isAdmin && !isOwner) {
+    if (!isStaff && !isStaffGeneral && !isDev && !isTryoutStaff && !isFounder && !isAdmin && !isOwner) {
       return interaction.reply({
         content: isEn
           ? '❌ You do not have permission to use this command (Registration Staff or Management only).'
@@ -143,14 +146,34 @@ module.exports = {
       }
     }
 
+    // Silinen oyun / Roblox bilgisi özetini oluştur (geriye dönük uyumlu)
+    let removedGamesValue = isEn ? '*No registration record found*' : '*Kayıtlı hesap bulunamadı*';
+    if (removedRecord) {
+      const removedGames = Array.isArray(removedRecord.games) ? removedRecord.games : [];
+      if (removedGames.length > 0) {
+        removedGamesValue = removedGames
+          .map((g) => {
+            const cfg = gamesConfig.getGameById(g.id);
+            const label = cfg ? gamesConfig.getGameLabel(cfg, isEn ? 'en' : 'tr') : g.id;
+            const idPart = g.robloxId ? ` (ID: \`${g.robloxId}\`)` : '';
+            return `${cfg?.emoji || '🎮'} **${label}:** \`${g.username}\`${idPart}`;
+          })
+          .join('\n');
+      } else if (removedRecord.robloxUsername) {
+        removedGamesValue = `**@${removedRecord.robloxUsername}**\nID: \`${removedRecord.robloxId || '-'}\``;
+      } else {
+        removedGamesValue = `**${removedRecord.displayName || removedRecord.realName || 'Kayıt'}**`;
+      }
+    }
+
     // 6. Bilgilendirme Embed'i Oluştur
     const embed = new EmbedBuilder()
       .setTitle(isEn ? '🔄 Registration & Roles Successfully Reset' : '🔄 Kayıt ve Roller Başarıyla Sıfırlandı')
       .setColor(config.COLORS.WARNING_ORANGE || 0xFF7A00)
       .setDescription(
         isEn
-          ? `The server registration, Roblox account, and assigned roles of <@${targetUser.id}> have been completely reset.`
-          : `<@${targetUser.id}> kullanıcısının sunucu kaydı, bot hafızasındaki Roblox hesabı ve rolleri başarıyla sıfırlandı.`
+          ? `The server registration, game accounts, and assigned roles of <@${targetUser.id}> have been completely reset.`
+          : `<@${targetUser.id}> kullanıcısının sunucu kaydı, bot hafızasındaki oyun/Roblox hesapları ve rolleri başarıyla sıfırlandı.`
       )
       .addFields(
         {
@@ -159,24 +182,8 @@ module.exports = {
           inline: true,
         },
         {
-          name: isEn ? '🗑️ Wiped Roblox / Game Info' : '🗑️ Silinen Roblox / Oyun Bilgisi',
-          value: (() => {
-            if (!removedRecord) {
-              return isEn ? '*No registered game/Roblox account found*' : '*Kayıtlı oyun/Roblox hesabı bulunamadı*';
-            }
-            const lines = [];
-            if (removedRecord.robloxUsername || removedRecord.robloxId) {
-              lines.push(`🎮 **@${removedRecord.robloxUsername || 'Unknown'}** (ID: \`${removedRecord.robloxId || '-'}\`)`);
-            }
-            if (removedRecord.gameUsernames && typeof removedRecord.gameUsernames === 'object') {
-              for (const [gKey, gVal] of Object.entries(removedRecord.gameUsernames)) {
-                if (gKey !== 'roblox' && gVal) {
-                  lines.push(`🕹️ **${gKey.toUpperCase()}:** \`${gVal}\``);
-                }
-              }
-            }
-            return lines.length > 0 ? lines.join('\n') : isEn ? '*No game details*' : '*Oyun detayı yok*';
-          })(),
+          name: isEn ? '🗑️ Wiped Games & Roblox Account' : '🗑️ Silinen Oyun / Roblox Hesabı',
+          value: removedGamesValue,
           inline: true,
         },
         {

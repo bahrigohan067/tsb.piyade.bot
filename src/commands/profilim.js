@@ -1,246 +1,191 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+const {
+  SlashCommandBuilder,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+} = require('discord.js');
+
 const config = require('../../config');
 const gamesConfig = require('../../games.config');
 const database = require('../utils/database');
 const { resolveLang } = require('../utils/i18n');
+const { sanitizeInlineCode, escapeEmbedText } = require('../utils/inputSanitizer');
+
+// Kullanıcı başına bekleme süresi takibi (Map<userId, timestamp>)
+const profileCooldowns = new Map();
 
 /**
- * Kayıt kaydı ve Discord rollerinden kullanıcının oyun listesini ve kullanıcı adlarını çözer.
- * Eski (sadece Roblox) kayıtlarla da geriye dönük tam uyumludur.
+ * Testler için profil bekleme süresi önbelleğini sıfırlar.
  */
-function resolveMemberGameProfile(regRecord, member) {
-  const gameSet = new Set();
-  const usernames = {};
-
-  if (regRecord) {
-    if (Array.isArray(regRecord.games)) {
-      for (const gId of regRecord.games) {
-        if (gamesConfig.getGameById(gId)) {
-          gameSet.add(gId);
-        }
-      }
-    }
-
-    if (regRecord.gameUsernames && typeof regRecord.gameUsernames === 'object') {
-      for (const [gId, uname] of Object.entries(regRecord.gameUsernames)) {
-        if (gamesConfig.getGameById(gId) && uname) {
-          gameSet.add(gId);
-          usernames[gId] = String(uname).trim();
-        }
-      }
-    }
-
-    // Eski kayıt desteği (yalnızca robloxUsername/robloxId saklanan kayıtlar)
-    if (regRecord.robloxUsername || regRecord.robloxId) {
-      gameSet.add('roblox');
-      if (!usernames.roblox && regRecord.robloxUsername) {
-        usernames.roblox = regRecord.robloxUsername;
-      }
-    }
-  }
-
-  // Sunucu rollerinden oyun rollerini tespit et (kayıtta eksikse tamamlar)
-  const roleBadges = [];
-  if (member && member.roles && member.roles.cache) {
-    for (const game of gamesConfig.getEnabledGames()) {
-      if (game.roleId && member.roles.cache.has(game.roleId)) {
-        gameSet.add(game.id);
-        roleBadges.push(`<@&${game.roleId}>`);
-      }
-    }
-  }
-
-  const orderedGames = gamesConfig.normalizeGameList(Array.from(gameSet));
-  return {
-    games: orderedGames,
-    usernames,
-    roleBadges,
-    robloxId: regRecord?.robloxId || null,
-    robloxProfileUrl:
-      regRecord?.robloxProfileUrl ||
-      (regRecord?.robloxId ? `https://www.roblox.com/users/${regRecord.robloxId}/profile` : null),
-    realName: regRecord?.realName || null,
-  };
+function resetProfileCooldowns() {
+  profileCooldowns.clear();
 }
 
 /**
- * Düzenli, bol emojili /profilim Embed kartını üretir.
+ * Kayıtlı kullanıcının /profilim yanıt yükünü (embed + varsa Roblox link butonu) oluşturur.
  */
-function buildProfileEmbed({ targetUser, targetMember, guild, profile, lang = 'tr' }) {
+function buildProfilePayload({ user, member, registration, lang = 'tr' }) {
   const isEn = lang === 'en';
-  const avatarUrl =
-    typeof targetUser.displayAvatarURL === 'function'
-      ? targetUser.displayAvatarURL({ size: 256, dynamic: true })
-      : null;
-  const guildIcon =
-    guild && typeof guild.iconURL === 'function'
-      ? guild.iconURL({ size: 128, dynamic: true })
-      : null;
+  const showName = config.PROFILE?.SHOW_NAME !== false;
+  const displayName = registration?.displayName || registration?.realName || null;
 
-  const displayName = targetMember?.displayName || targetUser.username;
-  const gamesSummary =
-    profile.games
-      .map((gId) => {
-        const g = gamesConfig.getGameById(gId);
-        return g ? `${g.emoji} **${g.name[lang]}**` : gId;
-      })
-      .join('  •  ') || (isEn ? '*None*' : '*Yok*');
+  // Oyunları games.config.js sırasına göre diz
+  const rawGames = Array.isArray(registration?.games) ? registration.games : [];
+  const orderIds = gamesConfig.GAMES.map((g) => g.id);
+  const sortedGames = [...rawGames].sort((a, b) => {
+    const idxA = orderIds.indexOf(a.id);
+    const idxB = orderIds.indexOf(b.id);
+    return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
+  });
+
+  const gameLines = sortedGames.map((entry) => {
+    const gameCfg = gamesConfig.getGameById(entry.id);
+    const emoji = gameCfg?.emoji || '🎮';
+    const label = gameCfg ? gamesConfig.getGameLabel(gameCfg, lang) : entry.id;
+    return `${emoji} **${label}** ➜ \`${sanitizeInlineCode(entry.username, 64)}\``;
+  });
+
+  const gamesSection =
+    sortedGames.length > 0
+      ? gameLines.join('\n')
+      : isEn
+        ? '*No game info yet*'
+        : '*Henüz oyun bilgisi yok*';
+
+  const regTimestampMs = registration?.approvedAt || registration?.registeredAt || null;
+  const regDateStr = regTimestampMs ? `<t:${Math.floor(regTimestampMs / 1000)}:D>` : '`Bilinmiyor`';
+  const joinTimestampMs = member?.joinedTimestamp || null;
+  const joinDateStr = joinTimestampMs ? `<t:${Math.floor(joinTimestampMs / 1000)}:R>` : '`Bilinmiyor`';
+
+  const lines = ['━━━━━━━━━━━━━━━━━━━━'];
+  if (showName && displayName) {
+    lines.push(
+      isEn
+        ? `👤 **Name:** ${escapeEmbedText(displayName, 64)}`
+        : `👤 **Ad:** ${escapeEmbedText(displayName, 64)}`
+    );
+  }
+  lines.push(`🏷️ **Discord:** <@${user.id}>`);
+  lines.push('━━━━━━━━━━━━━━━━━━━━');
+  lines.push(
+    isEn
+      ? `🕹️ **Games Played** (${sortedGames.length})`
+      : `🕹️ **Oynadığı Oyunlar** (${sortedGames.length})`
+  );
+  lines.push(gamesSection);
+  lines.push('━━━━━━━━━━━━━━━━━━━━');
+  lines.push(
+    isEn
+      ? `📅 **Registered:** ${regDateStr}  •  🚪 **Joined:** ${joinDateStr}`
+      : `📅 **Kayıt:** ${regDateStr}  •  🚪 **Sunucuya katılım:** ${joinDateStr}`
+  );
+  lines.push(
+    isEn
+      ? '💡 Copy a username to add as a friend! 🤝'
+      : '💡 Arkadaş eklemek için kullanıcı adını kopyala! 🤝'
+  );
+
+  const avatarUrl =
+    typeof user?.displayAvatarURL === 'function'
+      ? user.displayAvatarURL({ size: 256 })
+      : null;
 
   const embed = new EmbedBuilder()
-    .setColor(config.COLORS.PRIMARY || 0x0099FF)
-    .setAuthor({
-      name: `${displayName} • ${isEn ? 'Player Profile' : 'Oyuncu Kartı'}`,
-      iconURL: avatarUrl || undefined,
-    })
-    .setTitle(
-      isEn
-        ? '🎮✨ PLAYER PROFILE & FRIEND CARD ✨🎮'
-        : '🎮✨ OYUNCU PROFİLİ & ARKADAŞ KARTI ✨🎮'
-    )
-    .setDescription(
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `👤 **${isEn ? 'Member' : 'Üye'}:** <@${targetUser.id}>\n` +
-      (profile.realName
-        ? `🪪 **${isEn ? 'Name / Nickname' : 'İsim / Takma Ad'}:** \`${profile.realName}\`\n`
-        : '') +
-      `🕹️ **${isEn ? 'Played Games' : 'Oynadığı Oyunlar'}:** ${gamesSummary}\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`
-    )
-    .setFooter({
-      text: isEn
-        ? `🤝 Copy the usernames above to send a friend request! • ${config.BRAND_NAME}`
-        : `🤝 Arkadaş eklemek için yukarıdaki kullanıcı adlarını kopyalayabilirsiniz! • ${config.BRAND_NAME}`,
-      iconURL: guildIcon || undefined,
-    })
-    .setTimestamp();
+    .setTitle(isEn ? '🎮✨ Player Profile' : '🎮✨ Oyuncu Profili')
+    .setColor(config.COLORS.PURPLE || config.COLORS.PRIMARY)
+    .setDescription(lines.join('\n'))
+    .setFooter({ text: `${config.BRAND_NAME} • /profilim` });
 
   if (avatarUrl) {
     embed.setThumbnail(avatarUrl);
   }
 
-  for (const gameId of profile.games) {
-    const game = gamesConfig.getGameById(gameId);
-    if (!game) continue;
-
-    const uname = profile.usernames[gameId];
-    const displayUsername = uname
-      ? `\`${uname}\``
-      : isEn
-      ? '*Not specified*'
-      : '*Belirtilmemiş*';
-
-    if (gameId === 'roblox') {
-      const linkLine = profile.robloxProfileUrl
-        ? `\n🔗 **${isEn ? 'Profile Link' : 'Profil Linki'}:** [${isEn ? 'Open Roblox Profile' : 'Roblox Profilini Aç'} ↗️](${profile.robloxProfileUrl})`
-        : '';
-      embed.addFields({
-        name: `🎮 ━━ ROBLOX ━━`,
-        value: `🏷️ **${isEn ? 'Username' : 'Kullanıcı Adı'}:** ${displayUsername}${linkLine}`,
-        inline: false,
-      });
-    } else if (gameId === 'cs2') {
-      embed.addFields({
-        name: `💣 ━━ CS2 (Counter-Strike 2) ━━`,
-        value: `🎯 **${isEn ? 'Username / Code' : 'Kullanıcı Adı / Kod'}:** ${displayUsername}`,
-        inline: false,
-      });
-    } else if (gameId === 'zula') {
-      embed.addFields({
-        name: `🔫 ━━ ZULA ━━`,
-        value: `🪖 **${isEn ? 'Username' : 'Kullanıcı Adı'}:** ${displayUsername}`,
-        inline: false,
-      });
-    } else if (gameId === 'minecraft') {
-      embed.addFields({
-        name: `⛏️ ━━ MINECRAFT ━━`,
-        value: `🧱 **${isEn ? 'Username' : 'Kullanıcı Adı'}:** ${displayUsername}`,
-        inline: false,
-      });
-    }
+  // Roblox oyunu varsa ve geçerli sayısal ID bulunuyorsa profil link butonu ekle
+  const components = [];
+  const robloxGame = sortedGames.find((g) => g.id === 'roblox');
+  const robloxId = robloxGame?.robloxId || registration?.robloxId || null;
+  if (robloxGame && robloxId && /^\d+$/.test(String(robloxId))) {
+    components.push(
+      new ActionRowBuilder().addComponents(
+        new ButtonBuilder()
+          .setLabel(isEn ? '🧱 Roblox Profile' : '🧱 Roblox Profili')
+          .setStyle(ButtonStyle.Link)
+          .setURL(`https://www.roblox.com/users/${robloxId}/profile`)
+      )
+    );
   }
 
-  if (profile.roleBadges.length > 0) {
-    embed.addFields({
-      name: isEn ? '🏅 ━━ GAME ROLES ━━' : '🏅 ━━ OYUN ROLLERİ ━━',
-      value: profile.roleBadges.join('  '),
-      inline: false,
-    });
-  }
-
-  return embed;
+  return {
+    embeds: [embed],
+    components,
+    allowedMentions: { parse: [] },
+  };
 }
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('profilim')
-    .setDescription('Oynadığın oyunları ve kullanıcı adlarını arkadaş eklemeleri için kanalda gösterir.')
-    .setDescriptionLocalizations({
-      'en-US': 'Shows your played games and usernames in chat so members can add you as a friend.',
+    .setNameLocalizations({
+      'en-US': 'profile',
+      'en-GB': 'profile',
     })
-    .addUserOption((option) =>
-      option
-        .setName('kullanici')
-        .setDescription('Profilini görüntülemek istediğin üye (Boş bırakırsan kendi profilin gösterilir)')
-        .setDescriptionLocalizations({
-          'en-US': 'Optional member whose game profile you want to view (defaults to you)',
-        })
-        .setRequired(false)
-    ),
+    .setDescription('Oynadığın oyunları ve kullanıcı adlarını herkese göster 🎮')
+    .setDescriptionLocalizations({
+      'en-US': 'Show the games you play and your usernames to everyone 🎮',
+      'en-GB': 'Show the games you play and your usernames to everyone 🎮',
+    }),
 
-  resolveMemberGameProfile,
-  buildProfileEmbed,
+  buildProfilePayload,
+  resetProfileCooldowns,
 
   async execute(interaction) {
     const lang = resolveLang(interaction);
     const isEn = lang === 'en';
 
-    const optionUser = interaction.options?.getUser?.('kullanici') || null;
-    const targetUser = optionUser || interaction.user;
-    const isSelf = String(targetUser.id) === String(interaction.user.id);
+    // 1. Kayıtlı üye kontrolü (isRegisteredMember rolü + veritabanı kaydı)
+    const regRecord = database.getRegistrationByDiscordId(interaction.user.id);
+    const isRegistered = config.isRegisteredMember(interaction.member) && Boolean(regRecord);
 
-    if (targetUser.bot) {
+    if (!isRegistered) {
       return interaction.reply({
         content: isEn
-          ? '🤖 Bot accounts do not have a game profile!'
-          : '🤖 Bot hesaplarının oyuncu profili bulunmaz!',
+          ? `You are not registered yet. Use the button in <#${config.CHANNELS.REGISTER}> to register 📝`
+          : `Henüz kayıtlı değilsin. Kayıt için <#${config.CHANNELS.REGISTER}> kanalındaki butonu kullan 📝`,
         ephemeral: true,
+        allowedMentions: { parse: [] },
       });
     }
 
-    const targetMember =
-      interaction.guild && interaction.guild.members
-        ? await interaction.guild.members.fetch(targetUser.id).catch(() => null)
-        : null;
+    // 2. Bekleme süresi (cooldown) kontrolü (kullanıcı başına 30 sn)
+    const cooldownSec = Number(config.PROFILE?.COOLDOWN_SEC ?? 30);
+    const cooldownMs = Math.max(0, cooldownSec) * 1000;
+    const now = Date.now();
+    const lastUsed = profileCooldowns.get(interaction.user.id) || 0;
 
-    const regRecord = database.getRegistrationByDiscordId(targetUser.id);
-    const profile = resolveMemberGameProfile(regRecord, targetMember || (isSelf ? interaction.member : null));
-
-    const hasAnyData = Boolean(regRecord) || profile.games.length > 0;
-    if (!hasAnyData) {
+    if (cooldownMs > 0 && now - lastUsed < cooldownMs) {
+      const remainingSec = Math.max(1, Math.ceil((cooldownMs - (now - lastUsed)) / 1000));
       return interaction.reply({
-        content: isSelf
-          ? isEn
-            ? `⚠️ You don't have a registered game profile yet! Please register in <#${config.CHANNELS.REGISTER}> first.`
-            : `⚠️ Henüz kayıtlı bir oyuncu profilin bulunmuyor! Kayıt olmak için <#${config.CHANNELS.REGISTER}> kanalından **Kayıt Ol** butonunu kullanabilirsin.`
-          : isEn
-          ? `ℹ️ <@${targetUser.id}> does not have a registered game profile yet.`
-          : `ℹ️ <@${targetUser.id}> kullanıcısı henüz sunucuda oyuncu kaydını tamamlamamış.`,
+        content: isEn
+          ? `Try again in ${remainingSec} sec ⏳`
+          : `${remainingSec} sn sonra tekrar dene ⏳`,
         ephemeral: true,
+        allowedMentions: { parse: [] },
       });
     }
 
-    const embed = buildProfileEmbed({
-      targetUser,
-      targetMember: targetMember || (isSelf ? interaction.member : null),
-      guild: interaction.guild,
-      profile,
+    profileCooldowns.set(interaction.user.id, now);
+
+    // 3. Herkese açık profil yanıtı gönder (kimseyi pinglemeden)
+    const payload = buildProfilePayload({
+      user: interaction.user,
+      member: interaction.member,
+      registration: regRecord,
       lang,
     });
 
-    // Diğer sunucu üyelerinin görebilmesi ve arkadaş ekleyebilmesi için herkese açık (public) gönderilir
     return interaction.reply({
-      embeds: [embed],
-      allowedMentions: { parse: [] },
+      ...payload,
       ephemeral: false,
     });
   },

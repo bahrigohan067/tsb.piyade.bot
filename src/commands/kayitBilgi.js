@@ -2,11 +2,12 @@ const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('disc
 const database = require('../utils/database');
 const config = require('../../config');
 const gamesConfig = require('../../games.config');
+const { sanitizeInlineCode, escapeEmbedText } = require('../utils/inputSanitizer');
 
 module.exports = {
   data: new SlashCommandBuilder()
     .setName('kayit-bilgi')
-    .setDescription('Bir kullanıcının kayıt ve oyun bilgilerini sorgular.')
+    .setDescription('Bir kullanıcının kayıt, oyun ve Roblox bilgilerini sorgular.')
     .addUserOption((option) =>
       option
         .setName('kullanici')
@@ -16,18 +17,21 @@ module.exports = {
     .addStringOption((option) =>
       option
         .setName('roblox_id')
-        .setDescription('Sorgulanacak Roblox ID\'si')
+        .setDescription("Sorgulanacak Roblox ID'si")
         .setRequired(false)
     ),
 
   async execute(interaction) {
-    // Sadece yetkili rolü veya yönetici kullanabilsin
-    const hasRole =
-      interaction.member.roles.cache.has(config.ROLES.STAFF) ||
-      interaction.member.roles.cache.has(config.ROLES.STAFF_GENERAL) ||
-      interaction.member.roles.cache.has(config.ROLES.DEVELOPER) ||
-      interaction.member.roles.cache.has(config.ROLES.FOUNDER) ||
-      interaction.member.roles.cache.has(config.ROLES.COMMUNITY_OFFICIAL);
+    // Sadece yetkili rolleri veya yönetici kullanabilsin
+    const staffRoles = [
+      config.ROLES.STAFF,
+      config.ROLES.STAFF_GENERAL,
+      config.ROLES.TRYOUT_STAFF,
+      config.ROLES.DEVELOPER,
+      config.ROLES.FOUNDER,
+      config.ROLES.COMMUNITY_OFFICIAL,
+    ].filter(Boolean);
+    const hasRole = staffRoles.some((rId) => interaction.member.roles.cache.has(rId));
     const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
 
     if (!hasRole && !isAdmin) {
@@ -57,53 +61,68 @@ module.exports = {
       });
     }
 
-    const gamesList = gamesConfig.normalizeGameList(record.games || (record.robloxId ? ['roblox'] : []));
-    const gamesDisplay = gamesConfig.formatGamesDisplay(gamesList, 'tr') || 'Belirtilmemiş';
-    const usernames = record.gameUsernames || {};
+    const displayName = record.displayName || record.realName || 'Belirtilmemiş';
+    const games = Array.isArray(record.games) ? record.games : [];
 
-    const fields = [
-      { name: '👤 Discord Kullanıcısı', value: `<@${record.discordId}> (\`${record.discordId}\`)`, inline: true },
-      { name: '📝 Adı / Takma Adı', value: `${record.realName || 'Belirtilmemiş'}`, inline: true },
-      { name: '🚻 Cinsiyet', value: `${record.gender || 'Belirtilmemiş'}`, inline: true },
-      { name: '🎮 Seçtiği Oyunlar', value: gamesDisplay, inline: false },
-    ];
+    // Oyunları games.config.js sırasıyla formatla
+    const orderIds = gamesConfig.GAMES.map((g) => g.id);
+    const sortedGames = [...games].sort((a, b) => {
+      const idxA = orderIds.indexOf(a.id);
+      const idxB = orderIds.indexOf(b.id);
+      return (idxA === -1 ? 999 : idxA) - (idxB === -1 ? 999 : idxB);
+    });
 
-    if (record.robloxId || record.robloxUsername) {
-      const robloxLink = record.robloxId
-        ? `[${record.robloxUsername || 'Profil'}](https://www.roblox.com/users/${record.robloxId}/profile)`
-        : `\`${record.robloxUsername}\``;
-      fields.push(
-        { name: '🎮 Roblox Kullanıcı Adı', value: robloxLink, inline: true },
-        { name: '🆔 Roblox ID', value: record.robloxId ? `\`${record.robloxId}\`` : '`Yok`', inline: true }
-      );
-    }
+    const gamesText =
+      sortedGames.length > 0
+        ? sortedGames
+            .map((g) => {
+              const cfg = gamesConfig.getGameById(g.id);
+              const emoji = cfg?.emoji || '🎮';
+              const label = cfg ? gamesConfig.getGameLabel(cfg, 'tr') : g.id;
+              return `${emoji} **${label}** ➜ \`${sanitizeInlineCode(g.username, 64)}\``;
+            })
+            .join('\n')
+        : '*Kayıtlı oyun bilgisi yok*';
 
-    for (const gId of gamesList) {
-      if (gId === 'roblox') continue;
-      const g = gamesConfig.getGameById(gId);
-      if (!g) continue;
-      fields.push({
-        name: `${g.emoji} ${g.name.tr} Kullanıcı Adı`,
-        value: usernames[gId] ? `\`${usernames[gId]}\`` : '`Belirtilmemiş`',
-        inline: true,
-      });
-    }
-
-    fields.push(
-      { name: '👮 Onaylayan Yetkili', value: record.approvedBy ? `<@${record.approvedBy}>` : 'Bilinmiyor', inline: true },
-      { name: '📅 Kayıt Tarihi', value: record.registeredAt ? `<t:${Math.floor(record.registeredAt / 1000)}:F>` : 'Bilinmiyor', inline: false }
-    );
+    const robloxGame = sortedGames.find((g) => g.id === 'roblox');
+    const robloxId = robloxGame?.robloxId || record.robloxId || null;
+    const robloxNick = robloxGame?.username || record.robloxUsername || null;
 
     const embed = new EmbedBuilder()
       .setTitle('📋 Kayıtlı Üye Bilgileri')
       .setColor(config.COLORS.PRIMARY)
-      .addFields(fields)
-      .setFooter({ text: `${config.BRAND_NAME} | Kayıt Sistemi` })
-      .setTimestamp();
+      .addFields(
+        { name: '👤 Discord Kullanıcısı', value: `<@${record.discordId}> (\`${record.discordId}\`)`, inline: true },
+        { name: '📝 Ad / Takma Ad', value: `${escapeEmbedText(displayName, 64)}`, inline: true },
+        { name: '🚻 Cinsiyet', value: `${record.gender || 'Belirtilmemiş'}`, inline: true },
+        { name: '🎮 Oyunlar ve Kullanıcı Adları', value: gamesText, inline: false }
+      );
+
+    if (robloxNick || robloxId) {
+      embed.addFields(
+        {
+          name: '🧱 Roblox Profili',
+          value:
+            robloxId && /^\d+$/.test(String(robloxId))
+              ? `[${sanitizeInlineCode(robloxNick || 'Profil')}](https://www.roblox.com/users/${robloxId}/profile)`
+              : `\`${sanitizeInlineCode(robloxNick || '-')}\``,
+          inline: true,
+        },
+        { name: '🆔 Roblox ID', value: `\`${robloxId || '-'}\``, inline: true }
+      );
+    }
+
+    embed.addFields(
+      { name: '👮 Onaylayan Yetkili', value: record.approvedBy ? `<@${record.approvedBy}>` : 'Bilinmiyor', inline: true },
+      { name: '📅 Kayıt Tarihi', value: record.registeredAt ? `<t:${Math.floor(record.registeredAt / 1000)}:F>` : 'Bilinmiyor', inline: false }
+    );
+
+    embed.setFooter({ text: `${config.BRAND_NAME} | Kayıt Sistemi` }).setTimestamp();
 
     return interaction.reply({
       embeds: [embed],
       ephemeral: true,
+      allowedMentions: { parse: [] },
     });
   },
 };

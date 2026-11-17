@@ -34,13 +34,12 @@ router.get('/members', async (req, res) => {
         allRegs
           .filter(
             (r) =>
+              (r.displayName && r.displayName.toLowerCase().includes(query)) ||
               (r.realName && r.realName.toLowerCase().includes(query)) ||
               (r.robloxUsername && r.robloxUsername.toLowerCase().includes(query)) ||
               (r.robloxId && String(r.robloxId).includes(query)) ||
-              (r.gameUsernames &&
-                Object.values(r.gameUsernames).some(
-                  (uname) => uname && String(uname).toLowerCase().includes(query)
-                ))
+              (Array.isArray(r.games) &&
+                r.games.some((g) => g.username && g.username.toLowerCase().includes(query)))
           )
           .map((r) => String(r.discordId))
       );
@@ -72,9 +71,9 @@ router.get('/members', async (req, res) => {
         level,
         registration: {
           registered: Boolean(reg) || config.isRegisteredMember(m),
+          displayName: reg?.displayName || reg?.realName || null,
           realName: reg?.realName || null,
-          games: reg?.games || (reg?.robloxId ? ['roblox'] : []),
-          gameUsernames: reg?.gameUsernames || (reg?.robloxUsername ? { roblox: reg.robloxUsername } : {}),
+          games: Array.isArray(reg?.games) ? reg.games : [],
           robloxUsername: reg?.robloxUsername || null,
           robloxId: reg?.robloxId || null,
         },
@@ -166,10 +165,10 @@ router.get('/members/:id', async (req, res) => {
       },
       registration: {
         registered: Boolean(reg) || config.isRegisteredMember(member),
+        displayName: reg?.displayName || reg?.realName || null,
         realName: reg?.realName || null,
         gender: reg?.gender || null,
-        games: reg?.games || (reg?.robloxId ? ['roblox'] : []),
-        gameUsernames: reg?.gameUsernames || (reg?.robloxUsername ? { roblox: reg.robloxUsername } : {}),
+        games: Array.isArray(reg?.games) ? reg.games : [],
         robloxUsername: reg?.robloxUsername || null,
         robloxId: reg?.robloxId || null,
         robloxDisplayName: reg?.robloxDisplayName || null,
