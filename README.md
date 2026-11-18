@@ -61,9 +61,10 @@ Bot yanıtları `resolveLang(context, sessionLang)` üzerinden tamamen yan etkis
 
 ---
 
-### 5. 🎨 İsim Rengi Paneli & Moderasyon
+### 5. 🎨 İsim Rengi Paneli, Moderasyon & 🔇 AFK Ses Kanalı
 * `/renk_paneli_kur`: 6 renk seçimi, tek renk kuralı, 10 sn cooldown ve İngilizce rehber.
 * Küfür filtresi (yerel + Gemini yapay zeka), sadece medya kanalı koruması, `!lock` / `!unlock`, `/temizle` / `!temizle`, `/veri-sifirla`, `/rols`.
+* **AFK Ses Kanalı Koruması (`1571913130684973177`):** Bu kanala giren her üyeye otomatik sunucu susturması (`mute`) ve sağırlaştırma (`deaf`) uygulanır; kanaldan çıktığında (bağlantıyı kesip sonradan başka odaya girdiğinde dahi) yalnızca bu kural kapsamında kaldırılır. Normal kanallardaki yetkili susturmalarına dokunulmaz.
 
 ---
 
@@ -114,6 +115,7 @@ Bot aynı Node.js sürecinde Express ile REST API sunar. `/api/health` dışınd
 | `PORT` | Hayır | `3000` | Express REST API portu |
 | `DATA_DIR` | Hayır | `./data` | Kalıcı veritabanı klasörü |
 | `FEEDBACK_CHANNEL_ID` | Hayır | `1570061735665078392` | Web sitesi geri bildirim kanalı |
+| `AFK_VOICE_CHANNEL_ID` | Hayır | `1571913130684973177` | AFK ses kanalı ID'si |
 | `PROFILE_COOLDOWN_SEC` | Hayır | `30` | `/profilim` bekleme süresi (sn) |
 | `PROFILE_SHOW_NAME` | Hayır | `true` | `/profilim` içinde Ad satırını gösterir (`false` ise gizler) |
 | `GAME_ROLE_ROBLOX` / `CS2` / `ZULA` / `MINECRAFT` | Hayır | `games.config.js` | Oyun rolü ID geçersiz kılmaları |

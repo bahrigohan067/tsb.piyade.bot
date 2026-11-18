@@ -4,6 +4,7 @@ const { validateGamesConfig } = require('../../games.config');
 const { ensureColorPanelMessage } = require('../utils/colorManager');
 const { ensureRegisterPanelMessage } = require('../utils/panel');
 const { ensureEnglishRole, logLanguageStartupStats } = require('../utils/i18n');
+const { syncAfkVoiceStatesOnStartup } = require('../utils/afkVoiceManager');
 const { checkFeedbackChannelOnStartup } = require('../utils/feedbackManager');
 const {
   ensureWarningPanelMessage,
@@ -48,10 +49,11 @@ module.exports = {
           await guild.commands.set(commandsData);
           console.log(`[SLASH KOMUTLAR] ${commandsData.length} komut '${guild.name}' sunucusuna başarıyla yüklendi.`);
 
-          // Sunucu açılışında Kayıt Paneli, Renk Paneli, Uyarı Paneli ve Dil Raporunu güncelle/kur
+          // Sunucu açılışında Kayıt Paneli, Renk Paneli, Uyarı Paneli, Dil Raporu ve AFK Ses Durumunu eşitle
           setTimeout(async () => {
             await ensureEnglishRole(guild).catch(() => {});
             logLanguageStartupStats(guild);
+            syncAfkVoiceStatesOnStartup(guild).catch(() => {});
             ensureRegisterPanelMessage(guild).catch(() => {});
             ensureColorPanelMessage(guild).catch(() => {});
             ensureWarningPanelMessage(guild).catch(() => {});

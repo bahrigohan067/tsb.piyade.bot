@@ -25,6 +25,7 @@ class DatabaseManager {
       localeHints: {},                // { [userId]: 'tr' | 'en' } (Discord istemci dilinden türetilen son ipucu)
       englishRoleId: null,            // Otomatik veya tanımlı 🇬🇧 English rolü ID'si
       lockedChannels: {},             // { [channelId]: { channelId, lockedBy, lockedAt, overwrites: [...] } }
+      afkMutedUsers: {},              // { [userId]: { channelId, pendingUnmute, mutedAt } }
       feedback: [],                   // [{ id, userId, usernameSnapshot, message, page, lang, createdAt, status, channelId, messageId }]
       clanRoles: [],                  // [{ id, roleId, name, normalized, compact, aliases: [], source: 'bot'|'adopted'|'manual', createdBy, createdAt }]
       knownClans: [],                 // [{ id, name, normalized, compact, type: 'ally'|'enemy', createdBy, createdAt, updatedAt }]
@@ -118,6 +119,10 @@ class DatabaseManager {
           localeHints: normalizedLocaleHints,
           englishRoleId: parsed.englishRoleId || null,
           lockedChannels: parsed.lockedChannels || {},
+          afkMutedUsers:
+            parsed.afkMutedUsers && typeof parsed.afkMutedUsers === 'object'
+              ? parsed.afkMutedUsers
+              : {},
           feedback: Array.isArray(parsed.feedback) ? parsed.feedback : [],
         };
         if ('userLang' in this.data) {
@@ -1178,6 +1183,75 @@ class DatabaseManager {
       channelId: this.data.clanPanelChannelId || null,
       messageId: this.data.clanPanelMessageId || null,
     };
+  }
+
+  // ==========================================
+  // AFK SES KANALI SUSTURMA / SAĞIRLAŞTIRMA TAKİBİ
+  // ==========================================
+
+  /**
+   * Üyenin AFK ses kanalı sebebiyle susturulup sağırlaştırıldığını (veya temizlenmeyi beklediğini) kontrol eder.
+   */
+  isAfkMutedUser(userId) {
+    if (!userId || !this.data.afkMutedUsers) return false;
+    return Boolean(this.data.afkMutedUsers[String(userId)]);
+  }
+
+  /**
+   * Üyenin AFK ses kanalı takip kaydını döndürür.
+   */
+  getAfkMutedUser(userId) {
+    if (!userId || !this.data.afkMutedUsers) return null;
+    return this.data.afkMutedUsers[String(userId)] || null;
+  }
+
+  /**
+   * AFK ses kanalı nedeniyle işaretlenmiş tüm kullanıcı ID'lerini döndürür.
+   */
+  getAfkMutedUserIds() {
+    if (!this.data.afkMutedUsers) return [];
+    return Object.keys(this.data.afkMutedUsers);
+  }
+
+  /**
+   * Üyeyi AFK ses kanalı susturma/sağırlaştırma takibine ekler veya günceller.
+   */
+  markAfkMutedUser(userId, channelId, { pendingUnmute = false } = {}) {
+    if (!userId) return false;
+    if (!this.data.afkMutedUsers) this.data.afkMutedUsers = {};
+    const uid = String(userId);
+    const cleanChannelId = channelId ? String(channelId) : null;
+    const existing = this.data.afkMutedUsers[uid];
+
+    if (
+      existing &&
+      existing.channelId === cleanChannelId &&
+      Boolean(existing.pendingUnmute) === Boolean(pendingUnmute)
+    ) {
+      return false;
+    }
+
+    this.data.afkMutedUsers[uid] = {
+      channelId: cleanChannelId,
+      pendingUnmute: Boolean(pendingUnmute),
+      mutedAt: existing?.mutedAt || Date.now(),
+    };
+    this.save();
+    return true;
+  }
+
+  /**
+   * Üyeyi AFK ses kanalı takip listesinden çıkarır.
+   */
+  clearAfkMutedUser(userId) {
+    if (!userId || !this.data.afkMutedUsers) return false;
+    const uid = String(userId);
+    if (Object.prototype.hasOwnProperty.call(this.data.afkMutedUsers, uid)) {
+      delete this.data.afkMutedUsers[uid];
+      this.save();
+      return true;
+    }
+    return false;
   }
 }
 
