@@ -9,7 +9,6 @@ const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMembers,      // Sunucuya katılan üyeleri ve rolleri algılamak için
-    GatewayIntentBits.GuildVoiceStates,  // Ses kanallarına giriş/çıkış ve AFK susturma/sağırlaştırma için
     GatewayIntentBits.GuildPresences,    // Üyelerin çevrim içi/aktiflik durumunu okumak için
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,    // !temizle gibi mesaj komutlarını okumak için

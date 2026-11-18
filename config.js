@@ -37,8 +37,6 @@ module.exports = {
     FEEDBACK_CHANNEL: (process.env.FEEDBACK_CHANNEL_ID || '1570061735665078392').trim(),
     // Sadece Medya Paylaşım Kanalı
     MEDIA: '1559316020227739806',
-    // AFK Ses Kanalı (Giren üyeler susturulup sağırlaştırılır, çıkınca kaldırılır)
-    AFK_VOICE: (process.env.AFK_VOICE_CHANNEL_ID || '1571913130684973177').trim(),
   },
 
   // Rol ID'leri (Sunucuda Bulunan 38 Rolün Tamamı)
