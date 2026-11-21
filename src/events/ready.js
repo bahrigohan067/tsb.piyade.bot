@@ -5,6 +5,7 @@ const { ensureColorPanelMessage } = require('../utils/colorManager');
 const { ensureRegisterPanelMessage } = require('../utils/panel');
 const { ensureEnglishRole, logLanguageStartupStats } = require('../utils/i18n');
 const { checkFeedbackChannelOnStartup } = require('../utils/feedbackManager');
+const activityTracker = require('../utils/activityTracker');
 const {
   ensureWarningPanelMessage,
   checkThirtyDayAmnesty,
@@ -48,7 +49,7 @@ module.exports = {
           await guild.commands.set(commandsData);
           console.log(`[SLASH KOMUTLAR] ${commandsData.length} komut '${guild.name}' sunucusuna başarıyla yüklendi.`);
 
-          // Sunucu açılışında Kayıt Paneli, Renk Paneli, Uyarı Paneli ve Dil Raporunu güncelle/kur
+          // Sunucu açılışında Kayıt Paneli, Renk Paneli, Uyarı Paneli, Dil Raporu ve Oyun Etkinliği sistemini başlat
           setTimeout(async () => {
             await ensureEnglishRole(guild).catch(() => {});
             logLanguageStartupStats(guild);
@@ -56,6 +57,10 @@ module.exports = {
             ensureColorPanelMessage(guild).catch(() => {});
             ensureWarningPanelMessage(guild).catch(() => {});
             checkFeedbackChannelOnStartup(guild).catch(() => {});
+            activityTracker.setPresenceEnabled(!client.activityPresenceDisabled);
+            activityTracker.initForGuild(guild, client).catch((err) => {
+              console.error('[OYUN ETKİNLİĞİ BAŞLATMA HATASI]:', err.message);
+            });
           }, 5000);
         } else {
           console.warn(`[SLASH KOMUTLAR] Guild ID (${config.GUILD_ID}) önbellekte bulunamadı. Genel (Global) olarak kaydediliyor...`);

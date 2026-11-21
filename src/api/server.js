@@ -12,8 +12,9 @@ const feedbackRoutes = require('./routes/feedback');
 const gamesRoutes = require('./routes/games');
 const robloxRoutes = require('./routes/roblox');
 
-function createApp(client) {
+function createApp(clientOrGetter) {
   const app = express();
+  const resolveClient = typeof clientOrGetter === 'function' ? clientOrGetter : () => clientOrGetter;
 
   // Temel Middleware'ler
   app.use(cors());
@@ -21,10 +22,11 @@ function createApp(client) {
 
   // Discord Client ve Guild Enjeksiyonu
   app.use((req, res, next) => {
-    req.client = client;
+    const activeClient = resolveClient();
+    req.client = activeClient;
     req.guild =
-      client.guilds.cache.get(config.GUILD_ID) ||
-      client.guilds.cache.first() ||
+      activeClient?.guilds?.cache?.get(config.GUILD_ID) ||
+      activeClient?.guilds?.cache?.first() ||
       null;
     next();
   });
@@ -34,10 +36,11 @@ function createApp(client) {
 
   // Healthcheck (Railway veya dış izleme servisleri için şifresiz uç nokta)
   app.get('/api/health', (req, res) => {
+    const activeClient = resolveClient();
     return res.json({
       status: 'ok',
-      botReady: client.isReady(),
-      botTag: client.user ? client.user.tag : null,
+      botReady: Boolean(activeClient?.isReady?.()),
+      botTag: activeClient?.user ? activeClient.user.tag : null,
       uptime: Math.floor(process.uptime()),
       timestamp: Date.now(),
     });

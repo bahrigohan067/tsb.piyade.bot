@@ -37,6 +37,8 @@ const {
   healLegacyLanguageOnInteraction,
 } = require('../utils/i18n');
 const { sanitizeInlineCode, escapeEmbedText } = require('../utils/inputSanitizer');
+const activityTracker = require('../utils/activityTracker');
+const { handleActivityButton } = require('../commands/aktivitem');
 
 // Eşzamanlı onay kilitleri (Aynı kullanıcıya çift tıklamayı engeller)
 const approvalUserLocks = new Set();
@@ -756,6 +758,20 @@ module.exports = {
         if (interaction.customId.startsWith('btn_warn_log_en_')) {
           const warnId = interaction.customId.replace('btn_warn_log_en_', '');
           return handleWarningLogEnglishButton(interaction, warnId);
+        }
+
+        // [I] OYUN ETKİNLİĞİ: SES AKTARIMI İPTAL & AYARLARIM / TEŞHİS BUTONLARI
+        if (interaction.customId.startsWith('act_cancel:')) {
+          return activityTracker.handleCancelTransferButton(interaction);
+        }
+        if (
+          interaction.customId === 'act_settings' ||
+          interaction.customId === 'act_enable_track' ||
+          interaction.customId.startsWith('act_toggle_track:') ||
+          interaction.customId.startsWith('act_toggle_move:') ||
+          interaction.customId.startsWith('act_diag:')
+        ) {
+          return handleActivityButton(interaction);
         }
       }
 

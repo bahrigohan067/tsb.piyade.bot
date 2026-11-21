@@ -34,7 +34,8 @@ function createRegisterPanel() {
     `• Roblox için görünen ad (Display Name) değil asıl **\`@kullanıcı\`** adını yaz\n` +
     `• **1 Discord hesabı = 1 Roblox hesabı** • Roblox'ta yasaklı hesaplar kabul edilmez\n` +
     `• Bilgileri doğru ve eksiksiz yaz\n` +
-    `💡 *Kayıttan sonra \`/profilim\` yazarak oyunlarını ve kullanıcı adlarını herkese gösterebilirsin.*`;
+    `💡 *Kayıttan sonra \`/profilim\` yazarak oyunlarını ve kullanıcı adlarını herkese gösterebilirsin.*\n` +
+    `🎮 *Bot, Discord'daki oyun etkinliğini okuyarak oyun rollerini verir ve oynama süreni sayar; \`/aktivitem\` > **⚙️ Ayarlarım**'dan kapatabilirsin.*`;
 
   const enSection =
     `## 🇬🇧 📋 How to Register?\n` +
@@ -49,7 +50,8 @@ function createRegisterPanel() {
     `• For Roblox, enter your actual **\`@username\`** — not your Display Name\n` +
     `• **1 Discord Account = 1 Roblox Account** • Banned Roblox accounts are not accepted\n` +
     `• Enter accurate and complete information\n` +
-    `💡 *After registering, use \`/profile\` to share your games and usernames with everyone.*`;
+    `💡 *After registering, use \`/profile\` to share your games and usernames with everyone.*\n` +
+    `🎮 *The bot reads your Discord game activity to give game roles and count playtime; you can turn it off in \`/activity\` > **⚙️ My Settings**.*`;
 
   const langHintLine =
     `🌐 *Yanlış dili mi seçtin? Kayıt sırasında dil butonuna basarak değiştirebilirsin. / Chose the wrong language? Use the language button during registration.*`;
