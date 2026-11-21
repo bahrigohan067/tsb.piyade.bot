@@ -7,8 +7,25 @@ const DATA_DIR =
   (fs.existsSync('/app/data') ? '/app/data' : path.join(__dirname, '..', '..', 'data'));
 const DB_PATH = path.join(DATA_DIR, 'database.json');
 
+/**
+ * Europe/Istanbul saat dilimine göre geçerli yılı ve ayı 'YYYY-MM' biçiminde döndürür.
+ */
+function getCurrentIstanbulMonth(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Istanbul',
+    year: 'numeric',
+    month: '2-digit',
+  }).formatToParts(d);
+  const year = parts.find((p) => p.type === 'year')?.value || String(d.getUTCFullYear());
+  const month = parts.find((p) => p.type === 'month')?.value || String(d.getUTCMonth() + 1).padStart(2, '0');
+  return `${year}-${month}`;
+}
+
 class DatabaseManager {
   constructor() {
+    const initialMonth = getCurrentIstanbulMonth();
+    this._dirty = false;
     this.data = {
       registrations: [],
       activeApplications: {},
@@ -30,6 +47,15 @@ class DatabaseManager {
       knownClans: [],                 // [{ id, name, normalized, compact, type: 'ally'|'enemy', createdBy, createdAt, updatedAt }]
       clanPanelMessageId: null,       // Dost/Düşman klan paneli mesaj ID'si
       clanPanelChannelId: null,       // Dost/Düşman klan paneli kanal ID'si
+      activityPrefs: {},              // { [userId]: { tracking: boolean, autoMove: boolean } } (yalnızca varsayılandan farklı olanlar)
+      activityStats: {                // Yalnızca bu ayın oyun başına toplam saniyesi (geçmiş/zaman çizelgesi YOK)
+        month: initialMonth,
+        users: {},
+      },
+      activityMeta: {                 // İlk duyuru ve son sıfırlanan ay bilgisi
+        announcedAt: null,
+        lastResetMonth: initialMonth,
+      },
     };
     this.init();
   }
@@ -98,6 +124,63 @@ class DatabaseManager {
           }
         }
 
+        // Oyun etkinliği tercihlerini normalize et (yalnızca varsayılandan farklı olanlar saklanır)
+        const normalizedActivityPrefs = {};
+        if (parsed.activityPrefs && typeof parsed.activityPrefs === 'object') {
+          for (const [uid, pref] of Object.entries(parsed.activityPrefs)) {
+            if (!pref || typeof pref !== 'object') continue;
+            const tracking = pref.tracking !== false;
+            const autoMove = pref.autoMove !== false;
+            if (!tracking || !autoMove) {
+              normalizedActivityPrefs[String(uid)] = { tracking, autoMove };
+            }
+          }
+        }
+
+        // Oyun etkinliği aylık toplam saniye istatistiklerini yükle (geçmiş/oturum kaydı olmadan)
+        const fallbackMonth = getCurrentIstanbulMonth();
+        const rawStats =
+          parsed.activityStats && typeof parsed.activityStats === 'object'
+            ? parsed.activityStats
+            : {};
+        const statsMonth =
+          typeof rawStats.month === 'string' && /^\d{4}-\d{2}$/.test(rawStats.month)
+            ? rawStats.month
+            : fallbackMonth;
+        const normalizedActivityUsers = {};
+        if (rawStats.users && typeof rawStats.users === 'object') {
+          for (const [uid, userObj] of Object.entries(rawStats.users)) {
+            if (!userObj || typeof userObj !== 'object' || !userObj.games || typeof userObj.games !== 'object') {
+              continue;
+            }
+            const cleanGames = {};
+            for (const [gid, rawSec] of Object.entries(userObj.games)) {
+              const sec = Math.floor(Number(rawSec));
+              if (gid && Number.isFinite(sec) && sec > 0) {
+                cleanGames[String(gid)] = sec;
+              }
+            }
+            if (Object.keys(cleanGames).length > 0) {
+              normalizedActivityUsers[String(uid)] = { games: cleanGames };
+            }
+          }
+        }
+
+        const rawMeta =
+          parsed.activityMeta && typeof parsed.activityMeta === 'object'
+            ? parsed.activityMeta
+            : {};
+        const normalizedActivityMeta = {
+          announcedAt:
+            typeof rawMeta.announcedAt === 'number' && Number.isFinite(rawMeta.announcedAt)
+              ? rawMeta.announcedAt
+              : null,
+          lastResetMonth:
+            typeof rawMeta.lastResetMonth === 'string' && /^\d{4}-\d{2}$/.test(rawMeta.lastResetMonth)
+              ? rawMeta.lastResetMonth
+              : statsMonth,
+        };
+
         // Yalnızca bilinen temel veri yapılarını koruyarak yükle (registrations/activeApplications içindeki tüm yeni alanlar dahil)
         this.data = {
           ...parsed,
@@ -119,10 +202,17 @@ class DatabaseManager {
           englishRoleId: parsed.englishRoleId || null,
           lockedChannels: parsed.lockedChannels || {},
           feedback: Array.isArray(parsed.feedback) ? parsed.feedback : [],
+          activityPrefs: normalizedActivityPrefs,
+          activityStats: {
+            month: statsMonth,
+            users: normalizedActivityUsers,
+          },
+          activityMeta: normalizedActivityMeta,
         };
         if ('userLang' in this.data) {
           delete this.data.userLang;
         }
+        this._dirty = false;
       } else {
         this.save();
       }
@@ -148,9 +238,34 @@ class DatabaseManager {
       const tmpPath = `${DB_PATH}.${Date.now()}.${Math.random().toString(36).slice(2, 7)}.tmp`;
       fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), 'utf-8');
       fs.renameSync(tmpPath, DB_PATH);
+      this._dirty = false;
     } catch (err) {
       console.error('[DATABASE] Veritabanı kaydedilirken hata oluştu:', err);
     }
+  }
+
+  /**
+   * Veriyi kirli olarak işaretler; toplu kayıt (checkpoint) sırasında diske yazılır.
+   */
+  markDirty() {
+    this._dirty = true;
+  }
+
+  isDirty() {
+    return Boolean(this._dirty);
+  }
+
+  /**
+   * Kirli veri varsa tek seferde atomik olarak diske kaydeder.
+   */
+  flushDirty() {
+    if (!this._dirty) return false;
+    this.save();
+    return true;
+  }
+
+  getCurrentIstanbulMonth(date = new Date()) {
+    return getCurrentIstanbulMonth(date);
   }
 
   // ==========================================
@@ -1178,6 +1293,194 @@ class DatabaseManager {
       channelId: this.data.clanPanelChannelId || null,
       messageId: this.data.clanPanelMessageId || null,
     };
+  }
+
+  // ==========================================
+  // OYUN ETKİNLİĞİ VE AYLIK SÜRE BÖLÜMÜ
+  // (Yalnızca aylık toplam saniye + kullanıcı tercihleri; geçmiş/zaman çizelgesi tutulmaz)
+  // ==========================================
+
+  getActivityPrefs(userId) {
+    if (!userId) return { tracking: true, autoMove: true };
+    const stored = this.data.activityPrefs?.[String(userId)];
+    if (!stored || typeof stored !== 'object') {
+      return { tracking: true, autoMove: true };
+    }
+    return {
+      tracking: stored.tracking !== false,
+      autoMove: stored.autoMove !== false,
+    };
+  }
+
+  isActivityTrackingEnabled(userId) {
+    return this.getActivityPrefs(userId).tracking;
+  }
+
+  isActivityAutoMoveEnabled(userId) {
+    const prefs = this.getActivityPrefs(userId);
+    return prefs.tracking && prefs.autoMove;
+  }
+
+  /**
+   * Kullanıcı etkinlik tercihlerini günceller.
+   * Varsayılan duruma (tracking:true, autoMove:true) dönen kayıtlar yer tutmaması için silinir.
+   */
+  setActivityPrefs(userId, patch = {}) {
+    if (!userId) return { tracking: true, autoMove: true };
+    if (!this.data.activityPrefs || typeof this.data.activityPrefs !== 'object') {
+      this.data.activityPrefs = {};
+    }
+    const uid = String(userId);
+    const current = this.getActivityPrefs(uid);
+    const next = {
+      tracking: patch.tracking !== undefined ? Boolean(patch.tracking) : current.tracking,
+      autoMove: patch.autoMove !== undefined ? Boolean(patch.autoMove) : current.autoMove,
+    };
+
+    if (next.tracking && next.autoMove) {
+      if (Object.prototype.hasOwnProperty.call(this.data.activityPrefs, uid)) {
+        delete this.data.activityPrefs[uid];
+        this.save();
+      }
+    } else {
+      this.data.activityPrefs[uid] = next;
+      this.save();
+    }
+    return next;
+  }
+
+  /**
+   * Kullanıcının bu ayki ilgili oyun süresine saniye ekler.
+   * Varsayılan olarak kirli işaretler (checkpoint ile toplu yazılır); immediate:true ile hemen kaydeder.
+   */
+  addActivitySeconds(userId, gameId, seconds, { immediate = false } = {}) {
+    if (!userId || !gameId) return 0;
+    const sec = Math.floor(Number(seconds));
+    if (!Number.isFinite(sec) || sec <= 0) return 0;
+
+    if (!this.data.activityStats || typeof this.data.activityStats !== 'object') {
+      this.data.activityStats = { month: getCurrentIstanbulMonth(), users: {} };
+    }
+    if (!this.data.activityStats.users || typeof this.data.activityStats.users !== 'object') {
+      this.data.activityStats.users = {};
+    }
+
+    const uid = String(userId);
+    const gid = String(gameId);
+    if (!this.data.activityStats.users[uid]) {
+      this.data.activityStats.users[uid] = { games: {} };
+    }
+    if (!this.data.activityStats.users[uid].games) {
+      this.data.activityStats.users[uid].games = {};
+    }
+
+    const prev = Number(this.data.activityStats.users[uid].games[gid]) || 0;
+    const nextTotal = prev + sec;
+    this.data.activityStats.users[uid].games[gid] = nextTotal;
+
+    if (immediate) {
+      this.save();
+    } else {
+      this.markDirty();
+    }
+    return nextTotal;
+  }
+
+  getUserActivityStats(userId) {
+    const month = this.data.activityStats?.month || getCurrentIstanbulMonth();
+    if (!userId) return { month, games: {} };
+    const rawGames = this.data.activityStats?.users?.[String(userId)]?.games;
+    const games = {};
+    if (rawGames && typeof rawGames === 'object') {
+      for (const [gid, sec] of Object.entries(rawGames)) {
+        const cleanSec = Math.floor(Number(sec));
+        if (Number.isFinite(cleanSec) && cleanSec > 0) {
+          games[gid] = cleanSec;
+        }
+      }
+    }
+    return { month, games };
+  }
+
+  clearUserActivityStats(userId, { immediate = true } = {}) {
+    if (!userId || !this.data.activityStats?.users) return false;
+    const uid = String(userId);
+    if (!Object.prototype.hasOwnProperty.call(this.data.activityStats.users, uid)) {
+      return false;
+    }
+    delete this.data.activityStats.users[uid];
+    if (immediate) {
+      this.save();
+    } else {
+      this.markDirty();
+    }
+    return true;
+  }
+
+  /**
+   * Sunucudan ayrılan üyenin hem aylık sürelerini hem de etkinlik tercihlerini siler.
+   */
+  removeUserActivityData(userId) {
+    if (!userId) return false;
+    const uid = String(userId);
+    let changed = false;
+
+    if (this.data.activityStats?.users && Object.prototype.hasOwnProperty.call(this.data.activityStats.users, uid)) {
+      delete this.data.activityStats.users[uid];
+      changed = true;
+    }
+    if (this.data.activityPrefs && Object.prototype.hasOwnProperty.call(this.data.activityPrefs, uid)) {
+      delete this.data.activityPrefs[uid];
+      changed = true;
+    }
+    if (changed) {
+      this.save();
+    }
+    return changed;
+  }
+
+  /**
+   * Aylık sıfırlama: önceki aya ait HİÇBİR kullanıcı süresi tutulmaz, tümü temizlenir.
+   */
+  resetActivityStatsForMonth(newMonth) {
+    const targetMonth =
+      typeof newMonth === 'string' && /^\d{4}-\d{2}$/.test(newMonth)
+        ? newMonth
+        : getCurrentIstanbulMonth();
+
+    this.data.activityStats = {
+      month: targetMonth,
+      users: {},
+    };
+    if (!this.data.activityMeta || typeof this.data.activityMeta !== 'object') {
+      this.data.activityMeta = { announcedAt: null, lastResetMonth: targetMonth };
+    } else {
+      this.data.activityMeta.lastResetMonth = targetMonth;
+    }
+    this.save();
+    return targetMonth;
+  }
+
+  getActivityMeta() {
+    const meta = this.data.activityMeta && typeof this.data.activityMeta === 'object'
+      ? this.data.activityMeta
+      : {};
+    return {
+      announcedAt: typeof meta.announcedAt === 'number' ? meta.announcedAt : null,
+      lastResetMonth: meta.lastResetMonth || this.data.activityStats?.month || getCurrentIstanbulMonth(),
+    };
+  }
+
+  setActivityAnnounced(timestamp = Date.now()) {
+    if (!this.data.activityMeta || typeof this.data.activityMeta !== 'object') {
+      this.data.activityMeta = {
+        announcedAt: timestamp,
+        lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
+      };
+    } else {
+      this.data.activityMeta.announcedAt = timestamp;
+    }
+    this.save();
   }
 }
 
