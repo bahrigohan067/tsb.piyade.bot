@@ -61,7 +61,33 @@ Bot yanıtları `resolveLang(context, sessionLang)` üzerinden tamamen yan etkis
 
 ---
 
-### 5. 🎨 İsim Rengi Paneli & Moderasyon
+### 5. 🕹️ Oyun Etkinliği Sistemi (Rol, Ses Aktarımı & `/aktivitem`)
+Bot, yalnızca Discord'un yerleşik etkinlik (*Playing / Şunu oynuyor*) verisini okuyarak çalışır (herhangi bir Roblox API'si veya hesap girişi kullanılmaz; oyun geçmişi/zaman çizelgesi **ASLA** saklanmaz).
+
+* **Kurulum (Discord Developer Portal & Bot İzinleri):**
+  - **Privileged Gateway Intents:** Developer Portal > Bot sekmesinden **Presence Intent**, **Server Members Intent** ve **Message Content Intent** açık olmalıdır. *(Presence Intent kapalıysa bot çökmez; tek satır uyarı vererek oyun etkinliği sistemini devre dışı bırakıp diğer özelliklerle çalışmaya devam eder.)*
+  - **Bot İzinleri ve Rol Hiyerarşisi:**
+    - **Rolleri Yönet (`Manage Roles`):** Botun en üst rolü, 4 oyun aktiflik rolünün (Roblox, Zula, Minecraft, CS2) **ÜSTÜNDE** olmalıdır.
+    - **Üyeleri Taşı (`Move Members`)** ve hedef oyun ses kanallarında **Kanalı Görüntüle (`View Channel`) + Bağlan (`Connect`)**.
+    - Komut kanalında (`1559316204030533722`) **Mesaj Gönder**, **Üyeleri Etiketle** ve **Embed Bağlantıları**.
+* **`activity.config.js` Nasıl Düzenlenir?**
+  - Proje kökündeki [`activity.config.js`](activity.config.js) kayıt sisteminin `games.config.js` dosyasından **ayrıdır**.
+  - Yeni oyun eklemek için `GAMES` dizisine `{ id, family, name, emoji, placeId, voiceChannelIds, matchers }` biçiminde tek bir kayıt eklemek yeterlidir. Bot açılışta eksik rol/kanal ve bozuk kayıtları otomatik denetler.
+* **Sistem Nasıl Çalışır?**
+  - **Aktiflik Rolleri:** Etkinlik kesintisiz **15 saniye** sürünce üyenin oyun ailesine göre (Roblox / Zula / Minecraft / CS2) aktiflik rolü verilir. Oyun bırakılıp **60 saniye** geçince rol geri alınır (kısa kopmalarda rol yanıp sönmez; Roblox içi oyun değişiminde rol gereksiz alınıp verilmez).
+  - **Otomatik Ses Aktarımı:** Onaylı oturumda üye bir ses kanalındaysa (AFK, Sahne ve `NO_MOVE_CHANNEL_IDS` hariç), her oyun oturumunda en fazla **1 kez** komut kanalına üyenin dilinde (TR/EN) **10 saniyelik canlı geri sayım** (`<t:unix:R>`) ve **`❌ Aktarmayı İptal Et`** butonu gönderilir. İptal edilmezse üye oyunun ses kanalına aktarılır (Minecraft gibi çoklu kanallarda önce aynı oyundaki oyuncuların olduğu boş kanal seçilir; Roblox oyunu tanınmıyorsa `OTHER GAMES` kanalına aktarılır) ve geri sayım mesajı silinir. Oyun ses dışındayken başladıysa, üye sonradan sese girince 5 saniye sonra aktarma başlatılır.
+  - **Aylık Süre & Sıfırlama:** Oynama süreleri dakika/saniye olarak yalnızca **o ayın toplamı** şeklinde biriktirilir (`CHECKPOINT_SEC = 60` sn toplu atomik kayıt + `SIGTERM`/`SIGINT` kapanış kaydı). **Europe/Istanbul** saatine göre her ayın 1'inde önceki aya ait tüm süreler tamamen temizlenir ve komut kanalına iki dilli duyuru atılır.
+  - **`/aktivitem` (`/activity`) ve Kullanıcı Kapatma:** Herkese açık aylık aktivite kartını gösterir (30 sn cooldown). Kartın altındaki **`⚙️ Ayarlarım`** butonu basan üyenin kendi özel (ephemeral) ayar panelini açar: üye isterse **Otomatik Ses Aktarma**'yı veya **Etkinlik Takibi**'ni tamamen kapatabilir. Takip kapatıldığında üyenin aktiflik rolleri hemen alınır, bekleyen aktarma iptal edilir ve o ayki süreleri anında silinir.
+* **⚠️ Sınırlamalar:**
+  - Discord, Roblox oyunlarının adını yalnızca oyun geliştiricisi Discord entegrasyonu yaptıysa gösterir; aksi halde yalnızca **"Roblox"** görünür ve oyuncu **`OTHER GAMES`** ses kanalına aktarılır.
+  - Telefonda (mobil) oynanan oyunlar Discord tarafından etkinlik olarak paylaşılmadığı için algılanmaz.
+  - Zula, Minecraft (TLauncher dahil) ve CS2'nin tanınması Discord masaüstü uygulamasının oyunu algılamasına bağlıdır; **`/aktivitem` > ⚙️ Ayarlarım > 🔍 Botun Gördüğü Etkinlik** ile anlık teşhis yapılabilir.
+  - Kullanıcı bir ses kanalında değilse ses aktarımı yapılamaz.
+  - Hiçbir oyun geçmişi, saatlik kayıt veya zaman çizelgesi saklanmaz.
+
+---
+
+### 6. 🎨 İsim Rengi Paneli & Moderasyon
 * `/renk_paneli_kur`: 6 renk seçimi, tek renk kuralı, 10 sn cooldown ve İngilizce rehber.
 * Küfür filtresi (yerel + Gemini yapay zeka), sadece medya kanalı koruması, `!lock` / `!unlock`, `/temizle` / `!temizle`, `/veri-sifirla`, `/rols`.
 
@@ -72,6 +98,7 @@ Bot yanıtları `resolveLang(context, sessionLang)` üzerinden tamamen yan etkis
 | Komut | Yetki | Açıklama |
 |---|---|---|
 | `/profilim` (`/profile`) | Herkes (Kayıtlı) | Oynadığı oyunları ve kullanıcı adlarını herkese açık gösterir (30 sn cooldown). |
+| `/aktivitem` (`/activity`) | Herkes | Bu ay oynadığı oyunları ve sürelerini herkese açık gösterir; `⚙️ Ayarlarım` ve teşhis sunar (30 sn cooldown). |
 | `/dil` (`/language`) | Herkes | Kalıcı bot dilini (`Türkçe`, `English`, `Otomatik`) seçer (10 sn cooldown). |
 | `/dil-sifirla` | Developer & Yönetim | Hedef kullanıcının kayıtlı dil tercihini ve English rolünü sıfırlar. |
 | `/kayit-paneli` | Yönetici | TR/EN kayıt panelini günceller (yoksa yeni oluşturur). |
@@ -124,5 +151,5 @@ Bot aynı Node.js sürecinde Express ile REST API sunar. `/api/health` dışınd
 ## 🧪 Test ve Kod Denetimi
 
 Her değişiklikten sonra mutlaka çalıştırılmalıdır:
-- `npm run check:undef` : ESLint `no-undef` kuralı ile `index.js`, `config.js`, `games.config.js`, `src` ve `tests` altındaki tüm JS dosyalarında tanımsız değişkenleri denetler.
+- `npm run check:undef` : ESLint `no-undef` kuralı ile `index.js`, `config.js`, `games.config.js`, `activity.config.js`, `src` ve `tests` altındaki tüm JS dosyalarında tanımsız değişkenleri denetler.
 - `npm test` : Node.js yerel test koşucusu (`node:test`) ile tüm birim ve entegrasyon testlerini çalıştırır.
