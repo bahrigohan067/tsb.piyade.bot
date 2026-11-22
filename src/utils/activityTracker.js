@@ -773,10 +773,13 @@ class ActivityTracker {
     }
   }
 
-  markBotMoveIgnore(userId) {
+  markBotMoveIgnore(userId, targetChannelId = null) {
     if (!userId) return;
     const sec = Math.max(1, Number(this.config.TIMINGS?.BOT_MOVE_IGNORE_SEC ?? 5));
-    this.botMoveIgnoreUntil.set(String(userId), this.now() + sec * 1000);
+    this.botMoveIgnoreUntil.set(String(userId), {
+      until: this.now() + sec * 1000,
+      targetChannelId: targetChannelId ? String(targetChannelId) : null,
+    });
   }
 
   /**
@@ -1737,21 +1740,6 @@ class ActivityTracker {
 
       const displayGameName = this.getGameLabel(session.gameId);
 
-      // ADIM 5: Onay süresi kontrolü
-      const earliestConfirmedStart = Math.min(
-        session.since || now,
-        session.activityStartedAt || session.since || now
-      );
-      if (now - earliestConfirmedStart < confirmMs && confirmMs > 0) {
-        return this.recordDecision(uid, {
-          trigger,
-          result: 'pending',
-          reason: TRANSFER_REASONS.WAITING_CONFIRM,
-          game: displayGameName,
-          fromChannelId: currentChannelId,
-        });
-      }
-
       // ADIM 6: Aktarma hakkı (moveToken) kontrolü
       if (!session.moveToken) {
         return this.recordDecision(uid, {
@@ -2104,7 +2092,7 @@ class ActivityTracker {
     }
 
     // 8. Botun kendi taşımasının voiceStateUpdate'i tekrar tetiklememesi için 5 sn işaret koy
-    this.markBotMoveIgnore(uid);
+    this.markBotMoveIgnore(uid, targetChannelId);
 
     await this.moveQueue.enqueue(async () => {
       try {
@@ -2307,14 +2295,15 @@ class ActivityTracker {
 
     this.counters.voiceChangesReceived += 1;
 
-    // Botun KENDİ taşımasıysa bu olayı yeniden tetikleme
-    const ignoreUntil = this.botMoveIgnoreUntil.get(uid) || 0;
-    if (ignoreUntil > 0) {
-      if (this.now() <= ignoreUntil) {
-        this.botMoveIgnoreUntil.delete(uid);
+    // Botun KENDİ taşımasıysa (hedef kanala giriş olayı) bu olayı yeniden tetikleme
+    const ignoreEntry = this.botMoveIgnoreUntil.get(uid);
+    if (ignoreEntry) {
+      this.botMoveIgnoreUntil.delete(uid);
+      const matchesTarget =
+        !ignoreEntry.targetChannelId || String(newChannelId) === String(ignoreEntry.targetChannelId);
+      if (this.now() <= ignoreEntry.until && matchesTarget) {
         return;
       }
-      this.botMoveIgnoreUntil.delete(uid);
     }
 
     // Varsa bekleyen ses debounce zamanlayıcısını sıfırla
