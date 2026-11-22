@@ -473,6 +473,10 @@ function createEmptyCounters() {
     roleAdded: 0,
     rolesRemoved: 0,
     roleFailed: 0,
+    manuelVerilen: 0,
+    manuelGeriAlinan: 0,
+    geceTemizligiAlinan: 0,
+    geceTemizligiBasarisiz: 0,
     checkpointWritten: 0,
     dbSaveSuccess: 0,
     dbSaveFailed: 0,
@@ -624,6 +628,12 @@ class ActivityTracker {
     // Üye başına eşzamanlı endSession (oyun bitişi) kilidi — her oturum için tek sefer çalışır
     this.endingSessions = new Set();
 
+    // Gece 00:00 manuel rol temizliği tek-sefer kilidi, geçici hata yeniden deneme haritası ve son/sonraki çalışma bilgisi (bellekte)
+    this.manualCleanupRunning = false;
+    this.manualCleanupRetryCounts = new Map();
+    this.lastMidnightCleanup = null;
+    this.nextMidnightCleanupAt = null;
+
     // Üye başına 3 sn ses kanalı değişimi debounce zamanlayıcıları
     this.voiceDebounceTimers = new Map();
 
@@ -686,7 +696,51 @@ class ActivityTracker {
     this.startupCleanupTimer = null;
     this.sweepInterval = null;
     this.roleCleanupInterval = null;
+    this.midnightTimeout = null;
+    this.midnightSafetyInterval = null;
     this.hourlyLogInterval = null;
+  }
+
+  /**
+   * Üyenin belirtilen oyun ailesi için bugün /oyun komutuyla alınmış manuel işareti var mı?
+   */
+  hasManualRoleMark(userId, familyKey) {
+    if (!userId || !familyKey) return false;
+    if (typeof this.db?.hasManualActivityRole === 'function') {
+      return this.db.hasManualActivityRole(userId, familyKey);
+    }
+    return false;
+  }
+
+  /**
+   * Üyenin belirtilen oyun ailesinde şu an CANLI ve onaylı bir otomatik oyun oturumu var mı?
+   */
+  hasLiveConfirmedSessionForFamily(userId, familyKey) {
+    if (!userId || !familyKey) return false;
+    const s = this.sessions.get(String(userId));
+    if (!s || !s.confirmed || s.family !== familyKey) return false;
+    return s.currentlyDetectedGameId === s.gameId || s.pendingFamily === familyKey;
+  }
+
+  /**
+   * MANUAL_TIMEZONE (Europe/Istanbul) saat dilimine göre bugünün takvim gününü ('YYYY-MM-DD') döndürür.
+   */
+  getTodayManualDay() {
+    const tz = this.config.MANUAL_TIMEZONE || activityConfig.MANUAL_TIMEZONE || 'Europe/Istanbul';
+    const fn = this.config.getDateStringInTimeZone || activityConfig.getDateStringInTimeZone;
+    return fn(this.now(), tz);
+  }
+
+  /**
+   * Bir sonraki 00:00 (Europe/Istanbul) temizliğinin UTC ms zaman damgasını döndürür.
+   */
+  getNextMidnightCleanupAt() {
+    if (typeof this.nextMidnightCleanupAt === 'number' && this.nextMidnightCleanupAt > this.now()) {
+      return this.nextMidnightCleanupAt;
+    }
+    const tz = this.config.MANUAL_TIMEZONE || activityConfig.MANUAL_TIMEZONE || 'Europe/Istanbul';
+    const fn = this.config.getNextMidnightMsInTimeZone || activityConfig.getNextMidnightMsInTimeZone;
+    return fn(this.now(), tz);
   }
 
   /**
@@ -740,7 +794,7 @@ class ActivityTracker {
       (r.RETURN_FAILED || 0);
 
     this.logger.log(
-      `[OYUN ETKİNLİĞİ] ${periodLabel}: presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} oyunBitti=${c.gamesEnded} rol=${c.roleAdded} rolAlındı=${c.rolesRemoved} süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} uyeFetch=${c.memberFetchCalls}(atlanan:${c.memberFetchSkipped},hata:${c.memberFetchErrors}) | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${r.NOT_IN_VOICE || 0} | dönüş: RETURN_MOVED=${r.RETURN_MOVED || 0} RETURN_SKIP=${returnSkipTotal} RETURN_ERR=${returnErrTotal}`
+      `[OYUN ETKİNLİĞİ] ${periodLabel}: presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} oyunBitti=${c.gamesEnded} rol=${c.roleAdded} rolAlındı=${c.rolesRemoved} manuel=+${c.manuelVerilen}/-${c.manuelGeriAlinan} gece=${c.geceTemizligiAlinan}(hata:${c.geceTemizligiBasarisiz}) süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} uyeFetch=${c.memberFetchCalls}(atlanan:${c.memberFetchSkipped},hata:${c.memberFetchErrors}) | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${r.NOT_IN_VOICE || 0} | dönüş: RETURN_MOVED=${r.RETURN_MOVED || 0} RETURN_SKIP=${returnSkipTotal} RETURN_ERR=${returnErrTotal}`
     );
   }
 
@@ -1002,9 +1056,10 @@ class ActivityTracker {
     // 2. Aylık sıfırlama kontrolü (bot ay dönümünde kapalıydıysa açılışta temizler)
     await this.checkMonthlyReset(guild);
 
-    // 3. Sistem ilk kez çalışıyorsa tek seferlik iki dilli duyuru + oyun bitişi duyurusu
+    // 3. Sistem ilk kez çalışıyorsa tek seferlik iki dilli duyurular (genel + oyun bitişi + mobil /oyun)
     await this.checkOneTimeAnnouncement(guild);
     await this.checkOneTimeReturnAnnouncement(guild);
+    await this.checkOneTimeManualAnnouncement(guild);
 
     // 4. Önbellekteki mevcut presence'lerden oturumları kur (üyeleri fetch ETME, açılışta taşıma YAPMA)
     let seededCount = 0;
@@ -1057,6 +1112,10 @@ class ActivityTracker {
       }
     }
 
+    // 4b. Bot gece yarısı kapalı kaldıysa önceki günden kalan manuel /oyun rollerini açılışta temizle
+    // (Canlı oturumu az önce yüklenenlerin rolüne dokunulmaz, yalnızca eski gün işareti silinir.)
+    await this.runMidnightManualCleanup(guild);
+
     this.logger.log(
       `[OYUN ETKİNLİĞİ] Sistem başlatıldı: ${seededCount} aktif oturum önbellekten yüklendi.`
     );
@@ -1066,6 +1125,204 @@ class ActivityTracker {
     this.startBackgroundTimers(guild);
 
     return { enabled: true, seededCount, validation };
+  }
+
+  _scheduleNextMidnightCleanup(guild = this.guild) {
+    if (this.midnightTimeout) {
+      this._clearTimeout(this.midnightTimeout);
+      this.midnightTimeout = null;
+    }
+    if (!guild) return null;
+
+    const tz = this.config.MANUAL_TIMEZONE || activityConfig.MANUAL_TIMEZONE || 'Europe/Istanbul';
+    const nextFn = this.config.getNextMidnightMsInTimeZone || activityConfig.getNextMidnightMsInTimeZone;
+    const now = this.now();
+    const nextMs = nextFn(now, tz);
+    this.nextMidnightCleanupAt = nextMs;
+    const delayMs = Math.max(1, nextMs - now);
+
+    this.midnightTimeout = this._setTimeout(() => {
+      this.midnightTimeout = null;
+      this.runMidnightManualCleanup(guild).catch(() => {});
+    }, delayMs);
+    this.midnightTimeout?.unref?.();
+    return nextMs;
+  }
+
+  /**
+   * Gece 00:00 (Europe/Istanbul) mobil /oyun manuel aktiflik rolü temizliği.
+   * İki katmanlı zamanlayıcı (tam 00:00 setTimeout + 60 sn güvenlik ağı) tarafından çağrılır;
+   * tek-sefer kilidiyle idempotenttir ve hiçbir mesaj/etiket atmaz.
+   */
+  async runMidnightManualCleanup(guild = this.guild, { force = false } = {}) {
+    if (!guild) return { ran: false, removed: 0, failed: 0 };
+
+    const today = this.getTodayManualDay();
+    const manualData =
+      typeof this.db?.getManualActivityData === 'function'
+        ? this.db.getManualActivityData(today)
+        : { day: today, users: {} };
+
+    const isDayRollover = Boolean(force) || manualData.day !== today;
+    if (!isDayRollover && this.manualCleanupRetryCounts.size === 0) {
+      return { ran: false, day: today, removed: 0, failed: 0 };
+    }
+
+    // Eşzamanlı çağrılara karşı kilit (iki zamanlayıcı aynı anda çalıştırmasın)
+    if (this.manualCleanupRunning) {
+      return { ran: false, alreadyRunning: true, day: today, removed: 0, failed: 0 };
+    }
+
+    this.manualCleanupRunning = true;
+    let removedInRun = 0;
+    let failedInRun = 0;
+
+    try {
+      const maxRetries = Math.max(1, Number(this.config.TIMINGS?.MANUAL_CLEANUP_MAX_RETRIES ?? 10));
+
+      // İşlenecek (kullanıcı, aile) çiftlerinin anlık kopyasını çıkar
+      const targetPairs = [];
+      if (isDayRollover) {
+        for (const [uid, famMap] of Object.entries(manualData.users || {})) {
+          if (!famMap || typeof famMap !== 'object') continue;
+          for (const [familyKey, active] of Object.entries(famMap)) {
+            if (active === true) {
+              targetPairs.push({ uid: String(uid), familyKey: String(familyKey) });
+            }
+          }
+        }
+      } else {
+        // Aynı gün içindeki geçici hata yeniden deneme turu: YALNIZCA bekleyen hatalı işaretleri dene (yeni alınan bugünkü rollere dokunma!)
+        for (const retryKey of Array.from(this.manualCleanupRetryCounts.keys())) {
+          const sepIdx = retryKey.indexOf(':');
+          if (sepIdx <= 0) {
+            this.manualCleanupRetryCounts.delete(retryKey);
+            continue;
+          }
+          const uid = retryKey.slice(0, sepIdx);
+          const familyKey = retryKey.slice(sepIdx + 1);
+          if (this.hasManualRoleMark(uid, familyKey)) {
+            targetPairs.push({ uid, familyKey });
+          } else {
+            this.manualCleanupRetryCounts.delete(retryKey);
+          }
+        }
+      }
+
+      for (const { uid, familyKey } of targetPairs) {
+        const retryKey = `${uid}:${familyKey}`;
+        let member = guild.members?.cache?.get?.(uid) || null;
+        if (!member && typeof guild.members?.fetch === 'function') {
+          member = await this.safeFetchMember(guild, uid, { withPresences: false });
+        }
+
+        // Kullanıcı sunucuda değilse işareti sessizce sil
+        if (!member) {
+          this.db.removeManualActivityRole(uid, familyKey, { immediate: false });
+          this.manualCleanupRetryCounts.delete(retryKey);
+          continue;
+        }
+
+        // O aileden CANLI ve onaylı otomatik oturum varsa rolü ALMA (artık otomatik sistem sahibi), yalnızca manuel işareti sil
+        if (this.hasLiveConfirmedSessionForFamily(uid, familyKey)) {
+          this.db.removeManualActivityRole(uid, familyKey, { immediate: false });
+          this.manualCleanupRetryCounts.delete(retryKey);
+          continue;
+        }
+
+        const roleId = this.config.FAMILIES?.[familyKey]?.roleId || null;
+        if (!roleId || !member.roles?.cache?.has?.(roleId)) {
+          // Rol zaten yoksa hata vermeden işareti sil
+          this.db.removeManualActivityRole(uid, familyKey, { immediate: false });
+          this.manualCleanupRetryCounts.delete(retryKey);
+          continue;
+        }
+
+        const res = await this.enqueueRoleRemoveDetailed(
+          member,
+          roleId,
+          familyKey,
+          'Gece 00:00 manuel aktiflik rolü temizliği',
+          { priority: false }
+        );
+
+        if (res.ok) {
+          if (res.changed) {
+            removedInRun += 1;
+            this.counters.geceTemizligiAlinan += 1;
+          }
+          this.db.removeManualActivityRole(uid, familyKey, { immediate: false });
+          this.manualCleanupRetryCounts.delete(retryKey);
+        } else {
+          failedInRun += 1;
+          this.counters.geceTemizligiBasarisiz += 1;
+          const nextAttempts = (this.manualCleanupRetryCounts.get(retryKey) || 0) + 1;
+          if (nextAttempts >= maxRetries) {
+            // En çok 10 deneme sonrasında işareti bırak: 5 dakikalık otomatik temizlik güvenlik ağı devralır
+            this.manualCleanupRetryCounts.delete(retryKey);
+            this.db.removeManualActivityRole(uid, familyKey, { immediate: false });
+          } else {
+            this.manualCleanupRetryCounts.set(retryKey, nextAttempts);
+          }
+        }
+      }
+
+      // İsteğe bağlı ayar: MANUAL_CLEAR_ALL_ACTIVITY_ROLES açıksa (varsayılan KAPALI) gün dönümünde 4 roldeki tüm canlı oturumsuz üyelerin rolünü de al
+      if (isDayRollover && this.config.MANUAL_CLEAR_ALL_ACTIVITY_ROLES === true) {
+        for (const [familyKey, family] of Object.entries(this.config.FAMILIES || {})) {
+          if (this.disabledFamilyIds.has(familyKey) || !family.roleId) continue;
+          const role = guild.roles?.cache?.get?.(family.roleId);
+          if (!role || !role.members) continue;
+
+          for (const member of Array.from(role.members.values())) {
+            if (!member || member.user?.bot) continue;
+            const uid = String(member.id);
+            const retryKey = `${uid}:${familyKey}`;
+            if (this.manualCleanupRetryCounts.has(retryKey)) continue;
+            if (this.hasLiveConfirmedSessionForFamily(uid, familyKey)) continue;
+            if (!member.roles?.cache?.has?.(family.roleId)) continue;
+
+            const res = await this.enqueueRoleRemoveDetailed(
+              member,
+              family.roleId,
+              familyKey,
+              'Gece 00:00 genel aktiflik rolü temizliği',
+              { priority: false }
+            );
+            if (res.ok) {
+              if (res.changed) {
+                removedInRun += 1;
+                this.counters.geceTemizligiAlinan += 1;
+              }
+            } else {
+              failedInRun += 1;
+              this.counters.geceTemizligiBasarisiz += 1;
+            }
+          }
+        }
+      }
+
+      if (isDayRollover) {
+        this.db.setManualActivityDay(today, { immediate: false });
+      }
+      this.db.flushDirty();
+
+      this.lastMidnightCleanup = {
+        at: this.now(),
+        removed: removedInRun,
+        failed: failedInRun,
+        day: today,
+      };
+
+      // Gün dönümü tamamlandıysa bir sonraki 00:00 zamanlayıcısını yeniden kur
+      if (isDayRollover && (this.midnightSafetyInterval || this.guild === guild)) {
+        this._scheduleNextMidnightCleanup(guild);
+      }
+
+      return { ran: true, day: today, removed: removedInRun, failed: failedInRun };
+    } finally {
+      this.manualCleanupRunning = false;
+    }
   }
 
   startBackgroundTimers(guild) {
@@ -1099,6 +1356,16 @@ class ActivityTracker {
       this.roleCleanupInterval?.unref?.();
     }
 
+    // İki katmanlı gece 00:00 (Europe/Istanbul) manuel rol temizliği: (1) tam 00:00 setTimeout, (2) 60 sn güvenlik ağı
+    this._scheduleNextMidnightCleanup(guild);
+    const midnightSafetyMs = Number(this.config.TIMINGS.MANUAL_MIDNIGHT_SAFETY_CHECK_MS ?? 60000);
+    if (midnightSafetyMs > 0) {
+      this.midnightSafetyInterval = this._setInterval(() => {
+        this.runMidnightManualCleanup(guild).catch(() => {});
+      }, Math.max(1000, midnightSafetyMs));
+      this.midnightSafetyInterval?.unref?.();
+    }
+
     const hourlyMs = Math.max(60000, Number(this.config.TIMINGS.HOURLY_LOG_INTERVAL_MS || 3600000));
     this.hourlyLogInterval = this._setInterval(() => {
       this.logCounterSummary('son 1 saat');
@@ -1130,6 +1397,14 @@ class ActivityTracker {
       this._clearInterval(this.roleCleanupInterval);
       this.roleCleanupInterval = null;
     }
+    if (this.midnightTimeout) {
+      this._clearTimeout(this.midnightTimeout);
+      this.midnightTimeout = null;
+    }
+    if (this.midnightSafetyInterval) {
+      this._clearInterval(this.midnightSafetyInterval);
+      this.midnightSafetyInterval = null;
+    }
     if (this.hourlyLogInterval) {
       this._clearInterval(this.hourlyLogInterval);
       this.hourlyLogInterval = null;
@@ -1159,6 +1434,11 @@ class ActivityTracker {
       for (const member of role.members.values()) {
         if (!member || member.user?.bot) continue;
         const userId = String(member.id);
+
+        // Bugün /oyun komutuyla manuel alınmış aktiflik rolüne ASLA dokunma
+        if (this.hasManualRoleMark(userId, familyKey)) {
+          continue;
+        }
 
         // Tracker'da bu aileden aktif veya onay bekleyen oturum varsa dokunma
         const session = this.sessions.get(userId);
@@ -1222,6 +1502,9 @@ class ActivityTracker {
       for (const member of holders) {
         if (!member || member.user?.bot) continue;
         const userId = String(member.id);
+        // Bugün /oyun komutuyla manuel alınmış aktiflik rolünü açılış temizliği ASLA almaz
+        if (this.hasManualRoleMark(userId, familyKey)) continue;
+
         const trackingOn = this.getPrefs(userId).tracking;
         const session = this.sessions.get(userId);
         const liveDetected = trackingOn
@@ -1682,15 +1965,22 @@ class ActivityTracker {
       this.sessions.delete(uid);
       this.counters.gamesEnded += 1;
 
-      // (ii) Aile rolünü HEMEN al (rol kuyruğunda yüksek öncelik; aynı aileden başka oturum varsa dokunma)
+      // (ii) Aile rolünü HEMEN al (rol kuyruğunda yüksek öncelik; aynı aileden başka oturum veya /oyun manuel işareti varsa dokunma)
       const currentSessAfterDelete = this.sessions.get(uid);
       const hasSameFamilyActive = Boolean(
         currentSessAfterDelete &&
           currentSessAfterDelete.confirmed &&
           currentSessAfterDelete.family === oldFamily
       );
+      const hasManualMarkForOldFamily = this.hasManualRoleMark(uid, oldFamily);
       let roleRemovePromise = Promise.resolve(false);
-      if (member && oldFamily && !this.disabledFamilyIds.has(oldFamily) && !hasSameFamilyActive) {
+      if (
+        member &&
+        oldFamily &&
+        !this.disabledFamilyIds.has(oldFamily) &&
+        !hasSameFamilyActive &&
+        !hasManualMarkForOldFamily
+      ) {
         const roleId = this.config.FAMILIES?.[oldFamily]?.roleId;
         if (roleId) {
           roleRemovePromise = this.enqueueRoleRemove(
@@ -2015,6 +2305,8 @@ class ActivityTracker {
       if (familyKey === targetFamily) {
         this.enqueueRoleAdd(member, family.roleId, familyKey, 'Oyun etkinliği başladı');
       } else if (member.roles?.cache?.has?.(family.roleId)) {
+        // Başka ailede /oyun manuel işareti varsa otomatik geçiş o manuel role dokunmaz
+        if (this.hasManualRoleMark(member.id, familyKey)) continue;
         this.enqueueRoleRemove(member, family.roleId, familyKey, 'Oyun ailesi değişti');
       }
     }
@@ -2025,6 +2317,8 @@ class ActivityTracker {
     const tasks = [];
     for (const [familyKey, family] of Object.entries(this.config.FAMILIES || {})) {
       if (this.disabledFamilyIds.has(familyKey) || !family.roleId) continue;
+      // Takibi kapatmak yalnızca otomatik algılamayı durdurur; /oyun manuel işaretli rollere dokunulmaz
+      if (this.hasManualRoleMark(member.id, familyKey)) continue;
       if (member.roles?.cache?.has?.(family.roleId)) {
         tasks.push(this.enqueueRoleRemove(member, family.roleId, familyKey, reason));
       }
@@ -2032,44 +2326,71 @@ class ActivityTracker {
     return Promise.all(tasks);
   }
 
-  enqueueRoleAdd(member, roleId, familyKey, reason) {
-    if (!member || !roleId || member.user?.bot) return Promise.resolve(false);
-    // Zaten varsa gereksiz API çağrısı yapma
-    if (member.roles?.cache?.has?.(roleId)) return Promise.resolve(false);
-
-    return this.roleQueue.enqueue(async () => {
-      if (member.roles?.cache?.has?.(roleId)) return false;
-      try {
-        await member.roles.add(roleId, reason);
-        this.counters.roleAdded += 1;
-        return true;
-      } catch (err) {
-        this.counters.roleFailed += 1;
-        this._handleRoleApiError(err, familyKey, 'eklenemedi');
-        return false;
-      }
-    });
-  }
-
-  enqueueRoleRemove(member, roleId, familyKey, reason, { priority = false } = {}) {
-    if (!member || !roleId || member.user?.bot) return Promise.resolve(false);
-    // Zaten yoksa gereksiz API çağrısı yapma (idempotent)
-    if (!member.roles?.cache?.has?.(roleId)) return Promise.resolve(false);
+  enqueueRoleAddDetailed(member, roleId, familyKey, reason, { priority = false } = {}) {
+    if (!member || !roleId || member.user?.bot) {
+      return Promise.resolve({ ok: false, changed: false, failed: true, code: 'INVALID_TARGET' });
+    }
+    // Zaten varsa gereksiz API çağrısı yapma (idempotent)
+    if (member.roles?.cache?.has?.(roleId)) {
+      return Promise.resolve({ ok: true, changed: false, failed: false });
+    }
 
     return this.roleQueue.enqueue(
       async () => {
-        if (!member.roles?.cache?.has?.(roleId)) return false;
+        if (member.roles?.cache?.has?.(roleId)) {
+          return { ok: true, changed: false, failed: false };
+        }
         try {
-          await member.roles.remove(roleId, reason);
-          this.counters.rolesRemoved += 1;
-          return true;
+          await member.roles.add(roleId, reason);
+          this.counters.roleAdded += 1;
+          return { ok: true, changed: true, failed: false };
         } catch (err) {
           this.counters.roleFailed += 1;
-          this._handleRoleApiError(err, familyKey, 'kaldırılamadı');
-          return false;
+          this._handleRoleApiError(err, familyKey, 'eklenemedi');
+          return { ok: false, changed: false, failed: true, code: err?.code || err?.status || 'ERR' };
         }
       },
       { priority }
+    );
+  }
+
+  enqueueRoleRemoveDetailed(member, roleId, familyKey, reason, { priority = false } = {}) {
+    if (!member || !roleId || member.user?.bot) {
+      return Promise.resolve({ ok: false, changed: false, failed: true, code: 'INVALID_TARGET' });
+    }
+    // Zaten yoksa gereksiz API çağrısı yapma (idempotent)
+    if (!member.roles?.cache?.has?.(roleId)) {
+      return Promise.resolve({ ok: true, changed: false, failed: false });
+    }
+
+    return this.roleQueue.enqueue(
+      async () => {
+        if (!member.roles?.cache?.has?.(roleId)) {
+          return { ok: true, changed: false, failed: false };
+        }
+        try {
+          await member.roles.remove(roleId, reason);
+          this.counters.rolesRemoved += 1;
+          return { ok: true, changed: true, failed: false };
+        } catch (err) {
+          this.counters.roleFailed += 1;
+          this._handleRoleApiError(err, familyKey, 'kaldırılamadı');
+          return { ok: false, changed: false, failed: true, code: err?.code || err?.status || 'ERR' };
+        }
+      },
+      { priority }
+    );
+  }
+
+  enqueueRoleAdd(member, roleId, familyKey, reason, options = {}) {
+    return this.enqueueRoleAddDetailed(member, roleId, familyKey, reason, options).then((res) =>
+      Boolean(res?.changed)
+    );
+  }
+
+  enqueueRoleRemove(member, roleId, familyKey, reason, options = {}) {
+    return this.enqueueRoleRemoveDetailed(member, roleId, familyKey, reason, options).then((res) =>
+      Boolean(res?.changed)
     );
   }
 
@@ -3323,6 +3644,43 @@ class ActivityTracker {
   }
 
   /**
+   * Mobil /oyun özelliği ilk kez çalıştığında (activityMeta.manualAnnouncedAt boşsa)
+   * tek seferlik iki dilli duyuru gönderir; kimseyi etiketlemez, hata olursa işaretlemez.
+   */
+  async checkOneTimeManualAnnouncement(guild = this.guild) {
+    const meta = this.db.getActivityMeta();
+    if (meta.manualAnnouncedAt) return { announced: false };
+
+    const cmdChannel = guild?.channels?.cache?.get?.(this.config.COMMAND_CHANNEL_ID) || null;
+    if (!cmdChannel || typeof cmdChannel.send !== 'function') {
+      this.logErrorThrottled(
+        'manual_announce:no_channel',
+        '[OYUN ETKİNLİĞİ DUYURU] Mobil /oyun duyurusu için komut kanalı bulunamadı; daha sonra tekrar denenecek.'
+      );
+      return { announced: false, reason: 'no_channel' };
+    }
+
+    const message =
+      "📱 Yenilik: Mobilden mi oynuyorsun? Discord mobil oyunları algılayamaz. /oyun yazıp oynadığın oyunun butonuna bas, aktiflik rolün hemen verilsin. Roller her gün 00:00'da (Türkiye saati) otomatik alınır.\n" +
+      "📱 New: Playing on mobile? Discord can't detect mobile games. Type /game and press your game's button to get your activity role right away. Roles are removed automatically every day at 00:00 (Turkey time).";
+
+    try {
+      await cmdChannel.send({
+        content: message,
+        allowedMentions: { parse: [] },
+      });
+      this.db.setActivityManualAnnounced(this.now());
+      return { announced: true };
+    } catch (err) {
+      this.logErrorThrottled(
+        'manual_announce:send_failed',
+        `[OYUN ETKİNLİĞİ DUYURU] Mobil /oyun duyurusu gönderilemedi (${err?.code || err?.message || 'bilinmeyen hata'}); daha sonra tekrar denenecek.`
+      );
+      return { announced: false, reason: 'send_failed' };
+    }
+  }
+
+  /**
    * Kullanıcı takibi kapattığında: tüm zamanlayıcıları/geri sayımları iptal et,
    * karar izini sil, 4 aktiflik rolünü hemen al, bu ayki süreleri sil ve bellekten temizle.
    */
@@ -3381,6 +3739,11 @@ class ActivityTracker {
     this.botMoveIgnoreUntil.delete(uid);
     this.memberFetchLastAt.delete(uid);
     this.endingSessions.delete(uid);
+    for (const key of Array.from(this.manualCleanupRetryCounts.keys())) {
+      if (key.startsWith(`${uid}:`)) {
+        this.manualCleanupRetryCounts.delete(key);
+      }
+    }
 
     const session = this.sessions.get(uid);
     if (session) {
@@ -3411,6 +3774,8 @@ class ActivityTracker {
     this.lastDecisions.clear();
     this.evaluatingUsers.clear();
     this.endingSessions.clear();
+    this.manualCleanupRetryCounts.clear();
+    this.manualCleanupRunning = false;
 
     if (this._unsubscribeDbSave) {
       this._unsubscribeDbSave();
