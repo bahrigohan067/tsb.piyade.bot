@@ -138,6 +138,7 @@ Bot aynı Node.js sürecinde Express ile REST API sunar. `/api/health` dışınd
   - Yanıtlardaki `registration` (ve `pending` durumunda `application`) nesnesi artık `displayName` ve `games: [{ id, username, verified, robloxId?, robloxProfileUrl? }]` alanlarını da içerir (eski kayıtlar okuma sırasında otomatik uyarlanır).
 * **`GET /api/member/:id/activity?lang=tr|en`**: Üyenin bu ayki kişisel oyun etkinliği özetini (`/aktivitem` ile birebir aynı mantıkla; canlı oturum dahil) döndürür.
 * **`GET /api/stats/top-games?scope=month|all&limit=8&lang=tr|en&group=game|family`**: Sunucuda en çok oynanan oyunların anonim sıralamasını döndürür (hiçbir kullanıcı ID'si içermez, 60 sn önbellekli).
+* **`GET /api/stats/summary`**: Sunucudaki aktif kayıtlı oyuncu sayısı, toplam üye, çevrimiçi ve şu an oynayan kişi sayısını anonim olarak döndürür (60 sn önbellekli).
 * Diğer uç noktalar: `GET /api/member/:id/roles`, `POST /api/feedback`, `POST /api/admin/warn`, `POST /api/admin/warn/:id/evidence`.
 
 ---

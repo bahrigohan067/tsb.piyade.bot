@@ -326,3 +326,41 @@ test('5. Aylık sıfırlama (resetActivityStatsForMonth) ve Tüm Zamanlar (scope
   assert.ok(safeAllTime.since > 0);
   assert.deepEqual(safeAllTime.games, {});
 });
+
+test('6. GET /api/stats/summary aktif kayıtlı üye ve oynayan sayılarını anonim olarak döndürmeli', async () => {
+  // Yetkisiz istek -> 401
+  const unauth = await apiGet('/api/stats/summary', { secret: null });
+  assert.equal(unauth.status, 401);
+
+  // Mock guild içinde 8101, 8102, 8103 (3 insan üye) var; 8101 ve 8102 kayıtlı (CENGAVER rolü / DB), 8101 şu an oynuyor
+  database.data.registrations = [
+    { discordId: '8101', displayName: 'Oyuncu Bir', games: [{ id: 'cs2', username: 'p1' }] },
+    { discordId: '8102', displayName: 'Oyuncu İki', games: [{ id: 'roblox', username: 'p2' }] },
+  ];
+  database.save();
+  statsRouter.clearSummaryCache();
+
+  const now = activityTracker.now();
+  activityTracker.sessions.set('8101', {
+    userId: '8101',
+    gameId: 'cs2',
+    family: 'cs2',
+    confirmed: true,
+    currentlyDetectedGameId: 'cs2',
+    since: now - 120 * 1000,
+    lastAccountedAt: now - 30 * 1000,
+  });
+
+  const res = await apiGet('/api/stats/summary');
+  assert.equal(res.status, 200);
+  assert.equal(typeof res.body.activeRegisteredCount, 'number');
+  assert.ok(res.body.activeRegisteredCount >= 2, 'En az 2 kayıtlı üye sayılmalı');
+  assert.equal(typeof res.body.totalMemberCount, 'number');
+  assert.equal(res.body.playingCount, 1);
+  assert.equal(typeof res.body.updatedAt, 'number');
+
+  // Anonimlik kontrolü
+  const raw = JSON.stringify(res.body);
+  assert.equal(raw.includes('8101'), false);
+  assert.equal(raw.includes('8102'), false);
+});

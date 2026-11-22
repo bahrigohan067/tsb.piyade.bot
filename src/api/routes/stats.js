@@ -1,21 +1,31 @@
 const express = require('express');
 const router = express.Router();
+const config = require('../../../config');
 const database = require('../../utils/database');
 const activityTracker = require('../../utils/activityTracker');
 const activityConfig = require('../../../activity.config');
 const { formatDuration } = require('../../commands/aktivitem');
 
 const TOP_GAMES_CACHE_TTL_MS = 60 * 1000;
+const SUMMARY_CACHE_TTL_MS = 60 * 1000;
+const SUMMARY_GUILD_FETCH_COOLDOWN_MS = 5 * 60 * 1000;
 const topGamesCache = new Map();
+let summaryCache = null;
+let lastSummaryGuildFetchAt = 0;
 
 function clearTopGamesCache() {
   topGamesCache.clear();
 }
 
-// Veritabanı her diske yazıldığında (checkpoint, aylık sıfırlama, takip kapatma vb.) önbelleği tazele
+function clearSummaryCache() {
+  summaryCache = null;
+}
+
+// Veritabanı her diske yazıldığında (checkpoint, aylık sıfırlama, yeni kayıt onayı, takip kapatma vb.) önbelleği tazele
 if (typeof database.onSaveResult === 'function') {
   database.onSaveResult(() => {
     clearTopGamesCache();
+    clearSummaryCache();
   });
 }
 
@@ -228,7 +238,98 @@ router.get('/top-games', (req, res) => {
   }
 });
 
+/**
+ * Sunucu geneli anonim özet sayılarını hesaplar (aktif kayıtlı oyuncu, toplam üye, çevrimiçi ve şu an oynayan).
+ * Hiçbir kullanıcı ID'si veya kullanıcı adı içermez.
+ */
+async function computeServerStatsSummary({ guild = null, db = database, tracker = activityTracker } = {}) {
+  const allRegs = typeof db.getAllRegistrations === 'function' ? db.getAllRegistrations() : [];
+  const regIdSet = new Set(allRegs.map((r) => String(r.discordId)).filter(Boolean));
+
+  let activeRegisteredCount = 0;
+  let totalMemberCount = 0;
+  let onlineCount = 0;
+
+  if (guild && guild.members?.cache) {
+    const reportedCount = Number(guild.memberCount) || 0;
+    const now = Date.now();
+    if (
+      reportedCount > 0 &&
+      guild.members.cache.size < Math.floor(reportedCount * 0.8) &&
+      typeof guild.members.fetch === 'function' &&
+      now - lastSummaryGuildFetchAt >= SUMMARY_GUILD_FETCH_COOLDOWN_MS
+    ) {
+      lastSummaryGuildFetchAt = now;
+      await guild.members.fetch({ limit: 1000 }).catch(() => null);
+    }
+
+    const cachedMembers = Array.from(guild.members.cache.values());
+    const humanMembers = cachedMembers.filter((m) => m && !m.user?.bot);
+
+    if (humanMembers.length > 0) {
+      for (const member of humanMembers) {
+        if (config.isRegisteredMember(member) || regIdSet.has(String(member.id))) {
+          activeRegisteredCount += 1;
+        }
+        const presenceStatus =
+          member.presence?.status || guild.presences?.cache?.get?.(member.id)?.status || null;
+        if (presenceStatus === 'online' || presenceStatus === 'idle' || presenceStatus === 'dnd') {
+          onlineCount += 1;
+        }
+      }
+      totalMemberCount = reportedCount > humanMembers.length ? reportedCount : humanMembers.length;
+    } else {
+      activeRegisteredCount = regIdSet.size;
+      totalMemberCount = reportedCount || regIdSet.size;
+    }
+  } else {
+    activeRegisteredCount = regIdSet.size;
+    totalMemberCount = regIdSet.size;
+  }
+
+  let playingCount = 0;
+  if (tracker && tracker.sessions instanceof Map) {
+    for (const [uid, session] of tracker.sessions.entries()) {
+      if (!session || !session.confirmed || !session.gameId) continue;
+      if (session.currentlyDetectedGameId !== session.gameId) continue;
+      if (typeof db.isActivityTrackingEnabled === 'function' && !db.isActivityTrackingEnabled(uid)) {
+        continue;
+      }
+      playingCount += 1;
+    }
+  }
+
+  return {
+    activeRegisteredCount,
+    totalMemberCount,
+    onlineCount,
+    playingCount,
+    updatedAt: Date.now(),
+  };
+}
+
+/**
+ * GET /api/stats/summary
+ * Web sitesi üst çubuk ve anasayfa için anonim sunucu özet istatistiklerini döndürür (60 sn önbellekli).
+ */
+router.get('/summary', async (req, res) => {
+  try {
+    const now = Date.now();
+    if (summaryCache && now - summaryCache.at < SUMMARY_CACHE_TTL_MS) {
+      return res.json(summaryCache.payload);
+    }
+
+    const payload = await computeServerStatsSummary({ guild: req.guild });
+    summaryCache = { at: now, payload };
+    return res.json(payload);
+  } catch (err) {
+    return res.status(500).json({ error: `Sunucu özeti alınırken hata oluştu: ${err.message}` });
+  }
+});
+
 router.computeTopGamesStats = computeTopGamesStats;
 router.clearTopGamesCache = clearTopGamesCache;
+router.computeServerStatsSummary = computeServerStatsSummary;
+router.clearSummaryCache = clearSummaryCache;
 
 module.exports = router;
