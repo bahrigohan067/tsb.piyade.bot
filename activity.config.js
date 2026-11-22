@@ -27,6 +27,12 @@ const RETURN_ENABLED = true;
 // Aylık sıfırlama ve tarih hesaplamalarında kullanılan saat dilimi
 const TIMEZONE = 'Europe/Istanbul';
 
+// Mobil /oyun manuel aktiflik rolleri için takvim günü ve gece 00:00 temizliği saat dilimi (Intl.DateTimeFormat ile çözülür)
+const MANUAL_TIMEZONE = 'Europe/Istanbul';
+
+// True yapılırsa gece 00:00'da 4 aktiflik rolünün role.members önbelleğindeki canlı oturumu olmayan herkesin rolü de alınır (varsayılan KAPALI)
+const MANUAL_CLEAR_ALL_ACTIVITY_ROLES = false;
+
 // Süre, gecikme ve kuyruk sabitleri
 const TIMINGS = {
   CONFIRM_SEC: 15,                 // Etkinlik bu kadar kesintisiz sürmeden oyun oturumu onaylanmaz
@@ -34,6 +40,9 @@ const TIMINGS = {
   COUNTDOWN_SEC: 10,               // Ses kanalına aktarmadan önce iptal edilebilir geri sayım süresi
   CHECKPOINT_SEC: 60,              // Süre biriktirme ve toplu veritabanı kayıt aralığı (saniye)
   PROFILE_COOLDOWN_SEC: 30,        // /aktivitem komutu kullanıcı başına bekleme süresi (saniye)
+  MANUAL_BUTTON_COOLDOWN_SEC: 2,   // /oyun komutu butonlarında kullanıcı+aile başına bekleme süresi (saniye)
+  MANUAL_MIDNIGHT_SAFETY_CHECK_MS: 60000, // Gece 00:00 temizliği için 60 saniyelik güvenlik ağı kontrol aralığı (ms)
+  MANUAL_CLEANUP_MAX_RETRIES: 10,  // Gece temizliğinde geçici rol alma hatası için en fazla yeniden deneme sayısı
   ROLE_QUEUE_GAP_MS: 500,          // Rol ekleme/çıkarma kuyruğu işlem aralığı (ms)
   MOVE_QUEUE_GAP_MS: 1000,         // Ses taşıma kuyruğu işlem aralığı (ms)
   VOICE_DEBOUNCE_SEC: 3,           // Ses kanalı değişiminde aktarma değerlendirmesi öncesi bekleme (saniye)
@@ -100,6 +109,7 @@ const NO_MOVE_CHANNEL_IDS = [];
 const FAMILIES = {
   roblox: {
     id: 'roblox',
+    label: 'Roblox',
     roleId: '1573688445392654396', // 🧱 Roblox Oyun Aktiflik Rolü
     emoji: '🧱',
     name: {
@@ -109,6 +119,7 @@ const FAMILIES = {
   },
   zula: {
     id: 'zula',
+    label: 'Zula',
     roleId: '1573688321580990617', // 🪖 Zula Oyun Aktiflik Rolü
     emoji: '🪖',
     name: {
@@ -118,6 +129,7 @@ const FAMILIES = {
   },
   minecraft: {
     id: 'minecraft',
+    label: 'Minecraft',
     roleId: '1573688479634821151', // ⛏️ Minecraft Oyun Aktiflik Rolü
     emoji: '⛏️',
     name: {
@@ -127,6 +139,7 @@ const FAMILIES = {
   },
   cs2: {
     id: 'cs2',
+    label: 'CS2',
     roleId: '1573688515902832781', // 🎯 CS2 Oyun Aktiflik Rolü
     emoji: '🎯',
     name: {
@@ -687,12 +700,80 @@ function validateActivityConfigWithGuild(guild, cfg = exportedConfig, { silent =
   };
 }
 
+/**
+ * Belirtilen IANA saat dilimine göre takvim gününü 'YYYY-MM-DD' biçiminde döndürür.
+ * Sabit +3 ofseti varsaymaz; tamamen Intl.DateTimeFormat kullanır.
+ */
+function getDateStringInTimeZone(date = new Date(), timeZone = MANUAL_TIMEZONE) {
+  const d = date instanceof Date ? date : new Date(date);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const y = parts.find((p) => p.type === 'year')?.value || String(d.getUTCFullYear());
+  const m = parts.find((p) => p.type === 'month')?.value || String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = parts.find((p) => p.type === 'day')?.value || String(d.getUTCDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Belirtilen saat dilimindeki bir zaman damgasının yerel tarih/saat parçalarını döndürür.
+ */
+function getZonedDateParts(ms, timeZone = MANUAL_TIMEZONE) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(ms));
+  const getNum = (t) => Number(parts.find((p) => p.type === t)?.value || 0);
+  return {
+    year: getNum('year'),
+    month: getNum('month'),
+    day: getNum('day'),
+    hour: getNum('hour'),
+    minute: getNum('minute'),
+    second: getNum('second'),
+  };
+}
+
+/**
+ * Belirtilen IANA saat diliminde bir sonraki 00:00:00 anının UTC milisaniye zaman damgasını hesaplar.
+ * Sabit UTC ofseti varsaymaz; Intl.DateTimeFormat üzerinden gerçek saat dilimi farkını çözer.
+ */
+function getNextMidnightMsInTimeZone(nowMs = Date.now(), timeZone = MANUAL_TIMEZONE) {
+  const cur = getZonedDateParts(nowMs, timeZone);
+  const targetLocalAsUtc = Date.UTC(cur.year, cur.month - 1, cur.day + 1, 0, 0, 0, 0);
+
+  let guess = targetLocalAsUtc;
+  for (let i = 0; i < 3; i++) {
+    const p = getZonedDateParts(guess, timeZone);
+    const actualAsUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0);
+    const diff = targetLocalAsUtc - actualAsUtc;
+    if (diff === 0) break;
+    guess += diff;
+  }
+
+  if (guess <= nowMs) {
+    guess += 24 * 60 * 60 * 1000;
+  }
+  return guess;
+}
+
 const exportedConfig = {
   COMMAND_CHANNEL_ID,
   RETURN_CHANNEL_ID,
   RETURN_ONLY_FROM_GAME_CHANNELS,
   RETURN_ENABLED,
   TIMEZONE,
+  MANUAL_TIMEZONE,
+  MANUAL_CLEAR_ALL_ACTIVITY_ROLES,
   TIMINGS,
   TRANSFER_REASONS,
   NO_MOVE_CHANNEL_IDS,
@@ -703,6 +784,8 @@ const exportedConfig = {
   getGameConfigById,
   getGameDisplayInfo,
   getManagedGameChannelIds,
+  getDateStringInTimeZone,
+  getNextMidnightMsInTimeZone,
   validateActivityConfigStructure,
   validateActivityConfigWithGuild,
   isRegularVoiceChannel,

@@ -22,9 +22,27 @@ function getCurrentIstanbulMonth(date = new Date()) {
   return `${year}-${month}`;
 }
 
+/**
+ * Belirtilen IANA saat dilimine göre takvim gününü 'YYYY-MM-DD' biçiminde döndürür (sabit +3 varsaymaz).
+ */
+function getCurrentIstanbulDay(date = new Date(), timeZone = 'Europe/Istanbul') {
+  const d = date instanceof Date ? date : new Date(date);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(d);
+  const year = parts.find((p) => p.type === 'year')?.value || String(d.getUTCFullYear());
+  const month = parts.find((p) => p.type === 'month')?.value || String(d.getUTCMonth() + 1).padStart(2, '0');
+  const day = parts.find((p) => p.type === 'day')?.value || String(d.getUTCDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 class DatabaseManager {
   constructor() {
     const initialMonth = getCurrentIstanbulMonth();
+    const initialDay = getCurrentIstanbulDay();
     this._dirty = false;
     this.lastSaveOk = true;
     this.lastSaveAt = null;
@@ -56,10 +74,15 @@ class DatabaseManager {
         month: initialMonth,
         users: {},
       },
-      activityMeta: {                 // İlk duyuru, dönüş duyurusu ve son sıfırlanan ay bilgisi
+      activityMeta: {                 // İlk duyuru, dönüş duyurusu, /oyun duyurusu ve son sıfırlanan ay bilgisi
         announcedAt: null,
         returnAnnouncedAt: null,
+        manualAnnouncedAt: null,
         lastResetMonth: initialMonth,
+      },
+      activityManual: {               // Mobil /oyun komutuyla bugün alınmış manuel aktiflik rolleri (00:00'da silinir; geçmiş DEĞİLDİR)
+        day: initialDay,
+        users: {},
       },
       activityAllTime: {              // Anonim sunucu geneli tüm zamanlar oyun toplamları (kullanıcı ID'si tutulmaz)
         since: Date.now(),
@@ -189,10 +212,44 @@ class DatabaseManager {
             typeof rawMeta.returnAnnouncedAt === 'number' && Number.isFinite(rawMeta.returnAnnouncedAt)
               ? rawMeta.returnAnnouncedAt
               : null,
+          manualAnnouncedAt:
+            typeof rawMeta.manualAnnouncedAt === 'number' && Number.isFinite(rawMeta.manualAnnouncedAt)
+              ? rawMeta.manualAnnouncedAt
+              : null,
           lastResetMonth:
             typeof rawMeta.lastResetMonth === 'string' && /^\d{4}-\d{2}$/.test(rawMeta.lastResetMonth)
               ? rawMeta.lastResetMonth
               : statsMonth,
+        };
+
+        // Mobil /oyun komutuyla bugün alınmış manuel aktiflik rolleri (yalnızca geçerli aile işaretleri; boş kullanıcılar silinir)
+        const fallbackDay = getCurrentIstanbulDay();
+        const rawManual =
+          parsed.activityManual && typeof parsed.activityManual === 'object'
+            ? parsed.activityManual
+            : {};
+        const manualDay =
+          typeof rawManual.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(rawManual.day)
+            ? rawManual.day
+            : fallbackDay;
+        const normalizedManualUsers = {};
+        if (rawManual.users && typeof rawManual.users === 'object') {
+          for (const [uid, famMap] of Object.entries(rawManual.users)) {
+            if (!famMap || typeof famMap !== 'object') continue;
+            const cleanFams = {};
+            for (const [famKey, flag] of Object.entries(famMap)) {
+              if (flag === true && famKey) {
+                cleanFams[String(famKey)] = true;
+              }
+            }
+            if (Object.keys(cleanFams).length > 0) {
+              normalizedManualUsers[String(uid)] = cleanFams;
+            }
+          }
+        }
+        const normalizedActivityManual = {
+          day: manualDay,
+          users: normalizedManualUsers,
         };
 
         const rawAllTime =
@@ -247,6 +304,7 @@ class DatabaseManager {
             users: normalizedActivityUsers,
           },
           activityMeta: normalizedActivityMeta,
+          activityManual: normalizedActivityManual,
           activityAllTime: normalizedActivityAllTime,
         };
         if ('userLang' in this.data) {
@@ -334,6 +392,10 @@ class DatabaseManager {
 
   getCurrentIstanbulMonth(date = new Date()) {
     return getCurrentIstanbulMonth(date);
+  }
+
+  getCurrentIstanbulDay(date = new Date(), timeZone = 'Europe/Istanbul') {
+    return getCurrentIstanbulDay(date, timeZone);
   }
 
   // ==========================================
@@ -1496,7 +1558,7 @@ class DatabaseManager {
   }
 
   /**
-   * Sunucudan ayrılan üyenin hem aylık sürelerini hem de etkinlik tercihlerini siler.
+   * Sunucudan ayrılan üyenin aylık sürelerini, etkinlik tercihlerini ve manuel oyun rol işaretlerini siler.
    */
   removeUserActivityData(userId) {
     if (!userId) return false;
@@ -1509,6 +1571,10 @@ class DatabaseManager {
     }
     if (this.data.activityPrefs && Object.prototype.hasOwnProperty.call(this.data.activityPrefs, uid)) {
       delete this.data.activityPrefs[uid];
+      changed = true;
+    }
+    if (this.data.activityManual?.users && Object.prototype.hasOwnProperty.call(this.data.activityManual.users, uid)) {
+      delete this.data.activityManual.users[uid];
       changed = true;
     }
     if (changed) {
@@ -1570,7 +1636,12 @@ class DatabaseManager {
       users: {},
     };
     if (!this.data.activityMeta || typeof this.data.activityMeta !== 'object') {
-      this.data.activityMeta = { announcedAt: null, returnAnnouncedAt: null, lastResetMonth: targetMonth };
+      this.data.activityMeta = {
+        announcedAt: null,
+        returnAnnouncedAt: null,
+        manualAnnouncedAt: null,
+        lastResetMonth: targetMonth,
+      };
     } else {
       this.data.activityMeta.lastResetMonth = targetMonth;
     }
@@ -1612,6 +1683,7 @@ class DatabaseManager {
     return {
       announcedAt: typeof meta.announcedAt === 'number' ? meta.announcedAt : null,
       returnAnnouncedAt: typeof meta.returnAnnouncedAt === 'number' ? meta.returnAnnouncedAt : null,
+      manualAnnouncedAt: typeof meta.manualAnnouncedAt === 'number' ? meta.manualAnnouncedAt : null,
       lastResetMonth: meta.lastResetMonth || this.data.activityStats?.month || getCurrentIstanbulMonth(),
     };
   }
@@ -1621,6 +1693,7 @@ class DatabaseManager {
       this.data.activityMeta = {
         announcedAt: timestamp,
         returnAnnouncedAt: null,
+        manualAnnouncedAt: null,
         lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
       };
     } else {
@@ -1634,12 +1707,140 @@ class DatabaseManager {
       this.data.activityMeta = {
         announcedAt: null,
         returnAnnouncedAt: timestamp,
+        manualAnnouncedAt: null,
         lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
       };
     } else {
       this.data.activityMeta.returnAnnouncedAt = timestamp;
     }
     this.save();
+  }
+
+  setActivityManualAnnounced(timestamp = Date.now()) {
+    if (!this.data.activityMeta || typeof this.data.activityMeta !== 'object') {
+      this.data.activityMeta = {
+        announcedAt: null,
+        returnAnnouncedAt: null,
+        manualAnnouncedAt: timestamp,
+        lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
+      };
+    } else {
+      this.data.activityMeta.manualAnnouncedAt = timestamp;
+    }
+    this.save();
+  }
+
+  // ==========================================
+  // MOBİL /OYUN MANUEL AKTİFLİK ROLLERİ BÖLÜMÜ
+  // (Yalnızca bugün butonla alınmış işaretler; gece 00:00'da silinir, geçmiş tutulmaz)
+  // ==========================================
+
+  _ensureActivityManual(defaultDay = getCurrentIstanbulDay()) {
+    if (!this.data.activityManual || typeof this.data.activityManual !== 'object') {
+      this.data.activityManual = { day: defaultDay, users: {} };
+    }
+    if (typeof this.data.activityManual.day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(this.data.activityManual.day)) {
+      this.data.activityManual.day = defaultDay;
+    }
+    if (!this.data.activityManual.users || typeof this.data.activityManual.users !== 'object') {
+      this.data.activityManual.users = {};
+    }
+    return this.data.activityManual;
+  }
+
+  getManualActivityData(defaultDay = getCurrentIstanbulDay()) {
+    return this._ensureActivityManual(defaultDay);
+  }
+
+  hasManualActivityRole(userId, familyKey) {
+    if (!userId || !familyKey) return false;
+    return Boolean(this.data.activityManual?.users?.[String(userId)]?.[String(familyKey)] === true);
+  }
+
+  getUserManualActivityRoles(userId) {
+    if (!userId) return {};
+    const entry = this.data.activityManual?.users?.[String(userId)];
+    if (!entry || typeof entry !== 'object') return {};
+    return { ...entry };
+  }
+
+  setManualActivityRole(userId, familyKey, { day = null, immediate = false } = {}) {
+    if (!userId || !familyKey) return false;
+    const manual = this._ensureActivityManual(day || getCurrentIstanbulDay());
+    const uid = String(userId);
+    const fam = String(familyKey);
+
+    if (day && /^\d{4}-\d{2}-\d{2}$/.test(day) && Object.keys(manual.users).length === 0) {
+      manual.day = day;
+    }
+    if (!manual.users[uid] || typeof manual.users[uid] !== 'object') {
+      manual.users[uid] = {};
+    }
+    if (manual.users[uid][fam] === true) {
+      return false;
+    }
+    manual.users[uid][fam] = true;
+    if (immediate) {
+      this.save();
+    } else {
+      this.markDirty();
+    }
+    return true;
+  }
+
+  removeManualActivityRole(userId, familyKey, { immediate = false } = {}) {
+    if (!userId || !familyKey) return false;
+    const manual = this._ensureActivityManual();
+    const uid = String(userId);
+    const fam = String(familyKey);
+    if (!manual.users[uid] || manual.users[uid][fam] !== true) {
+      return false;
+    }
+    delete manual.users[uid][fam];
+    // Boş kullanıcı kaydını temizle
+    if (Object.keys(manual.users[uid]).length === 0) {
+      delete manual.users[uid];
+    }
+    if (immediate) {
+      this.save();
+    } else {
+      this.markDirty();
+    }
+    return true;
+  }
+
+  setManualActivityDay(dayStr, { immediate = false } = {}) {
+    if (!dayStr || !/^\d{4}-\d{2}-\d{2}$/.test(dayStr)) return false;
+    const manual = this._ensureActivityManual(dayStr);
+    if (manual.day === dayStr) return false;
+    manual.day = dayStr;
+    if (immediate) {
+      this.save();
+    } else {
+      this.markDirty();
+    }
+    return true;
+  }
+
+  /**
+   * Kimliksiz olarak aktif manuel işaret ve üye sayısını döndürür (Sistem Durumu için).
+   */
+  countManualActivityMarks() {
+    const users = this.data.activityManual?.users;
+    if (!users || typeof users !== 'object') {
+      return { totalMarks: 0, totalUsers: 0 };
+    }
+    let totalMarks = 0;
+    let totalUsers = 0;
+    for (const famMap of Object.values(users)) {
+      if (!famMap || typeof famMap !== 'object') continue;
+      const count = Object.values(famMap).filter((v) => v === true).length;
+      if (count > 0) {
+        totalUsers += 1;
+        totalMarks += count;
+      }
+    }
+    return { totalMarks, totalUsers };
   }
 }
 
