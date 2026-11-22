@@ -51,13 +51,14 @@ class DatabaseManager {
       knownClans: [],                 // [{ id, name, normalized, compact, type: 'ally'|'enemy', createdBy, createdAt, updatedAt }]
       clanPanelMessageId: null,       // Dost/Düşman klan paneli mesaj ID'si
       clanPanelChannelId: null,       // Dost/Düşman klan paneli kanal ID'si
-      activityPrefs: {},              // { [userId]: { tracking: boolean, autoMove: boolean } } (yalnızca varsayılandan farklı olanlar)
+      activityPrefs: {},              // { [userId]: { tracking: boolean, autoMove: boolean, returnToLobby: boolean } } (yalnızca varsayılandan farklı olanlar)
       activityStats: {                // Yalnızca bu ayın oyun başına toplam saniyesi (geçmiş/zaman çizelgesi YOK)
         month: initialMonth,
         users: {},
       },
-      activityMeta: {                 // İlk duyuru ve son sıfırlanan ay bilgisi
+      activityMeta: {                 // İlk duyuru, dönüş duyurusu ve son sıfırlanan ay bilgisi
         announcedAt: null,
+        returnAnnouncedAt: null,
         lastResetMonth: initialMonth,
       },
       activityAllTime: {              // Anonim sunucu geneli tüm zamanlar oyun toplamları (kullanıcı ID'si tutulmaz)
@@ -139,8 +140,9 @@ class DatabaseManager {
             if (!pref || typeof pref !== 'object') continue;
             const tracking = pref.tracking !== false;
             const autoMove = pref.autoMove !== false;
-            if (!tracking || !autoMove) {
-              normalizedActivityPrefs[String(uid)] = { tracking, autoMove };
+            const returnToLobby = pref.returnToLobby !== false;
+            if (!tracking || !autoMove || !returnToLobby) {
+              normalizedActivityPrefs[String(uid)] = { tracking, autoMove, returnToLobby };
             }
           }
         }
@@ -182,6 +184,10 @@ class DatabaseManager {
           announcedAt:
             typeof rawMeta.announcedAt === 'number' && Number.isFinite(rawMeta.announcedAt)
               ? rawMeta.announcedAt
+              : null,
+          returnAnnouncedAt:
+            typeof rawMeta.returnAnnouncedAt === 'number' && Number.isFinite(rawMeta.returnAnnouncedAt)
+              ? rawMeta.returnAnnouncedAt
               : null,
           lastResetMonth:
             typeof rawMeta.lastResetMonth === 'string' && /^\d{4}-\d{2}$/.test(rawMeta.lastResetMonth)
@@ -1363,19 +1369,20 @@ class DatabaseManager {
   // ==========================================
 
   getActivityPrefs(userId) {
-    if (!userId) return { tracking: true, autoMove: true };
+    if (!userId) return { tracking: true, autoMove: true, returnToLobby: true };
     const stored = this.data.activityPrefs?.[String(userId)];
     if (!stored || typeof stored !== 'object') {
-      return { tracking: true, autoMove: true };
+      return { tracking: true, autoMove: true, returnToLobby: true };
     }
     return {
       tracking: stored.tracking !== false,
       autoMove: stored.autoMove !== false,
+      returnToLobby: stored.returnToLobby !== false,
     };
   }
 
   /**
-   * Tek merkezi kullanıcı etkinlik tercihi okuyucusu (kaydı olmayan üyeye tracking:true, autoMove:true döner).
+   * Tek merkezi kullanıcı etkinlik tercihi okuyucusu (kaydı olmayan üyeye tracking:true, autoMove:true, returnToLobby:true döner).
    */
   getPrefs(userId) {
     return this.getActivityPrefs(userId);
@@ -1392,10 +1399,10 @@ class DatabaseManager {
 
   /**
    * Kullanıcı etkinlik tercihlerini günceller.
-   * Varsayılan duruma (tracking:true, autoMove:true) dönen kayıtlar yer tutmaması için silinir.
+   * Varsayılan duruma (tracking:true, autoMove:true, returnToLobby:true) dönen kayıtlar yer tutmaması için silinir.
    */
   setActivityPrefs(userId, patch = {}) {
-    if (!userId) return { tracking: true, autoMove: true };
+    if (!userId) return { tracking: true, autoMove: true, returnToLobby: true };
     if (!this.data.activityPrefs || typeof this.data.activityPrefs !== 'object') {
       this.data.activityPrefs = {};
     }
@@ -1404,9 +1411,11 @@ class DatabaseManager {
     const next = {
       tracking: patch.tracking !== undefined ? Boolean(patch.tracking) : current.tracking,
       autoMove: patch.autoMove !== undefined ? Boolean(patch.autoMove) : current.autoMove,
+      returnToLobby:
+        patch.returnToLobby !== undefined ? Boolean(patch.returnToLobby) : current.returnToLobby,
     };
 
-    if (next.tracking && next.autoMove) {
+    if (next.tracking && next.autoMove && next.returnToLobby) {
       if (Object.prototype.hasOwnProperty.call(this.data.activityPrefs, uid)) {
         delete this.data.activityPrefs[uid];
         this.save();
@@ -1561,7 +1570,7 @@ class DatabaseManager {
       users: {},
     };
     if (!this.data.activityMeta || typeof this.data.activityMeta !== 'object') {
-      this.data.activityMeta = { announcedAt: null, lastResetMonth: targetMonth };
+      this.data.activityMeta = { announcedAt: null, returnAnnouncedAt: null, lastResetMonth: targetMonth };
     } else {
       this.data.activityMeta.lastResetMonth = targetMonth;
     }
@@ -1602,6 +1611,7 @@ class DatabaseManager {
       : {};
     return {
       announcedAt: typeof meta.announcedAt === 'number' ? meta.announcedAt : null,
+      returnAnnouncedAt: typeof meta.returnAnnouncedAt === 'number' ? meta.returnAnnouncedAt : null,
       lastResetMonth: meta.lastResetMonth || this.data.activityStats?.month || getCurrentIstanbulMonth(),
     };
   }
@@ -1610,10 +1620,24 @@ class DatabaseManager {
     if (!this.data.activityMeta || typeof this.data.activityMeta !== 'object') {
       this.data.activityMeta = {
         announcedAt: timestamp,
+        returnAnnouncedAt: null,
         lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
       };
     } else {
       this.data.activityMeta.announcedAt = timestamp;
+    }
+    this.save();
+  }
+
+  setActivityReturnAnnounced(timestamp = Date.now()) {
+    if (!this.data.activityMeta || typeof this.data.activityMeta !== 'object') {
+      this.data.activityMeta = {
+        announcedAt: null,
+        returnAnnouncedAt: timestamp,
+        lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
+      };
+    } else {
+      this.data.activityMeta.returnAnnouncedAt = timestamp;
     }
     this.save();
   }

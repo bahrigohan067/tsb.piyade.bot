@@ -15,13 +15,22 @@ const { ChannelType, PermissionFlagsBits } = require('discord.js');
 // Bot komut kanalı: ses aktarımı geri sayım mesajları, aylık sıfırlama ve ilk duyuru buraya gider
 const COMMAND_CHANNEL_ID = '1559316204030533722';
 
+// Oyun bitince üyenin geri aktarılacağı bekleme/sohbet ses kanalı ("Salon 1")
+const RETURN_CHANNEL_ID = '1559927197056241816';
+
+// Salon 1'e dönüş yalnızca yönetilen oyun ses kanallarından (GAMES + OTHER GAMES) yapılsın
+const RETURN_ONLY_FROM_GAME_CHANNELS = true;
+
+// Oyun bitince Salon 1'e otomatik dönüş özelliği genel açma/kapama anahtarı
+const RETURN_ENABLED = true;
+
 // Aylık sıfırlama ve tarih hesaplamalarında kullanılan saat dilimi
 const TIMEZONE = 'Europe/Istanbul';
 
 // Süre, gecikme ve kuyruk sabitleri
 const TIMINGS = {
   CONFIRM_SEC: 15,                 // Etkinlik bu kadar kesintisiz sürmeden oyun oturumu onaylanmaz
-  STOP_GRACE_SEC: 60,              // Etkinlik kesilince bu süre dolmadan oyun bırakıldı sayılmaz
+  STOP_GRACE_SEC: 5,               // Etkinlik kesilince bu süre dolmadan oyun bırakıldı sayılmaz (Yanlış alarm olursa 10-15'e çıkarılabilir)
   COUNTDOWN_SEC: 10,               // Ses kanalına aktarmadan önce iptal edilebilir geri sayım süresi
   CHECKPOINT_SEC: 60,              // Süre biriktirme ve toplu veritabanı kayıt aralığı (saniye)
   PROFILE_COOLDOWN_SEC: 30,        // /aktivitem komutu kullanıcı başına bekleme süresi (saniye)
@@ -29,8 +38,9 @@ const TIMINGS = {
   MOVE_QUEUE_GAP_MS: 1000,         // Ses taşıma kuyruğu işlem aralığı (ms)
   VOICE_DEBOUNCE_SEC: 3,           // Ses kanalı değişiminde aktarma değerlendirmesi öncesi bekleme (saniye)
   VOICE_JOIN_DELAY_MS: 3000,       // Geriye dönük uyumluluk için VOICE_DEBOUNCE_SEC (ms) karşılığı
-  SWEEP_SEC: 30,                   // Sesteki üyeler için yedek aktarma taraması aralığı (saniye)
-  DECISION_TTL_MIN: 30,            // Bellekteki son aktarma karar izinin saklanma süresi (dakika)
+  SWEEP_SEC: 30,                   // Sesteki üyeler ve onaylı oturumlar için yedek tarama aralığı (saniye)
+  ROLE_CLEANUP_INTERVAL_MS: 300000, // 5 dakikada bir, sadece 4 aktiflik rolünün sahiplerinde pasif rol temizliği (ms)
+  DECISION_TTL_MIN: 30,            // Bellekteki son aktarma/dönüş karar izinin saklanma süresi (dakika)
   BOT_MOVE_IGNORE_SEC: 5,          // Botun kendi taşımasının voiceStateUpdate'i tekrar tetiklememesi için süre (saniye)
   MEMBER_FETCH_COOLDOWN_SEC: 30,   // Aynı üye için guild.members.fetch çağrıları arası en az bekleme süresi (saniye)
   MEMBER_FETCH_STORM_WINDOW_MS: 60000, // Fırtına koruması pencere süresi (1 dakika)
@@ -42,7 +52,7 @@ const TIMINGS = {
   HOURLY_LOG_INTERVAL_MS: 3600000,  // Saatte bir konsola kimliksiz sayaç özeti yazma aralığı (ms)
 };
 
-// Aktarma değerlendirme sebep kodları (tek merkezi sabit liste)
+// Aktarma ve oyun bitişi dönüş değerlendirme sebep kodları (tek merkezi sabit liste)
 const TRANSFER_REASONS = Object.freeze({
   NO_PRESENCE_DATA: 'NO_PRESENCE_DATA',
   NOT_PLAYING: 'NOT_PLAYING',
@@ -66,6 +76,17 @@ const TRANSFER_REASONS = Object.freeze({
   GAME_CHANGED_DURING_COUNTDOWN: 'GAME_CHANGED_DURING_COUNTDOWN',
   GAME_STOPPED: 'GAME_STOPPED',
   MOVE_FAILED: 'MOVE_FAILED',
+  // Oyun bitişinde Salon 1'e dönüş sebep kodları
+  RETURN_MOVED: 'RETURN_MOVED',
+  RETURN_SKIPPED_NOT_IN_VOICE: 'RETURN_SKIPPED_NOT_IN_VOICE',
+  RETURN_SKIPPED_NOT_GAME_CHANNEL: 'RETURN_SKIPPED_NOT_GAME_CHANNEL',
+  RETURN_SKIPPED_OTHER_GAME_ACTIVE: 'RETURN_SKIPPED_OTHER_GAME_ACTIVE',
+  RETURN_SKIPPED_OPTED_OUT: 'RETURN_SKIPPED_OPTED_OUT',
+  RETURN_SKIPPED_NO_PRESENCE: 'RETURN_SKIPPED_NO_PRESENCE',
+  RETURN_TARGET_NOT_FOUND: 'RETURN_TARGET_NOT_FOUND',
+  RETURN_TARGET_FULL: 'RETURN_TARGET_FULL',
+  RETURN_NO_PERMISSION: 'RETURN_NO_PERMISSION',
+  RETURN_FAILED: 'RETURN_FAILED',
 });
 
 // Hiçbir koşulda otomatik ses aktarımı yapılmayacak özel ses kanalları (ileride doldurulabilir)
@@ -322,6 +343,26 @@ function getGameDisplayInfo(gameId, lang = 'tr', cfg = exportedConfig) {
 }
 
 /**
+ * Yönetilen tüm oyun ses kanallarının ID kümesini döndürür (GAMES[].voiceChannelIds + ROBLOX_UNKNOWN.voiceChannelIds).
+ * Oyun bitişinde yalnızca bu kanallarda olan üyeler Salon 1'e geri aktarılır.
+ */
+function getManagedGameChannelIds(cfg = exportedConfig) {
+  const ids = new Set();
+  for (const game of cfg?.GAMES || []) {
+    if (!game || !Array.isArray(game.voiceChannelIds)) continue;
+    for (const chId of game.voiceChannelIds) {
+      if (chId) ids.add(String(chId));
+    }
+  }
+  if (cfg?.ROBLOX_UNKNOWN && Array.isArray(cfg.ROBLOX_UNKNOWN.voiceChannelIds)) {
+    for (const chId of cfg.ROBLOX_UNKNOWN.voiceChannelIds) {
+      if (chId) ids.add(String(chId));
+    }
+  }
+  return ids;
+}
+
+/**
  * Yapılandırma dosyasının statik bütünlüğünü (eksik alan, tekrarlı ID, geçersiz aile/matcher) doğrular.
  */
 function validateActivityConfigStructure(cfg = exportedConfig, { silent = false } = {}) {
@@ -347,6 +388,12 @@ function validateActivityConfigStructure(cfg = exportedConfig, { silent = false 
     const msg = '[OYUN ETKİNLİĞİ AYAR HATASI] COMMAND_CHANNEL_ID tanımlı değil.';
     errors.push(msg);
     if (!silent) console.error(msg);
+  }
+
+  if (cfg.RETURN_ENABLED !== false && (!cfg.RETURN_CHANNEL_ID || typeof cfg.RETURN_CHANNEL_ID !== 'string')) {
+    const msg = '[OYUN ETKİNLİĞİ UYARISI] RETURN_CHANNEL_ID tanımlı değil; oyun bitişinde Salon 1\'e dönüş çalışmayacak.';
+    warnings.push(msg);
+    if (!silent) console.warn(msg);
   }
 
   if (!Array.isArray(cfg.GAMES)) {
@@ -469,6 +516,16 @@ function validateActivityConfigWithGuild(guild, cfg = exportedConfig, { silent =
   const validChannelIdsByGame = new Map();
   let commandChannelOk = true;
   let permissionsOk = true;
+  let returnChannelStatus = {
+    channelId: cfg?.RETURN_CHANNEL_ID || null,
+    exists: false,
+    isVoice: false,
+    hasPermissions: false,
+    userLimit: 0,
+    memberCount: 0,
+    isFull: false,
+    ok: false,
+  };
 
   const logWarn = (msg) => {
     warnings.push(msg);
@@ -485,6 +542,8 @@ function validateActivityConfigWithGuild(guild, cfg = exportedConfig, { silent =
       validChannelIdsByGame,
       commandChannelOk: false,
       permissionsOk: false,
+      returnChannelOk: false,
+      returnChannelStatus,
     };
   }
 
@@ -574,6 +633,46 @@ function validateActivityConfigWithGuild(guild, cfg = exportedConfig, { silent =
     checkEntryChannels('roblox_unknown', cfg.ROBLOX_UNKNOWN.voiceChannelIds);
   }
 
+  // 5. Oyun bitişi dönüş kanalı (Salon 1 - RETURN_CHANNEL_ID) doğrulaması
+  const retId = cfg.RETURN_CHANNEL_ID ? String(cfg.RETURN_CHANNEL_ID) : null;
+  if (!retId) {
+    logWarn('[OYUN ETKİNLİĞİ UYARISI] Dönüş kanalı (RETURN_CHANNEL_ID / Salon 1) tanımlı değil.');
+  } else {
+    const retCh = guild.channels?.cache?.get?.(retId) || null;
+    if (!retCh) {
+      logWarn(`[OYUN ETKİNLİĞİ UYARISI] Dönüş kanalı Salon 1 (${retId}) sunucuda bulunamadı; oyun bitince geri taşıma çalışmayacak.`);
+    } else if (!isRegularVoiceChannel(retCh)) {
+      returnChannelStatus.exists = true;
+      logWarn(`[OYUN ETKİNLİĞİ UYARISI] Dönüş kanalı Salon 1 (${retId}) normal bir ses kanalı değil; oyun bitince geri taşıma çalışmayacak.`);
+    } else {
+      returnChannelStatus.exists = true;
+      returnChannelStatus.isVoice = true;
+      returnChannelStatus.userLimit = Number(retCh.userLimit) || 0;
+      returnChannelStatus.memberCount = retCh.members?.size ?? 0;
+      returnChannelStatus.isFull =
+        returnChannelStatus.userLimit > 0 && returnChannelStatus.memberCount >= returnChannelStatus.userLimit;
+
+      let retPermOk = true;
+      if (botMember && typeof retCh.permissionsFor === 'function') {
+        const perms = retCh.permissionsFor(botMember);
+        if (perms && typeof perms.has === 'function') {
+          if (!perms.has(PermissionFlagsBits.ViewChannel) || !perms.has(PermissionFlagsBits.Connect)) {
+            retPermOk = false;
+            permissionsOk = false;
+            logWarn(`[OYUN ETKİNLİĞİ İZİN UYARISI] Dönüş kanalı Salon 1 (${retId}) için ViewChannel veya Connect izni eksik.`);
+          }
+        }
+      }
+      returnChannelStatus.hasPermissions = retPermOk;
+      if (returnChannelStatus.isFull) {
+        logWarn(
+          `[OYUN ETKİNLİĞİ UYARISI] Dönüş kanalı Salon 1 (${retId}) kullanıcı sınırına (${returnChannelStatus.memberCount}/${returnChannelStatus.userLimit}) ulaşmış durumda.`
+        );
+      }
+      returnChannelStatus.ok = returnChannelStatus.exists && returnChannelStatus.isVoice && returnChannelStatus.hasPermissions;
+    }
+  }
+
   return {
     valid: base.valid && warnings.length === 0,
     errors: base.errors,
@@ -583,11 +682,16 @@ function validateActivityConfigWithGuild(guild, cfg = exportedConfig, { silent =
     validChannelIdsByGame,
     commandChannelOk,
     permissionsOk,
+    returnChannelOk: returnChannelStatus.ok,
+    returnChannelStatus,
   };
 }
 
 const exportedConfig = {
   COMMAND_CHANNEL_ID,
+  RETURN_CHANNEL_ID,
+  RETURN_ONLY_FROM_GAME_CHANNELS,
+  RETURN_ENABLED,
   TIMEZONE,
   TIMINGS,
   TRANSFER_REASONS,
@@ -598,6 +702,7 @@ const exportedConfig = {
   GAMES,
   getGameConfigById,
   getGameDisplayInfo,
+  getManagedGameChannelIds,
   validateActivityConfigStructure,
   validateActivityConfigWithGuild,
   isRegularVoiceChannel,
