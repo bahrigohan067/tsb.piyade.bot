@@ -8,6 +8,7 @@ const {
   ChannelType,
   Collection,
   GatewayIntentBits,
+  MessageFlags,
   PermissionFlagsBits,
 } = require('discord.js');
 
@@ -466,13 +467,16 @@ function makeTestConfig(overrides = {}) {
 
 test.beforeEach(() => {
   const curMonth = database.getCurrentIstanbulMonth();
+  const curDay = database.getCurrentIstanbulDay();
   database.data.activityPrefs = {};
   database.data.activityStats = { month: curMonth, users: {} };
   database.data.activityMeta = {
     announcedAt: Date.now(),
     returnAnnouncedAt: Date.now(),
+    manualAnnouncedAt: Date.now(),
     lastResetMonth: curMonth,
   };
+  database.data.activityManual = { day: curDay, users: {} };
   database.data.languagePrefs = {};
   database.data.localeHints = {};
   database.save();
@@ -1014,7 +1018,7 @@ test('6. Sayaçlar, karar izi 30 dk TTL, 🧪 Neden aktarılmadım?, 🛠️ Sis
     },
     { tracker, db: database }
   );
-  assert.equal(unauthSys.ephemeral, true);
+  assert.equal(unauthSys.flags, MessageFlags.Ephemeral);
   assert.match(unauthSys.content, /Developer/);
 
   let devSys = null;
@@ -1031,7 +1035,7 @@ test('6. Sayaçlar, karar izi 30 dk TTL, 🧪 Neden aktarılmadım?, 🛠️ Sis
     },
     { tracker, db: database }
   );
-  assert.equal(devSys.ephemeral, true);
+  assert.equal(devSys.flags, MessageFlags.Ephemeral);
   assert.match(devSys.content, /Bot presence alıyor/);
   assert.match(devSys.content, /Zincir Sayaçları/);
   assert.equal(devSys.content.includes('reg_u1'), false, 'Sistem durumunda kullanıcı kimliği bulunmamalı');
@@ -2083,7 +2087,12 @@ test('R14 & R15. Tek seferlik dönüş duyurusu (etiketsiz, hata durumunda tekra
 
   // R14a: Gönderim başarısız olursa returnAnnouncedAt İŞARETLENMEZ, sonra tekrar denenir
   const curMonth = database.getCurrentIstanbulMonth();
-  database.data.activityMeta = { announcedAt: Date.now(), returnAnnouncedAt: null, lastResetMonth: curMonth };
+  database.data.activityMeta = {
+    announcedAt: Date.now(),
+    returnAnnouncedAt: null,
+    manualAnnouncedAt: Date.now(),
+    lastResetMonth: curMonth,
+  };
   database.save();
 
   const failEnv = createMockActivityGuild({ commandChannelCanSend: false });
