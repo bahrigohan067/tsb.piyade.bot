@@ -194,6 +194,46 @@ function getReasonExplanation(reason, lang = 'tr') {
       tr: 'Discord ses taşıma işlemi beklenmeyen bir hatayla başarısız oldu.\n💡 **Çözüm:** Ses kanalından çıkıp tekrar girmeyi dene.',
       en: 'The Discord voice move operation failed unexpectedly.\n💡 **Fix:** Try leaving and rejoining the voice channel.',
     },
+    [TRANSFER_REASONS.RETURN_MOVED]: {
+      tr: "Oyunu bıraktığın için Salon 1'e aktarıldın.",
+      en: 'You were moved to Lounge 1 because you closed your game.',
+    },
+    [TRANSFER_REASONS.RETURN_SKIPPED_NOT_IN_VOICE]: {
+      tr: 'Oyundan çıkarken bir ses kanalında değildin.',
+      en: 'You were not in a voice channel when you closed your game.',
+    },
+    [TRANSFER_REASONS.RETURN_SKIPPED_NOT_GAME_CHANNEL]: {
+      tr: 'Bir oyun ses kanalında değildin, bu yüzden seni taşımadım.',
+      en: "You were not in a game voice channel, so I didn't move you.",
+    },
+    [TRANSFER_REASONS.RETURN_SKIPPED_OTHER_GAME_ACTIVE]: {
+      tr: 'Başka bir oyun oynadığın için taşımadım.',
+      en: "I didn't move you because you are playing another game.",
+    },
+    [TRANSFER_REASONS.RETURN_SKIPPED_OPTED_OUT]: {
+      tr: 'Bu özelliği kapattığın için taşımadım.',
+      en: "I didn't move you because you turned this feature off.",
+    },
+    [TRANSFER_REASONS.RETURN_SKIPPED_NO_PRESENCE]: {
+      tr: 'Discord durumunu göremediğim için (görünmez olabilirsin) taşımadım.',
+      en: "I didn't move you because I couldn't see your Discord status (you may be invisible).",
+    },
+    [TRANSFER_REASONS.RETURN_TARGET_NOT_FOUND]: {
+      tr: "Salon 1 kanalına aktarım yapılamadı. Yetkililere haber ver.",
+      en: 'Could not move you to Lounge 1. Please notify server staff.',
+    },
+    [TRANSFER_REASONS.RETURN_TARGET_FULL]: {
+      tr: "Salon 1 kanalına aktarım yapılamadı. Yetkililere haber ver.",
+      en: 'Could not move you to Lounge 1. Please notify server staff.',
+    },
+    [TRANSFER_REASONS.RETURN_NO_PERMISSION]: {
+      tr: "Salon 1 kanalına aktarım yapılamadı. Yetkililere haber ver.",
+      en: 'Could not move you to Lounge 1. Please notify server staff.',
+    },
+    [TRANSFER_REASONS.RETURN_FAILED]: {
+      tr: "Salon 1 kanalına aktarım yapılamadı. Yetkililere haber ver.",
+      en: 'Could not move you to Lounge 1. Please notify server staff.',
+    },
   };
 
   const entry = map[reason];
@@ -210,6 +250,7 @@ function formatTriggerLabel(trigger, lang = 'tr') {
   const isEn = lang === 'en';
   const labels = {
     'game-confirmed': isEn ? 'Game started / confirmed' : 'Oyun başladı / onaylandı',
+    'game-ended': isEn ? 'Game ended' : 'Oyun sona erdi',
     'voice-join': isEn ? 'Joined a voice channel' : 'Ses kanalına girdi',
     'voice-switch': isEn ? 'Switched voice channel' : 'Ses kanalı değiştirdi',
     sweep: isEn ? 'Backup sweep (30s)' : 'Yedek tarama (30 sn)',
@@ -446,16 +487,28 @@ function buildSettingsPanelPayload(
   const uid = String(userId);
   const prefs = typeof db.getPrefs === 'function' ? db.getPrefs(uid) : db.getActivityPrefs(uid);
 
+  const returnDisabled = !prefs.tracking || !prefs.autoMove;
+  const returnDisabledHint = returnDisabled
+    ? isEn
+      ? '\n🔒 *"Return to Lounge 1 after game" is disabled while Activity Tracking or Auto Voice Transfer is turned off.*'
+      : "\n🔒 *\"Oyun Bitince Salon 1'e Dön\" düğmesi, Etkinlik Takibi veya Otomatik Ses Aktarma kapalıyken devre dışıdır.*"
+    : '';
+
   const infoText = isEn
     ? '⚙️ **Game Activity Settings**\n' +
       "The bot reads your Discord game activity to assign game activity roles, count your monthly playtime, and transfer you to the game's voice channel.\n" +
-      'ℹ️ *If Discord Settings > Activity Privacy is turned off, the bot cannot see anything.*'
+      "When you close your game your game role is removed, and if you're in a game voice channel you'll be moved to Lounge 1. You can turn this off below.\n" +
+      'ℹ️ *If Discord Settings > Activity Privacy is turned off, the bot cannot see anything.*' +
+      returnDisabledHint
     : '⚙️ **Oyun Etkinliği Ayarların**\n' +
       "Bot, Discord'daki oyun etkinliğini okuyarak oyun rollerini verir, süreni sayar ve oyunun ses kanalına aktarır.\n" +
-      "ℹ️ *Discord'da Ayarlar > Etkinlik Gizliliği kapalıysa bot hiçbir şey göremez.*";
+      "Oyunu kapattığında oyun rolün alınır; bir oyun ses kanalındaysan Salon 1'e aktarılırsın. İstemiyorsan aşağıdan kapatabilirsin.\n" +
+      "ℹ️ *Discord'da Ayarlar > Etkinlik Gizliliği kapalıysa bot hiçbir şey göremez.*" +
+      returnDisabledHint;
 
   const content = noticeText ? `${infoText}\n\n${noticeText}` : infoText;
 
+  // Satır 1 (en çok 5 düğme): Etkinlik Takibi, Otomatik Ses Aktarma, Oyun Bitince Salon 1'e Dön
   const trackBtn = new ButtonBuilder()
     .setCustomId(`act_toggle_track:${uid}`)
     .setLabel(
@@ -475,19 +528,31 @@ function buildSettingsPanelPayload(
     .setStyle(prefs.autoMove && prefs.tracking ? ButtonStyle.Primary : ButtonStyle.Secondary)
     .setDisabled(!prefs.tracking);
 
+  const returnToLobbyOn = prefs.returnToLobby !== false;
+  const returnBtn = new ButtonBuilder()
+    .setCustomId(`act_ret:${uid}`)
+    .setLabel(
+      isEn
+        ? `🔙 Return to Lounge 1 after game: ${returnToLobbyOn ? '✅ On' : '❌ Off'}`
+        : `🔙 Oyun Bitince Salon 1'e Dön: ${returnToLobbyOn ? '✅ Açık' : '❌ Kapalı'}`
+    )
+    .setStyle(returnToLobbyOn && !returnDisabled ? ButtonStyle.Primary : ButtonStyle.Secondary)
+    .setDisabled(returnDisabled);
+
+  const row1 = new ActionRowBuilder().addComponents(trackBtn, moveBtn, returnBtn);
+
+  // Satır 2 (en çok 5 düğme): 🔍 Botun Gördüğü Etkinlik, 🧪 Neden aktarılmadım?, 🛠️ Sistem Durumu (yalnızca yetkili)
   const diagBtn = new ButtonBuilder()
     .setCustomId(`act_diag:${uid}`)
     .setLabel(isEn ? '🔍 Activity Seen by Bot' : '🔍 Botun Gördüğü Etkinlik')
     .setStyle(ButtonStyle.Secondary);
-
-  const row1 = new ActionRowBuilder().addComponents(trackBtn, moveBtn, diagBtn);
 
   const whyBtn = new ButtonBuilder()
     .setCustomId(`act_why:${uid}`)
     .setLabel(isEn ? "🧪 Why wasn't I moved?" : '🧪 Neden aktarılmadım?')
     .setStyle(ButtonStyle.Secondary);
 
-  const row2 = new ActionRowBuilder().addComponents(whyBtn);
+  const row2 = new ActionRowBuilder().addComponents(diagBtn, whyBtn);
 
   if (hasSystemStatusAuthority(member, guild)) {
     const sysBtn = new ButtonBuilder()
@@ -505,7 +570,7 @@ function buildSettingsPanelPayload(
 }
 
 /**
- * Ephemeral "🧪 Neden aktarılmadım? / Why wasn't I moved?" çıktısını oluşturur.
+ * Ephemeral "🧪 Son Karar / Last Decision" çıktısını oluşturur.
  */
 function buildWhyNotMovedPayload({ userId, lang = 'tr', tracker = activityTracker }) {
   const isEn = lang === 'en';
@@ -514,10 +579,10 @@ function buildWhyNotMovedPayload({ userId, lang = 'tr', tracker = activityTracke
   if (!decision) {
     return {
       content: isEn
-        ? "🧪 **Why Wasn't I Moved?**\n" +
-          'No transfer evaluation in the last 30 minutes. Open a game and join a voice channel, then check back.'
-        : '🧪 **Neden Aktarılmadım?**\n' +
-          'Son 30 dakikada bir aktarma değerlendirmesi yok. Oyunu aç ve bir ses kanalına gir, sonra tekrar bak.',
+        ? '🧪 **Last Decision**\n' +
+          'No transfer or return evaluation in the last 30 minutes. Open a game and join a voice channel, then check back.'
+        : '🧪 **Son Karar**\n' +
+          'Son 30 dakikada bir aktarma veya dönüş değerlendirmesi yok. Oyunu aç ve bir ses kanalına gir, sonra tekrar bak.',
       allowedMentions: { parse: [] },
     };
   }
@@ -535,7 +600,7 @@ function buildWhyNotMovedPayload({ userId, lang = 'tr', tracker = activityTracke
   const resultText = resultBadgeMap[decision.result] || decision.result;
 
   const lines = [
-    isEn ? "🧪 **Why Wasn't I Moved? (Your Latest Decision)**" : '🧪 **Neden Aktarılmadım? (Son Değerlendirmen)**',
+    isEn ? '🧪 **Last Decision (Your Latest Evaluation)**' : '🧪 **Son Karar (Son Değerlendirmen)**',
     isEn ? `• **Evaluated:** <t:${unixSec}:R>` : `• **Değerlendirme Zamanı:** <t:${unixSec}:R>`,
     isEn ? `• **Trigger:** ${triggerText}` : `• **Tetikleyici:** ${triggerText}`,
     isEn ? `• **Outcome:** ${resultText} (\`${decision.reason}\`)` : `• **Sonuç:** ${resultText} (\`${decision.reason}\`)`,
@@ -720,6 +785,48 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
         : `✅ **Oyun Ses Kanalları + OTHER GAMES:** ${allEntries.length}/${allEntries.length} kanalın tamamı mevcut ve erişilebilir`
       : voiceProblemLines.slice(0, 5).join('\n');
 
+  // 3b. Oyun bitişi dönüş kanalı (Salon 1 - RETURN_CHANNEL_ID) doğrulaması
+  const returnChannelId = tracker.config?.RETURN_CHANNEL_ID || activityConfig.RETURN_CHANNEL_ID;
+  const retCh = returnChannelId ? activeGuild?.channels?.cache?.get?.(String(returnChannelId)) || null : null;
+  let returnChannelLine;
+  if (!returnChannelId || !retCh || !activityConfig.isRegularVoiceChannel(retCh)) {
+    returnChannelLine = isEn
+      ? `⚠️ **Return Channel (Lounge 1):** \`${returnChannelId || 'unset'}\` missing or not a voice channel!`
+      : `⚠️ **Dönüş Kanalı (Salon 1):** \`${returnChannelId || 'tanımsız'}\` bulunamadı veya ses kanalı değil!`;
+  } else {
+    let retPermOk = true;
+    if (botMember && typeof retCh.permissionsFor === 'function') {
+      const p = retCh.permissionsFor(botMember);
+      if (p && typeof p.has === 'function') {
+        if (!p.has(PermissionFlagsBits.ViewChannel) || !p.has(PermissionFlagsBits.Connect)) {
+          retPermOk = false;
+        }
+      }
+    }
+    const retLimit = Number(retCh.userLimit) || 0;
+    const retCount = retCh.members?.size ?? 0;
+    const retFull = retLimit > 0 && retCount >= retLimit;
+    if (!retPermOk) {
+      returnChannelLine = isEn
+        ? `⚠️ **Return Channel (Lounge 1):** Missing View/Connect permission in <#${returnChannelId}>!`
+        : `⚠️ **Dönüş Kanalı (Salon 1):** <#${returnChannelId}> kanalında Görüntüle/Bağlan izni eksik!`;
+    } else if (retFull) {
+      returnChannelLine = isEn
+        ? `⚠️ **Return Channel (Lounge 1):** <#${returnChannelId}> is currently full (${retCount}/${retLimit})!`
+        : `⚠️ **Dönüş Kanalı (Salon 1):** <#${returnChannelId}> şu an dolu (${retCount}/${retLimit})!`;
+    } else {
+      const limitLabel =
+        retLimit > 0
+          ? `${retCount}/${retLimit}`
+          : isEn
+            ? 'unlimited'
+            : 'sınırsız';
+      returnChannelLine = isEn
+        ? `✅ **Return Channel (Lounge 1):** <#${returnChannelId}> (View + Connect OK, limit: ${limitLabel})`
+        : `✅ **Dönüş Kanalı (Salon 1):** <#${returnChannelId}> (Görüntüle + Bağlan OK, limit: ${limitLabel})`;
+    }
+  }
+
   // 4. Aktif Oturum Sayısı ve Takibi Açık Üye Sayısı (Kimliksiz)
   let confirmedSessionCount = 0;
   for (const s of tracker.sessions.values()) {
@@ -783,6 +890,19 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     );
   }
 
+  const r = c.reasons || {};
+  const returnSkipTotal =
+    (r.RETURN_SKIPPED_NOT_IN_VOICE || 0) +
+    (r.RETURN_SKIPPED_NOT_GAME_CHANNEL || 0) +
+    (r.RETURN_SKIPPED_OTHER_GAME_ACTIVE || 0) +
+    (r.RETURN_SKIPPED_OPTED_OUT || 0) +
+    (r.RETURN_SKIPPED_NO_PRESENCE || 0);
+  const returnErrTotal =
+    (r.RETURN_TARGET_NOT_FOUND || 0) +
+    (r.RETURN_TARGET_FULL || 0) +
+    (r.RETURN_NO_PERMISSION || 0) +
+    (r.RETURN_FAILED || 0);
+
   const lines = [
     isEn ? '🛠️ **Game Activity System Status**' : '🛠️ **Oyun Etkinliği Sistem Durumu**',
     presenceStatusLine,
@@ -790,6 +910,7 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     ...permLines,
     cmdLine,
     voiceSummaryLine,
+    returnChannelLine,
     ...roleLines,
     '━━━━━━━━━━━━━━━━━━━━',
     isEn
@@ -798,11 +919,11 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     isEn
       ? `🔗 **Chain Counters (since startup):**\n` +
         `\`presence=${c.presenceReceived} | processed=${c.presenceProcessed} | playing=${c.presenceWithPlaying} | matched=${c.matchedGame} | roblox=${c.generalRoblox} | unmatched=${c.unmatchedActivity} | ignored=${c.ignoredActivity}\`\n` +
-        `\`confirmed=${c.sessionConfirmed} | roleAdd=${c.roleAdded} (err:${c.roleFailed}) | checkpoints=${c.checkpointWritten} | dbSave=${c.dbSaveSuccess} (err:${c.dbSaveFailed}) | voiceEvents=${c.voiceChangesReceived} | memberFetch=${c.memberFetchCalls || 0} (skip:${c.memberFetchSkipped || 0}, err:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved}\`\n` +
+        `\`confirmed=${c.sessionConfirmed} | ended=${c.gamesEnded || 0} | roleAdd=${c.roleAdded} | roleRem=${c.rolesRemoved || 0} (err:${c.roleFailed}) | checkpoints=${c.checkpointWritten} | dbSave=${c.dbSaveSuccess} (err:${c.dbSaveFailed}) | voiceEvents=${c.voiceChangesReceived} | memberFetch=${c.memberFetchCalls || 0} (skip:${c.memberFetchSkipped || 0}, err:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved} | RETURN_MOVED=${r.RETURN_MOVED || 0} (skip:${returnSkipTotal}, err:${returnErrTotal})\`\n` +
         `• **Decision Reasons:** \`${reasonSummary}\``
       : `🔗 **Zincir Sayaçları (açılıştan beri):**\n` +
         `\`presence=${c.presenceReceived} | işlenen=${c.presenceProcessed} | playing=${c.presenceWithPlaying} | eşleşen=${c.matchedGame} | genelRoblox=${c.generalRoblox} | eşleşmeyen=${c.unmatchedActivity} | yoksayılan=${c.ignoredActivity}\`\n` +
-        `\`onaylıOturum=${c.sessionConfirmed} | rolVerilen=${c.roleAdded} (hata:${c.roleFailed}) | süreCheckpoint=${c.checkpointWritten} | dbKayıt=${c.dbSaveSuccess} (hata:${c.dbSaveFailed}) | sesOlayı=${c.voiceChangesReceived} | üyeFetch=${c.memberFetchCalls || 0} (atlanan:${c.memberFetchSkipped || 0}, hata:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved}\`\n` +
+        `\`onaylıOturum=${c.sessionConfirmed} | oyunBitti=${c.gamesEnded || 0} | rolVerilen=${c.roleAdded} | rolAlındı=${c.rolesRemoved || 0} (hata:${c.roleFailed}) | süreCheckpoint=${c.checkpointWritten} | dbKayıt=${c.dbSaveSuccess} (hata:${c.dbSaveFailed}) | sesOlayı=${c.voiceChangesReceived} | üyeFetch=${c.memberFetchCalls || 0} (atlanan:${c.memberFetchSkipped || 0}, hata:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved} | RETURN_MOVED=${r.RETURN_MOVED || 0} (atlanan:${returnSkipTotal}, hata:${returnErrTotal})\`\n` +
         `• **Karar Sebepleri:** \`${reasonSummary}\``,
   ];
 
@@ -1005,6 +1126,34 @@ async function handleActivityButton(interaction, { tracker = activityTracker, db
       : isEn
         ? '🔇 **Auto voice transfer turned off.** You will no longer be moved automatically.'
         : '🔇 **Otomatik ses aktarma kapatıldı.** Artık ses kanallarına otomatik aktarılmayacaksın.';
+
+    const payload = buildSettingsPanelPayload(actorId, lang, notice, db, {
+      member: interaction.member,
+      guild: interaction.guild,
+    });
+    return interaction.update(payload);
+  }
+
+  if (action === 'act_ret') {
+    const cur = typeof tracker.getPrefs === 'function' ? tracker.getPrefs(actorId) : db.getActivityPrefs(actorId);
+    if (!cur.tracking || !cur.autoMove) {
+      const payload = buildSettingsPanelPayload(actorId, lang, null, db, {
+        member: interaction.member,
+        guild: interaction.guild,
+      });
+      return interaction.update(payload);
+    }
+
+    const nextReturn = !(cur.returnToLobby !== false);
+    db.setActivityPrefs(actorId, { returnToLobby: nextReturn });
+
+    const notice = nextReturn
+      ? isEn
+        ? '🔙 **Return to Lounge 1 after game turned on.**'
+        : "🔙 **Oyun bitince Salon 1'e dönüş açıldı.**"
+      : isEn
+        ? '🔕 **Return to Lounge 1 after game turned off.** You will no longer be moved when closing a game.'
+        : "🔕 **Oyun bitince Salon 1'e dönüş kapatıldı.** Artık oyunu bıraktığında ses kanalından taşınmayacaksın.";
 
     const payload = buildSettingsPanelPayload(actorId, lang, notice, db, {
       member: interaction.member,

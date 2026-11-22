@@ -35,7 +35,7 @@ function createRegisterPanel() {
     `• **1 Discord hesabı = 1 Roblox hesabı** • Roblox'ta yasaklı hesaplar kabul edilmez\n` +
     `• Bilgileri doğru ve eksiksiz yaz\n` +
     `💡 *Kayıttan sonra \`/profilim\` yazarak oyunlarını ve kullanıcı adlarını herkese gösterebilirsin.*\n` +
-    `🎮 *Bot, Discord'daki oyun etkinliğini okuyarak oyun rollerini verir ve oynama süreni sayar; \`/aktivitem\` > **⚙️ Ayarlarım**'dan kapatabilirsin.*`;
+    `🎮 *Bot, Discord'daki oyun etkinliğini okuyarak oyun rollerini verir, süreni sayar ve oyunu kapattığında rolünü alıp oyun ses kanalındaysan Salon 1'e aktarır; \`/aktivitem\` > **⚙️ Ayarlarım**'dan kapatabilirsin.*`;
 
   const enSection =
     `## 🇬🇧 📋 How to Register?\n` +
@@ -51,7 +51,7 @@ function createRegisterPanel() {
     `• **1 Discord Account = 1 Roblox Account** • Banned Roblox accounts are not accepted\n` +
     `• Enter accurate and complete information\n` +
     `💡 *After registering, use \`/profile\` to share your games and usernames with everyone.*\n` +
-    `🎮 *The bot reads your Discord game activity to give game roles and count playtime; you can turn it off in \`/activity\` > **⚙️ My Settings**.*`;
+    `🎮 *The bot reads your Discord game activity to manage game roles, count playtime, and move you back to Lounge 1 from game voice channels when you stop; you can turn it off in \`/activity\` > **⚙️ My Settings**.*`;
 
   const langHintLine =
     `🌐 *Yanlış dili mi seçtin? Kayıt sırasında dil butonuna basarak değiştirebilirsin. / Chose the wrong language? Use the language button during registration.*`;

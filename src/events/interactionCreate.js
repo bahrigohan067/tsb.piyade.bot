@@ -769,6 +769,7 @@ module.exports = {
           interaction.customId === 'act_enable_track' ||
           interaction.customId.startsWith('act_toggle_track:') ||
           interaction.customId.startsWith('act_toggle_move:') ||
+          interaction.customId.startsWith('act_ret:') ||
           interaction.customId.startsWith('act_diag:') ||
           interaction.customId.startsWith('act_why:') ||
           interaction.customId.startsWith('act_sys:')
