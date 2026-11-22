@@ -27,10 +27,41 @@ const TIMINGS = {
   PROFILE_COOLDOWN_SEC: 30,        // /aktivitem komutu kullanıcı başına bekleme süresi (saniye)
   ROLE_QUEUE_GAP_MS: 500,          // Rol ekleme/çıkarma kuyruğu işlem aralığı (ms)
   MOVE_QUEUE_GAP_MS: 1000,         // Ses taşıma kuyruğu işlem aralığı (ms)
-  VOICE_JOIN_DELAY_MS: 5000,       // Sese sonradan katılan oyuncu için aktarma öncesi bekleme (ms)
+  VOICE_DEBOUNCE_SEC: 3,           // Ses kanalı değişiminde aktarma değerlendirmesi öncesi bekleme (saniye)
+  VOICE_JOIN_DELAY_MS: 3000,       // Geriye dönük uyumluluk için VOICE_DEBOUNCE_SEC (ms) karşılığı
+  SWEEP_SEC: 30,                   // Sesteki üyeler için yedek aktarma taraması aralığı (saniye)
+  DECISION_TTL_MIN: 30,            // Bellekteki son aktarma karar izinin saklanma süresi (dakika)
+  BOT_MOVE_IGNORE_SEC: 5,          // Botun kendi taşımasının voiceStateUpdate'i tekrar tetiklememesi için süre (saniye)
   STARTUP_CLEANUP_DELAY_MS: 120000, // Açılıştan 2 dakika sonra tek seferlik aktiflik rolü temizliği (ms)
   MONTHLY_CHECK_INTERVAL_MS: 600000, // 10 dakikada bir ay dönümü kontrolü (ms)
+  HOURLY_LOG_INTERVAL_MS: 3600000,  // Saatte bir konsola kimliksiz sayaç özeti yazma aralığı (ms)
 };
+
+// Aktarma değerlendirme sebep kodları (tek merkezi sabit liste)
+const TRANSFER_REASONS = Object.freeze({
+  NO_PRESENCE_DATA: 'NO_PRESENCE_DATA',
+  NOT_PLAYING: 'NOT_PLAYING',
+  UNMATCHED_ACTIVITY: 'UNMATCHED_ACTIVITY',
+  ACTIVITY_IGNORED: 'ACTIVITY_IGNORED',
+  TRACKING_OFF: 'TRACKING_OFF',
+  AUTOMOVE_OFF: 'AUTOMOVE_OFF',
+  NOT_IN_VOICE: 'NOT_IN_VOICE',
+  EXCLUDED_CHANNEL: 'EXCLUDED_CHANNEL',
+  ALREADY_IN_TARGET: 'ALREADY_IN_TARGET',
+  TOKEN_SPENT: 'TOKEN_SPENT',
+  TARGET_NOT_FOUND: 'TARGET_NOT_FOUND',
+  TARGET_FULL: 'TARGET_FULL',
+  NO_MOVE_PERMISSION: 'NO_MOVE_PERMISSION',
+  COMMAND_CHANNEL_UNAVAILABLE: 'COMMAND_CHANNEL_UNAVAILABLE',
+  WAITING_CONFIRM: 'WAITING_CONFIRM',
+  COUNTDOWN_PENDING: 'COUNTDOWN_PENDING',
+  MOVED: 'MOVED',
+  CANCELLED_BY_USER: 'CANCELLED_BY_USER',
+  LEFT_VOICE_DURING_COUNTDOWN: 'LEFT_VOICE_DURING_COUNTDOWN',
+  GAME_CHANGED_DURING_COUNTDOWN: 'GAME_CHANGED_DURING_COUNTDOWN',
+  GAME_STOPPED: 'GAME_STOPPED',
+  MOVE_FAILED: 'MOVE_FAILED',
+});
 
 // Hiçbir koşulda otomatik ses aktarımı yapılmayacak özel ses kanalları (ileride doldurulabilir)
 // Not: Sunucunun AFK kanalı ve Stage (Sahne) kanalları otomatik olarak hariç tutulur.
@@ -554,6 +585,7 @@ const exportedConfig = {
   COMMAND_CHANNEL_ID,
   TIMEZONE,
   TIMINGS,
+  TRANSFER_REASONS,
   NO_MOVE_CHANNEL_IDS,
   FAMILIES,
   IGNORED_ACTIVITIES,

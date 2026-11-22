@@ -26,6 +26,10 @@ class DatabaseManager {
   constructor() {
     const initialMonth = getCurrentIstanbulMonth();
     this._dirty = false;
+    this.lastSaveOk = true;
+    this.lastSaveAt = null;
+    this.lastSaveError = null;
+    this._saveListeners = new Set();
     this.data = {
       registrations: [],
       activeApplications: {},
@@ -239,9 +243,37 @@ class DatabaseManager {
       fs.writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), 'utf-8');
       fs.renameSync(tmpPath, DB_PATH);
       this._dirty = false;
+      this.lastSaveOk = true;
+      this.lastSaveAt = Date.now();
+      this.lastSaveError = null;
+      if (this._saveListeners) {
+        for (const fn of this._saveListeners) {
+          try {
+            fn(true, null);
+          } catch (e) {}
+        }
+      }
+      return true;
     } catch (err) {
+      this.lastSaveOk = false;
+      this.lastSaveError = err?.message || String(err);
       console.error('[DATABASE] Veritabanı kaydedilirken hata oluştu:', err);
+      if (this._saveListeners) {
+        for (const fn of this._saveListeners) {
+          try {
+            fn(false, err);
+          } catch (e) {}
+        }
+      }
+      return false;
     }
+  }
+
+  onSaveResult(listenerFn) {
+    if (typeof listenerFn === 'function') {
+      this._saveListeners.add(listenerFn);
+    }
+    return () => this._saveListeners.delete(listenerFn);
   }
 
   /**
@@ -1310,6 +1342,13 @@ class DatabaseManager {
       tracking: stored.tracking !== false,
       autoMove: stored.autoMove !== false,
     };
+  }
+
+  /**
+   * Tek merkezi kullanıcı etkinlik tercihi okuyucusu (kaydı olmayan üyeye tracking:true, autoMove:true döner).
+   */
+  getPrefs(userId) {
+    return this.getActivityPrefs(userId);
   }
 
   isActivityTrackingEnabled(userId) {
