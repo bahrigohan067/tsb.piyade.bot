@@ -11,6 +11,7 @@ const adminRoutes = require('./routes/admin');
 const feedbackRoutes = require('./routes/feedback');
 const gamesRoutes = require('./routes/games');
 const robloxRoutes = require('./routes/roblox');
+const statsRoutes = require('./routes/stats');
 
 function createApp(clientOrGetter) {
   const app = express();
@@ -56,6 +57,7 @@ function createApp(clientOrGetter) {
   app.use('/api/feedback', feedbackRoutes);
   app.use('/api/games', gamesRoutes);
   app.use('/api/roblox', robloxRoutes);
+  app.use('/api/stats', statsRoutes);
 
   // 404 Yakalayıcı (Tüm eşleşmeyen /api rotaları için)
   app.use('/api', (req, res) => {

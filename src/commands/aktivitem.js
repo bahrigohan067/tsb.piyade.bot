@@ -218,6 +218,101 @@ function formatTriggerLabel(trigger, lang = 'tr') {
 }
 
 /**
+ * /aktivitem komutu ve GET /api/member/:id/activity uç noktası için ortak etkinlik özeti hesaplayıcısı.
+ * Kayıtlı aylık süreleri ve varsa canlı oturumun kaydedilmemiş saniyesini (unsavedSec) birleştirir.
+ */
+function computeUserActivitySummary({
+  userId,
+  lang = 'tr',
+  tracker = activityTracker,
+  db = database,
+  nowDate = new Date(),
+}) {
+  const uid = String(userId || '');
+  const cleanLang = lang === 'en' ? 'en' : 'tr';
+  const prefs =
+    tracker && typeof tracker.getPrefs === 'function'
+      ? tracker.getPrefs(uid)
+      : db.getActivityPrefs(uid);
+  const tracking = Boolean(prefs.tracking);
+  const nextResetUnix = getNextIstanbulMonthResetUnix(nowDate);
+  const nextResetAt = nextResetUnix * 1000;
+  const stats = db.getUserActivityStats(uid);
+  const month = stats.month || db.getCurrentIstanbulMonth(nowDate);
+
+  if (!tracking) {
+    return {
+      userId: uid,
+      month,
+      tracking: false,
+      games: [],
+      totalSeconds: 0,
+      live: null,
+      nextResetAt,
+      nextResetUnix,
+    };
+  }
+
+  const liveInfo =
+    tracker && typeof tracker.getLivePlayingInfo === 'function'
+      ? tracker.getLivePlayingInfo(uid)
+      : null;
+
+  const combinedMap = { ...stats.games };
+  if (liveInfo && liveInfo.gameId && liveInfo.unsavedSec > 0) {
+    combinedMap[liveInfo.gameId] =
+      (Number(combinedMap[liveInfo.gameId]) || 0) + liveInfo.unsavedSec;
+  }
+
+  const entries = Object.entries(combinedMap)
+    .map(([gameId, sec]) => ({ gameId, seconds: Math.floor(Number(sec) || 0) }))
+    .filter((item) => item.seconds > 0)
+    .sort((a, b) => b.seconds - a.seconds);
+
+  const totalSeconds = entries.reduce((sum, item) => sum + item.seconds, 0);
+  const topEntries = entries.slice(0, 10).map((item) => {
+    const info = activityConfig.getGameDisplayInfo(item.gameId, cleanLang);
+    const ratio = totalSeconds > 0 ? item.seconds / totalSeconds : 0;
+    const percent = totalSeconds > 0 ? Math.round(ratio * 100) : 0;
+    return {
+      id: item.gameId,
+      name: info.name,
+      emoji: info.emoji,
+      family: info.family,
+      seconds: item.seconds,
+      ratio,
+      percent,
+      formattedDuration: formatDuration(item.seconds, cleanLang),
+    };
+  });
+
+  let live = null;
+  if (liveInfo && liveInfo.gameId) {
+    const liveDisplay = activityConfig.getGameDisplayInfo(liveInfo.gameId, cleanLang);
+    const sessionElapsedSec = Math.max(0, Math.floor(Number(liveInfo.sessionElapsedSec) || 0));
+    live = {
+      gameId: liveInfo.gameId,
+      name: liveDisplay.name,
+      emoji: liveDisplay.emoji,
+      family: liveDisplay.family,
+      sessionElapsedSec,
+      formattedDuration: formatDuration(sessionElapsedSec, cleanLang),
+    };
+  }
+
+  return {
+    userId: uid,
+    month,
+    tracking: true,
+    games: topEntries,
+    totalSeconds,
+    live,
+    nextResetAt,
+    nextResetUnix,
+  };
+}
+
+/**
  * /aktivitem herkese açık özet embed ve buton yükünü oluşturur.
  */
 function buildActivitySummaryPayload({
@@ -230,10 +325,10 @@ function buildActivitySummaryPayload({
 }) {
   const isEn = lang === 'en';
   const userId = String(user.id);
-  const prefs = typeof tracker.getPrefs === 'function' ? tracker.getPrefs(userId) : db.getActivityPrefs(userId);
+  const summary = computeUserActivitySummary({ userId, lang, tracker, db, nowDate });
   const displayName = member?.displayName || user.globalName || user.username || 'Oyuncu';
   const safeName = escapeEmbedText(displayName, 64);
-  const nextResetUnix = getNextIstanbulMonthResetUnix(nowDate);
+  const nextResetUnix = summary.nextResetUnix;
 
   const resetLine = isEn
     ? `📅 Durations reset every month • Next reset: <t:${nextResetUnix}:D>`
@@ -252,7 +347,7 @@ function buildActivitySummaryPayload({
   }
 
   // 1. Durum: Etkinlik takibi kapalı
-  if (!prefs.tracking) {
+  if (!summary.tracking) {
     const desc = [
       `👤 **${safeName}**`,
       '━━━━━━━━━━━━━━━━━━━━',
@@ -283,22 +378,9 @@ function buildActivitySummaryPayload({
     };
   }
 
-  // 2. Durum: Takip açık -> bu ayın kayıtlı sürelerini canlı oturumla birleştir
-  const stats = db.getUserActivityStats(userId);
-  const liveInfo = tracker.getLivePlayingInfo(userId);
-
-  const combinedMap = { ...stats.games };
-  if (liveInfo && liveInfo.gameId && liveInfo.unsavedSec > 0) {
-    combinedMap[liveInfo.gameId] = (Number(combinedMap[liveInfo.gameId]) || 0) + liveInfo.unsavedSec;
-  }
-
-  const entries = Object.entries(combinedMap)
-    .map(([gameId, sec]) => ({ gameId, seconds: Math.floor(Number(sec) || 0) }))
-    .filter((item) => item.seconds > 0)
-    .sort((a, b) => b.seconds - a.seconds);
-
-  const totalSec = entries.reduce((sum, item) => sum + item.seconds, 0);
-  const topEntries = entries.slice(0, 10);
+  // 2. Durum: Takip açık -> ortak hesaplayıcıdan gelen oyun listesini ve canlı oturumu yazdır
+  const topEntries = summary.games;
+  const totalSec = summary.totalSeconds;
 
   const lines = [`👤 **${safeName}**`, '━━━━━━━━━━━━━━━━━━━━'];
 
@@ -313,10 +395,8 @@ function buildActivitySummaryPayload({
   } else {
     lines.push(isEn ? '🕹️ **Games Played**' : '🕹️ **Oynadığın Oyunlar**');
     for (const item of topEntries) {
-      const info = activityConfig.getGameDisplayInfo(item.gameId, lang);
-      const ratio = totalSec > 0 ? item.seconds / totalSec : 0;
       lines.push(
-        `${info.emoji} **${info.name}** — ⏱️ ${formatDuration(item.seconds, lang)}  ${buildProgressBar(ratio)}`
+        `${item.emoji} **${item.name}** — ⏱️ ${item.formattedDuration}  ${buildProgressBar(item.ratio)}`
       );
     }
     lines.push('━━━━━━━━━━━━━━━━━━━━');
@@ -327,13 +407,11 @@ function buildActivitySummaryPayload({
     );
   }
 
-  if (liveInfo && liveInfo.gameId) {
-    const liveDisplay = activityConfig.getGameDisplayInfo(liveInfo.gameId, lang);
-    const liveDur = formatDuration(liveInfo.sessionElapsedSec, lang);
+  if (summary.live) {
     lines.push(
       isEn
-        ? `🟢 **Currently playing:** ${liveDisplay.emoji} **${liveDisplay.name}** (${liveDur})`
-        : `🟢 **Şu an oynuyor:** ${liveDisplay.emoji} **${liveDisplay.name}** (${liveDur})`
+        ? `🟢 **Currently playing:** ${summary.live.emoji} **${summary.live.name}** (${summary.live.formattedDuration})`
+        : `🟢 **Şu an oynuyor:** ${summary.live.emoji} **${summary.live.name}** (${summary.live.formattedDuration})`
     );
   }
 
@@ -1004,6 +1082,7 @@ module.exports = {
   getNextIstanbulMonthResetUnix,
   hasSystemStatusAuthority,
   getReasonExplanation,
+  computeUserActivitySummary,
   buildActivitySummaryPayload,
   buildSettingsPanelPayload,
   buildWhyNotMovedPayload,

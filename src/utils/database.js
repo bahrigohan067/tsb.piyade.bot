@@ -60,6 +60,10 @@ class DatabaseManager {
         announcedAt: null,
         lastResetMonth: initialMonth,
       },
+      activityAllTime: {              // Anonim sunucu geneli tüm zamanlar oyun toplamları (kullanıcı ID'si tutulmaz)
+        since: Date.now(),
+        games: {},
+      },
     };
     this.init();
   }
@@ -185,6 +189,31 @@ class DatabaseManager {
               : statsMonth,
         };
 
+        const rawAllTime =
+          parsed.activityAllTime && typeof parsed.activityAllTime === 'object'
+            ? parsed.activityAllTime
+            : {};
+        const normalizedAllTimeGames = {};
+        if (rawAllTime.games && typeof rawAllTime.games === 'object') {
+          for (const [gid, rawSec] of Object.entries(rawAllTime.games)) {
+            const sec = Math.floor(Number(rawSec));
+            if (gid && Number.isFinite(sec) && sec > 0) {
+              normalizedAllTimeGames[String(gid)] = sec;
+            }
+          }
+        }
+        const fallbackSince =
+          typeof normalizedActivityMeta.announcedAt === 'number' && Number.isFinite(normalizedActivityMeta.announcedAt)
+            ? normalizedActivityMeta.announcedAt
+            : Date.now();
+        const normalizedActivityAllTime = {
+          since:
+            typeof rawAllTime.since === 'number' && Number.isFinite(rawAllTime.since) && rawAllTime.since > 0
+              ? rawAllTime.since
+              : fallbackSince,
+          games: normalizedAllTimeGames,
+        };
+
         // Yalnızca bilinen temel veri yapılarını koruyarak yükle (registrations/activeApplications içindeki tüm yeni alanlar dahil)
         this.data = {
           ...parsed,
@@ -212,6 +241,7 @@ class DatabaseManager {
             users: normalizedActivityUsers,
           },
           activityMeta: normalizedActivityMeta,
+          activityAllTime: normalizedActivityAllTime,
         };
         if ('userLang' in this.data) {
           delete this.data.userLang;
@@ -1480,12 +1510,51 @@ class DatabaseManager {
 
   /**
    * Aylık sıfırlama: önceki aya ait HİÇBİR kullanıcı süresi tutulmaz, tümü temizlenir.
+   * Silmeden önce biten ayın sunucu geneli anonim oyun toplamları activityAllTime.games içine eklenir.
    */
   resetActivityStatsForMonth(newMonth) {
     const targetMonth =
       typeof newMonth === 'string' && /^\d{4}-\d{2}$/.test(newMonth)
         ? newMonth
         : getCurrentIstanbulMonth();
+
+    if (!this.data.activityAllTime || typeof this.data.activityAllTime !== 'object') {
+      const defaultSince =
+        typeof this.data.activityMeta?.announcedAt === 'number' && Number.isFinite(this.data.activityMeta.announcedAt)
+          ? this.data.activityMeta.announcedAt
+          : Date.now();
+      this.data.activityAllTime = { since: defaultSince, games: {} };
+    }
+    if (
+      typeof this.data.activityAllTime.since !== 'number' ||
+      !Number.isFinite(this.data.activityAllTime.since) ||
+      this.data.activityAllTime.since <= 0
+    ) {
+      this.data.activityAllTime.since =
+        typeof this.data.activityMeta?.announcedAt === 'number' && Number.isFinite(this.data.activityMeta.announcedAt)
+          ? this.data.activityMeta.announcedAt
+          : Date.now();
+    }
+    if (!this.data.activityAllTime.games || typeof this.data.activityAllTime.games !== 'object') {
+      this.data.activityAllTime.games = {};
+    }
+
+    const oldUsers = this.data.activityStats?.users;
+    if (oldUsers && typeof oldUsers === 'object') {
+      for (const [uid, userObj] of Object.entries(oldUsers)) {
+        if (!this.isActivityTrackingEnabled(uid)) continue;
+        const userGames = userObj?.games;
+        if (!userGames || typeof userGames !== 'object') continue;
+        for (const [gid, rawSec] of Object.entries(userGames)) {
+          const sec = Math.floor(Number(rawSec));
+          if (gid && Number.isFinite(sec) && sec > 0) {
+            const key = String(gid);
+            const prev = Math.floor(Number(this.data.activityAllTime.games[key])) || 0;
+            this.data.activityAllTime.games[key] = prev + sec;
+          }
+        }
+      }
+    }
 
     this.data.activityStats = {
       month: targetMonth,
@@ -1498,6 +1567,33 @@ class DatabaseManager {
     }
     this.save();
     return targetMonth;
+  }
+
+  /**
+   * Anonim tüm zamanlar oyun toplamlarını döndürür (hiçbir kullanıcı ID'si içermez).
+   */
+  getActivityAllTimeStats() {
+    const raw =
+      this.data.activityAllTime && typeof this.data.activityAllTime === 'object'
+        ? this.data.activityAllTime
+        : {};
+    const since =
+      typeof raw.since === 'number' && Number.isFinite(raw.since) && raw.since > 0
+        ? raw.since
+        : typeof this.data.activityMeta?.announcedAt === 'number' &&
+            Number.isFinite(this.data.activityMeta.announcedAt)
+          ? this.data.activityMeta.announcedAt
+          : Date.now();
+    const games = {};
+    if (raw.games && typeof raw.games === 'object') {
+      for (const [gid, rawSec] of Object.entries(raw.games)) {
+        const sec = Math.floor(Number(rawSec));
+        if (gid && Number.isFinite(sec) && sec > 0) {
+          games[String(gid)] = sec;
+        }
+      }
+    }
+    return { since, games };
   }
 
   getActivityMeta() {

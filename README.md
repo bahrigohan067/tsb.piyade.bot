@@ -62,7 +62,7 @@ Bot yanıtları `resolveLang(context, sessionLang)` üzerinden tamamen yan etkis
 ---
 
 ### 5. 🕹️ Oyun Etkinliği Sistemi (Rol, Ses Aktarımı & `/aktivitem`)
-Bot, yalnızca Discord'un yerleşik etkinlik (*Playing / Şunu oynuyor*) verisini okuyarak çalışır (herhangi bir Roblox API'si veya hesap girişi kullanılmaz; oyun geçmişi/zaman çizelgesi **ASLA** saklanmaz).
+Bot, yalnızca Discord'un yerleşik etkinlik (*Playing / Şunu oynuyor*) verisini okuyarak çalışır (herhangi bir Roblox API'si veya hesap girişi kullanılmaz; kişisel geçmiş/zaman çizelgesi saklanmaz, yalnızca sunucu geneli oyun toplamları tutulur).
 
 * **Kurulum (Discord Developer Portal & Bot İzinleri):**
   - **Privileged Gateway Intents:** Developer Portal > Bot sekmesinden **Presence Intent**, **Server Members Intent** ve **Message Content Intent** açık olmalıdır. *(Presence Intent kapalıysa bot çökmez; tek satır uyarı vererek oyun etkinliği sistemini devre dışı bırakıp diğer özelliklerle çalışmaya devam eder.)*
@@ -93,7 +93,7 @@ Bot, yalnızca Discord'un yerleşik etkinlik (*Playing / Şunu oynuyor*) verisin
   - Telefonda (mobil) oynanan oyunlar Discord tarafından etkinlik olarak paylaşılmadığı için algılanmaz.
   - Zula, Minecraft (TLauncher dahil) ve CS2'nin tanınması Discord masaüstü uygulamasının oyunu algılamasına bağlıdır; **`/aktivitem` > ⚙️ Ayarlarım > 🔍 Botun Gördüğü Etkinlik** ile anlık teşhis yapılabilir.
   - Kullanıcı bir ses kanalında değilse ses aktarımı yapılamaz.
-  - Hiçbir oyun geçmişi, saatlik kayıt veya kalıcı karar izi saklanmaz.
+  - Kişisel geçmiş saklanmaz; yalnızca sunucu geneli oyun toplamları tutulur.
 
 ---
 
@@ -136,6 +136,8 @@ Bot aynı Node.js sürecinde Express ile REST API sunar. `/api/health` dışınd
   - **Hata Kodları (`{ error, code, details? }`):** `NO_GAME_SELECTED`, `NAME_INVALID`, `GAME_USERNAME_INVALID` (`details.game`), `ROBLOX_NOT_FOUND`, `ROBLOX_BANNED`, `ROBLOX_LOOKUP_FAILED` (503 geçici hata), `ROBLOX_ALREADY_REGISTERED`, `ALREADY_REGISTERED`, `RATE_LIMITED`.
 * **`GET /api/register/status/:id`**, **`GET /api/member/:id/profile`**, **`GET /api/admin/members`**, **`GET /api/admin/members/:id`**:
   - Yanıtlardaki `registration` (ve `pending` durumunda `application`) nesnesi artık `displayName` ve `games: [{ id, username, verified, robloxId?, robloxProfileUrl? }]` alanlarını da içerir (eski kayıtlar okuma sırasında otomatik uyarlanır).
+* **`GET /api/member/:id/activity?lang=tr|en`**: Üyenin bu ayki kişisel oyun etkinliği özetini (`/aktivitem` ile birebir aynı mantıkla; canlı oturum dahil) döndürür.
+* **`GET /api/stats/top-games?scope=month|all&limit=8&lang=tr|en&group=game|family`**: Sunucuda en çok oynanan oyunların anonim sıralamasını döndürür (hiçbir kullanıcı ID'si içermez, 60 sn önbellekli).
 * Diğer uç noktalar: `GET /api/member/:id/roles`, `POST /api/feedback`, `POST /api/admin/warn`, `POST /api/admin/warn/:id/evidence`.
 
 ---

@@ -3,6 +3,7 @@ const router = express.Router();
 const config = require('../../../config');
 const database = require('../../utils/database');
 const { getMemberLevel } = require('../middleware/auth');
+const { computeUserActivitySummary } = require('../../commands/aktivitem');
 
 /**
  * GET /api/member/:id/roles
@@ -111,6 +112,52 @@ router.get('/:id/profile', async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ error: `Profil bilgileri alınırken hata oluştu: ${err.message}` });
+  }
+});
+
+/**
+ * GET /api/member/:id/activity?lang=tr|en
+ * Üyenin bu ayki oyun etkinliği özetini (/aktivitem ile birebir aynı hesaplamayla) döndürür.
+ */
+router.get('/:id/activity', async (req, res) => {
+  const { id } = req.params;
+
+  if (!id || !/^\d{1,21}$/.test(id)) {
+    return res.status(400).json({ error: 'Geçersiz Discord ID formatı.' });
+  }
+
+  try {
+    const member = await req.guild.members.fetch(id).catch(() => null);
+    if (!member) {
+      return res.status(404).json({ error: 'Kullanıcı Discord sunucusunda bulunamadı.' });
+    }
+
+    const lang = req.query.lang === 'en' ? 'en' : 'tr';
+    const summary = computeUserActivitySummary({
+      userId: member.id,
+      lang,
+    });
+
+    return res.json({
+      userId: summary.userId,
+      month: summary.month,
+      tracking: summary.tracking,
+      games: summary.games.map((g) => ({
+        id: g.id,
+        name: g.name,
+        emoji: g.emoji,
+        family: g.family,
+        seconds: g.seconds,
+        percent: g.percent,
+        formattedDuration: g.formattedDuration,
+      })),
+      totalSeconds: summary.totalSeconds,
+      live: summary.live,
+      nextResetAt: summary.nextResetAt,
+      nextResetUnix: summary.nextResetUnix,
+    });
+  } catch (err) {
+    return res.status(500).json({ error: `Etkinlik bilgileri alınırken hata oluştu: ${err.message}` });
   }
 });
 
