@@ -5,6 +5,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   GatewayIntentBits,
+  MessageFlags,
   PermissionFlagsBits,
 } = require('discord.js');
 
@@ -28,15 +29,12 @@ function resetActivityCooldowns() {
 }
 
 /**
- * Üyenin "🛠️ Sistem Durumu" düğmesini görme/kullanma yetkisi (Developer veya Yönetmenlik) var mı?
+ * Üyenin "🛠️ Sistem Durumu" düğmesini görme/kullanma yetkisi SADECE Developer rolüne aittir.
+ * Yönetmenlik, Administrator izni veya sunucu sahibi olmak yeterli değildir.
  */
-function hasSystemStatusAuthority(member, guild = null) {
-  if (!member) return false;
-  const targetGuild = guild || member.guild || null;
-  if (targetGuild?.ownerId && String(targetGuild.ownerId) === String(member.id)) return true;
-  if (member.permissions?.has?.(PermissionFlagsBits.Administrator)) return true;
-  const allowedRoles = config.ROLES?.WARNING_AUTHORITIES || [];
-  return allowedRoles.some((roleId) => member.roles?.cache?.has?.(roleId));
+function hasSystemStatusAuthority(member) {
+  if (!member || !config.ROLES?.DEVELOPER) return false;
+  return Boolean(member.roles?.cache?.has?.(config.ROLES.DEVELOPER));
 }
 
 /**
@@ -498,11 +496,13 @@ function buildSettingsPanelPayload(
     ? '⚙️ **Game Activity Settings**\n' +
       "The bot reads your Discord game activity to assign game activity roles, count your monthly playtime, and transfer you to the game's voice channel.\n" +
       "When you close your game your game role is removed, and if you're in a game voice channel you'll be moved to Lounge 1. You can turn this off below.\n" +
+      '📱 Playing on mobile? Use the `/game` command.\n' +
       'ℹ️ *If Discord Settings > Activity Privacy is turned off, the bot cannot see anything.*' +
       returnDisabledHint
     : '⚙️ **Oyun Etkinliği Ayarların**\n' +
       "Bot, Discord'daki oyun etkinliğini okuyarak oyun rollerini verir, süreni sayar ve oyunun ses kanalına aktarır.\n" +
       "Oyunu kapattığında oyun rolün alınır; bir oyun ses kanalındaysan Salon 1'e aktarılırsın. İstemiyorsan aşağıdan kapatabilirsin.\n" +
+      '📱 Mobilden oynuyorsan `/oyun` komutunu kullan.\n' +
       "ℹ️ *Discord'da Ayarlar > Etkinlik Gizliliği kapalıysa bot hiçbir şey göremez.*" +
       returnDisabledHint;
 
@@ -541,7 +541,7 @@ function buildSettingsPanelPayload(
 
   const row1 = new ActionRowBuilder().addComponents(trackBtn, moveBtn, returnBtn);
 
-  // Satır 2 (en çok 5 düğme): 🔍 Botun Gördüğü Etkinlik, 🧪 Neden aktarılmadım?, 🛠️ Sistem Durumu (yalnızca yetkili)
+  // Satır 2 (en çok 5 düğme): 🔍 Botun Gördüğü Etkinlik, 🧪 Neden aktarılmadım?, 🛠️ Sistem Durumu (YALNIZCA Developer)
   const diagBtn = new ButtonBuilder()
     .setCustomId(`act_diag:${uid}`)
     .setLabel(isEn ? '🔍 Activity Seen by Bot' : '🔍 Botun Gördüğü Etkinlik')
@@ -554,7 +554,7 @@ function buildSettingsPanelPayload(
 
   const row2 = new ActionRowBuilder().addComponents(diagBtn, whyBtn);
 
-  if (hasSystemStatusAuthority(member, guild)) {
+  if (hasSystemStatusAuthority(member)) {
     const sysBtn = new ButtonBuilder()
       .setCustomId(`act_sys:${uid}`)
       .setLabel(isEn ? '🛠️ System Status' : '🛠️ Sistem Durumu')
@@ -632,7 +632,7 @@ function buildWhyNotMovedPayload({ userId, lang = 'tr', tracker = activityTracke
 }
 
 /**
- * Yetkililere (Developer & Yönetmenlik) özel "🛠️ Sistem Durumu / System Status" tanı çıktısını üretir.
+ * Sadece Developer rolündekilere özel "🛠️ Sistem Durumu / System Status" tanı çıktısını üretir.
  * Kullanıcı kimliği veya kullanıcıya özel oyun bilgisi İÇERMEZ.
  */
 function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker = activityTracker, db = database }) {
@@ -698,6 +698,8 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
   );
 
   const roleLines = [];
+  let manualReadyRoleCount = 0;
+  const totalFamilyRoles = Object.keys(activityConfig.FAMILIES || {}).length;
   for (const [famKey, fam] of Object.entries(activityConfig.FAMILIES || {})) {
     const r = activeGuild?.roles?.cache?.get?.(fam.roleId) || null;
     if (!r) {
@@ -713,6 +715,7 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
           : `⚠️ **${fam.emoji} ${famKey}:** <@&${fam.roleId}> botun rolünün ÜSTÜNDE! *(Bot rolünü yukarı taşıyın)*`
       );
     } else {
+      manualReadyRoleCount += 1;
       roleLines.push(
         isEn
           ? `✅ **${fam.emoji} ${famKey}:** <@&${fam.roleId}> (Bot role is higher)`
@@ -720,6 +723,32 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
       );
     }
   }
+
+  // Mobil /oyun manuel rol durumu ve gece 00:00 temizliği bilgileri (tamamen kimliksiz)
+  const manualCounts =
+    typeof db.countManualActivityMarks === 'function'
+      ? db.countManualActivityMarks()
+      : { totalMarks: 0, totalUsers: 0 };
+  const lastCleanup = tracker.lastMidnightCleanup || null;
+  const lastCleanupStr = lastCleanup?.at
+    ? `<t:${Math.floor(lastCleanup.at / 1000)}:R> (${isEn ? 'removed' : 'alınan'}:${lastCleanup.removed}, ${isEn ? 'failed' : 'hata'}:${lastCleanup.failed})`
+    : isEn
+      ? 'none yet'
+      : 'henüz yok';
+  const nextMidnightMs =
+    typeof tracker.getNextMidnightCleanupAt === 'function'
+      ? tracker.getNextMidnightCleanupAt()
+      : activityConfig.getNextMidnightMsInTimeZone(Date.now(), activityConfig.MANUAL_TIMEZONE);
+  const nextMidnightUnix = Math.floor(nextMidnightMs / 1000);
+  const clearAllFlag = Boolean(
+    tracker.config?.MANUAL_CLEAR_ALL_ACTIVITY_ROLES ?? activityConfig.MANUAL_CLEAR_ALL_ACTIVITY_ROLES
+  );
+  const manualRolesReadyPrefix = manualReadyRoleCount === totalFamilyRoles ? '✅' : '⚠️';
+  const manualSummaryLine = isEn
+    ? `${manualRolesReadyPrefix} **Mobile \`/game\`:** Roles ready \`${manualReadyRoleCount}/${totalFamilyRoles}\` • Active marks: \`${manualCounts.totalMarks}\` • ClearAll: \`${clearAllFlag ? 'ON' : 'OFF'}\`\n` +
+      `🌙 **00:00 Cleanup:** Last: ${lastCleanupStr} • Next: <t:${nextMidnightUnix}:R>`
+    : `${manualRolesReadyPrefix} **Mobil \`/oyun\`:** Hazır rol \`${manualReadyRoleCount}/${totalFamilyRoles}\` • Aktif manuel işaret: \`${manualCounts.totalMarks}\` • ClearAll: \`${clearAllFlag ? 'Açık' : 'Kapalı'}\`\n` +
+      `🌙 **00:00 Temizliği:** Son: ${lastCleanupStr} • Sıradaki: <t:${nextMidnightUnix}:R>`;
 
   // 3. Komut Kanalı ve Oyun Ses Kanalları
   const cmdCh = activeGuild?.channels?.cache?.get?.(activityConfig.COMMAND_CHANNEL_ID) || null;
@@ -911,6 +940,7 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     cmdLine,
     voiceSummaryLine,
     returnChannelLine,
+    manualSummaryLine,
     ...roleLines,
     '━━━━━━━━━━━━━━━━━━━━',
     isEn
@@ -919,11 +949,11 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     isEn
       ? `🔗 **Chain Counters (since startup):**\n` +
         `\`presence=${c.presenceReceived} | processed=${c.presenceProcessed} | playing=${c.presenceWithPlaying} | matched=${c.matchedGame} | roblox=${c.generalRoblox} | unmatched=${c.unmatchedActivity} | ignored=${c.ignoredActivity}\`\n` +
-        `\`confirmed=${c.sessionConfirmed} | ended=${c.gamesEnded || 0} | roleAdd=${c.roleAdded} | roleRem=${c.rolesRemoved || 0} (err:${c.roleFailed}) | checkpoints=${c.checkpointWritten} | dbSave=${c.dbSaveSuccess} (err:${c.dbSaveFailed}) | voiceEvents=${c.voiceChangesReceived} | memberFetch=${c.memberFetchCalls || 0} (skip:${c.memberFetchSkipped || 0}, err:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved} | RETURN_MOVED=${r.RETURN_MOVED || 0} (skip:${returnSkipTotal}, err:${returnErrTotal})\`\n` +
+        `\`confirmed=${c.sessionConfirmed} | ended=${c.gamesEnded || 0} | roleAdd=${c.roleAdded} | roleRem=${c.rolesRemoved || 0} (err:${c.roleFailed}) | manual=+${c.manuelVerilen || 0}/-${c.manuelGeriAlinan || 0} | midnight=${c.geceTemizligiAlinan || 0}(err:${c.geceTemizligiBasarisiz || 0}) | checkpoints=${c.checkpointWritten} | dbSave=${c.dbSaveSuccess} (err:${c.dbSaveFailed}) | voiceEvents=${c.voiceChangesReceived} | memberFetch=${c.memberFetchCalls || 0} (skip:${c.memberFetchSkipped || 0}, err:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved} | RETURN_MOVED=${r.RETURN_MOVED || 0} (skip:${returnSkipTotal}, err:${returnErrTotal})\`\n` +
         `• **Decision Reasons:** \`${reasonSummary}\``
       : `🔗 **Zincir Sayaçları (açılıştan beri):**\n` +
         `\`presence=${c.presenceReceived} | işlenen=${c.presenceProcessed} | playing=${c.presenceWithPlaying} | eşleşen=${c.matchedGame} | genelRoblox=${c.generalRoblox} | eşleşmeyen=${c.unmatchedActivity} | yoksayılan=${c.ignoredActivity}\`\n` +
-        `\`onaylıOturum=${c.sessionConfirmed} | oyunBitti=${c.gamesEnded || 0} | rolVerilen=${c.roleAdded} | rolAlındı=${c.rolesRemoved || 0} (hata:${c.roleFailed}) | süreCheckpoint=${c.checkpointWritten} | dbKayıt=${c.dbSaveSuccess} (hata:${c.dbSaveFailed}) | sesOlayı=${c.voiceChangesReceived} | üyeFetch=${c.memberFetchCalls || 0} (atlanan:${c.memberFetchSkipped || 0}, hata:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved} | RETURN_MOVED=${r.RETURN_MOVED || 0} (atlanan:${returnSkipTotal}, hata:${returnErrTotal})\`\n` +
+        `\`onaylıOturum=${c.sessionConfirmed} | oyunBitti=${c.gamesEnded || 0} | rolVerilen=${c.roleAdded} | rolAlındı=${c.rolesRemoved || 0} (hata:${c.roleFailed}) | manuel=+${c.manuelVerilen || 0}/-${c.manuelGeriAlinan || 0} | gece=${c.geceTemizligiAlinan || 0}(hata:${c.geceTemizligiBasarisiz || 0}) | süreCheckpoint=${c.checkpointWritten} | dbKayıt=${c.dbSaveSuccess} (hata:${c.dbSaveFailed}) | sesOlayı=${c.voiceChangesReceived} | üyeFetch=${c.memberFetchCalls || 0} (atlanan:${c.memberFetchSkipped || 0}, hata:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved} | RETURN_MOVED=${r.RETURN_MOVED || 0} (atlanan:${returnSkipTotal}, hata:${returnErrTotal})\`\n` +
         `• **Karar Sebepleri:** \`${reasonSummary}\``,
   ];
 
@@ -1183,12 +1213,12 @@ async function handleActivityButton(interaction, { tracker = activityTracker, db
   }
 
   if (action === 'act_sys') {
-    if (!hasSystemStatusAuthority(interaction.member, interaction.guild)) {
+    if (!hasSystemStatusAuthority(interaction.member)) {
       return interaction.reply({
         content: isEn
-          ? '❌ Only **Developer** and **Management** staff can use this button.'
-          : '❌ Bu düğmeyi yalnızca **Developer** ve **Yönetmenlik** yetkilileri kullanabilir.',
-        ephemeral: true,
+          ? '❌ Only members with the **Developer** role can use this button.'
+          : '❌ Bu düğmeyi sadece **Developer** rolündekiler kullanabilir.',
+        flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });
     }
@@ -1202,7 +1232,7 @@ async function handleActivityButton(interaction, { tracker = activityTracker, db
     });
     return interaction.reply({
       ...payload,
-      ephemeral: true,
+      flags: MessageFlags.Ephemeral,
     });
   }
 

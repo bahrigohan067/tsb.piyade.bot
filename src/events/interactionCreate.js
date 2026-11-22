@@ -39,6 +39,7 @@ const {
 const { sanitizeInlineCode, escapeEmbedText } = require('../utils/inputSanitizer');
 const activityTracker = require('../utils/activityTracker');
 const { handleActivityButton } = require('../commands/aktivitem');
+const { handleManualGameRoleButton } = require('../commands/oyun');
 
 // Eşzamanlı onay kilitleri (Aynı kullanıcıya çift tıklamayı engeller)
 const approvalUserLocks = new Set();
@@ -760,9 +761,12 @@ module.exports = {
           return handleWarningLogEnglishButton(interaction, warnId);
         }
 
-        // [I] OYUN ETKİNLİĞİ: SES AKTARIMI İPTAL & AYARLARIM / TEŞHİS BUTONLARI
+        // [I] OYUN ETKİNLİĞİ: SES AKTARIMI İPTAL, MOBİL /OYUN & AYARLARIM / TEŞHİS BUTONLARI
         if (interaction.customId.startsWith('act_cancel:')) {
           return activityTracker.handleCancelTransferButton(interaction);
+        }
+        if (interaction.customId.startsWith('act_gr:')) {
+          return handleManualGameRoleButton(interaction);
         }
         if (
           interaction.customId === 'act_settings' ||
