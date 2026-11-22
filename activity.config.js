@@ -32,6 +32,11 @@ const TIMINGS = {
   SWEEP_SEC: 30,                   // Sesteki üyeler için yedek aktarma taraması aralığı (saniye)
   DECISION_TTL_MIN: 30,            // Bellekteki son aktarma karar izinin saklanma süresi (dakika)
   BOT_MOVE_IGNORE_SEC: 5,          // Botun kendi taşımasının voiceStateUpdate'i tekrar tetiklememesi için süre (saniye)
+  MEMBER_FETCH_COOLDOWN_SEC: 30,   // Aynı üye için guild.members.fetch çağrıları arası en az bekleme süresi (saniye)
+  MEMBER_FETCH_STORM_WINDOW_MS: 60000, // Fırtına koruması pencere süresi (1 dakika)
+  MEMBER_FETCH_STORM_MAX: 20,      // Fırtına durumunda 1 dakikada yapılabilecek en fazla üye fetch çağrısı
+  MEMBER_FETCH_TIMEOUT_MS: 3500,   // Üye fetch çağrısının bot akışını bloke etmemesi için zaman aşımı (ms)
+  MEMBER_FETCH_429_BACKOFF_MS: 30000, // 429 hız sınırında varsayılan geri çekilme süresi (ms)
   STARTUP_CLEANUP_DELAY_MS: 120000, // Açılıştan 2 dakika sonra tek seferlik aktiflik rolü temizliği (ms)
   MONTHLY_CHECK_INTERVAL_MS: 600000, // 10 dakikada bir ay dönümü kontrolü (ms)
   HOURLY_LOG_INTERVAL_MS: 3600000,  // Saatte bir konsola kimliksiz sayaç özeti yazma aralığı (ms)

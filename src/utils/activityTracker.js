@@ -468,6 +468,9 @@ function createEmptyCounters() {
     dbSaveFailed: 0,
     voiceChangesReceived: 0,
     transfersMoved: 0,
+    memberFetchCalls: 0,
+    memberFetchSkipped: 0,
+    memberFetchErrors: 0,
     reasons,
   };
 }
@@ -603,6 +606,12 @@ class ActivityTracker {
     // Botun kendi taşımasının 5 sn boyunca voiceStateUpdate'i tekrar tetiklememesi için harita
     this.botMoveIgnoreUntil = new Map();
 
+    // guild.members.fetch korumaları: kullanıcı başına 30 sn cooldown, tek-uçuş (in-flight), fırtına sınırı ve 429 geri çekilme
+    this.memberFetchLastAt = new Map();
+    this.inFlightMemberFetches = new Map();
+    this.memberFetchTimestamps = [];
+    this.memberFetchBackoffUntil = 0;
+
     // Kullanıcı başına bellekte SON aktarma kararı (30 dk TTL, kalıcı olarak hiçbir yere yazılmaz)
     this.lastDecisions = new Map();
 
@@ -693,7 +702,7 @@ class ActivityTracker {
     const c = this.counters;
     const dbStatus = this.db?.lastSaveOk === false ? 'ERR' : 'OK';
     this.logger.log(
-      `[OYUN ETKİNLİĞİ] ${periodLabel}: presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} rol=${c.roleAdded} süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${c.reasons.NOT_IN_VOICE}`
+      `[OYUN ETKİNLİĞİ] ${periodLabel}: presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} rol=${c.roleAdded} süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} uyeFetch=${c.memberFetchCalls}(atlanan:${c.memberFetchSkipped},hata:${c.memberFetchErrors}) | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${c.reasons.NOT_IN_VOICE}`
     );
   }
 
@@ -771,6 +780,148 @@ class ActivityTracker {
         this.lastDecisions.delete(uid);
       }
     }
+
+    const fetchCooldownMs = Math.max(1000, Number(this.config.TIMINGS?.MEMBER_FETCH_COOLDOWN_SEC ?? 30) * 1000);
+    for (const [uid, ts] of this.memberFetchLastAt.entries()) {
+      if (now - ts >= fetchCooldownMs * 2) {
+        this.memberFetchLastAt.delete(uid);
+      }
+    }
+
+    const stormWindowMs = Math.max(1000, Number(this.config.TIMINGS?.MEMBER_FETCH_STORM_WINDOW_MS ?? 60000));
+    if (this.memberFetchTimestamps.length > 0) {
+      this.memberFetchTimestamps = this.memberFetchTimestamps.filter((ts) => now - ts < stormWindowMs);
+    }
+  }
+
+  /**
+   * Önbellekte olmayan üye veya eksik presence için korumalı guild.members.fetch yardımcısı:
+   * - Aynı anda aynı üye için tek uçuş (in-flight deduplication) uygular.
+   * - Kullanıcı başına en az MEMBER_FETCH_COOLDOWN_SEC (30 sn) bekleme süresi uygular.
+   * - presenceUpdate fırtınasında dakikada en fazla MEMBER_FETCH_STORM_MAX (20) çağrıya izin verir.
+   * - 429 hız sınırında geri çekilir (backoff) ve zaman aşımıyla bot akışını asla bloke etmez.
+   * - Gelen sonucu guild.members.cache ve guild.presences.cache içine yazar.
+   */
+  async safeFetchMember(guild, userId, { withPresences = true } = {}) {
+    if (!guild || !userId) return null;
+    const uid = String(userId);
+    const cachedMember = guild.members?.cache?.get?.(uid) || null;
+    const cachedPresence = cachedMember?.presence || guild.presences?.cache?.get?.(uid) || null;
+
+    // Önbellekte üye (ve isteniyorsa presence) zaten varsa hiç ağ çağrısı yapma
+    if (cachedMember && (!withPresences || cachedPresence)) {
+      if (!cachedMember.presence && cachedPresence) {
+        cachedMember.presence = cachedPresence;
+      }
+      return cachedMember;
+    }
+
+    if (typeof guild.members?.fetch !== 'function') {
+      return cachedMember;
+    }
+
+    // 1. Aynı üye için devam eden (in-flight) istek varsa onu paylaş
+    if (this.inFlightMemberFetches.has(uid)) {
+      this.counters.memberFetchSkipped += 1;
+      return this.inFlightMemberFetches.get(uid);
+    }
+
+    const now = this.now();
+
+    // 2. 429 geri çekilme (backoff) aktifse ağa gitmeden hemen dön
+    if (now < this.memberFetchBackoffUntil) {
+      this.counters.memberFetchSkipped += 1;
+      return cachedMember;
+    }
+
+    // 3. Kullanıcı başına 30 sn bekleme süresi (cooldown) kontrolü
+    const cooldownMs = Math.max(0, Number(this.config.TIMINGS?.MEMBER_FETCH_COOLDOWN_SEC ?? 30) * 1000);
+    const lastAt = this.memberFetchLastAt.get(uid) || 0;
+    if (cooldownMs > 0 && lastAt > 0 && now - lastAt < cooldownMs) {
+      this.counters.memberFetchSkipped += 1;
+      return cachedMember;
+    }
+
+    // 4. Fırtına (storm) sınırı kontrolü (pencere içinde en fazla MEMBER_FETCH_STORM_MAX çağrı)
+    const stormWindowMs = Math.max(1000, Number(this.config.TIMINGS?.MEMBER_FETCH_STORM_WINDOW_MS ?? 60000));
+    const stormMax = Math.max(1, Number(this.config.TIMINGS?.MEMBER_FETCH_STORM_MAX ?? 20));
+    this.memberFetchTimestamps = this.memberFetchTimestamps.filter((ts) => now - ts < stormWindowMs);
+    if (this.memberFetchTimestamps.length >= stormMax) {
+      this.counters.memberFetchSkipped += 1;
+      this.logErrorThrottled(
+        'member_fetch:storm_limit',
+        '[OYUN ETKİNLİĞİ UYARISI] Üye sorgu fırtına sınırına ulaşıldı; yeni guild.members.fetch çağrıları geçici olarak atlanıyor.'
+      );
+      return cachedMember;
+    }
+
+    // Zaman damgalarını ve sayacı kaydet
+    this.memberFetchLastAt.set(uid, now);
+    this.memberFetchTimestamps.push(now);
+    this.counters.memberFetchCalls += 1;
+
+    const timeoutMs = Math.max(200, Number(this.config.TIMINGS?.MEMBER_FETCH_TIMEOUT_MS ?? 3500));
+
+    const fetchPromise = (async () => {
+      let timeoutHandle = null;
+      try {
+        const rawFetch = guild.members.fetch(
+          withPresences ? { user: [uid], withPresences: true } : uid
+        );
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutHandle = this._setTimeout(() => {
+            const err = new Error('Member fetch timeout');
+            err.code = 'FETCH_TIMEOUT';
+            reject(err);
+          }, timeoutMs);
+          timeoutHandle?.unref?.();
+        });
+
+        const fetched = await Promise.race([rawFetch, timeoutPromise]);
+        const resolvedMember =
+          typeof fetched?.get === 'function'
+            ? fetched.get(uid) || null
+            : fetched?.id === uid
+              ? fetched
+              : null;
+
+        if (resolvedMember) {
+          if (typeof guild.members?.cache?.set === 'function') {
+            guild.members.cache.set(uid, resolvedMember);
+          }
+          if (resolvedMember.presence && typeof guild.presences?.cache?.set === 'function') {
+            guild.presences.cache.set(uid, resolvedMember.presence);
+          } else if (!resolvedMember.presence && guild.presences?.cache?.get?.(uid)) {
+            resolvedMember.presence = guild.presences.cache.get(uid);
+          }
+          return resolvedMember;
+        }
+        return cachedMember;
+      } catch (err) {
+        this.counters.memberFetchErrors += 1;
+        const code = err?.code || err?.status;
+        const msg = String(err?.message || '');
+        if (code === 429 || /rate limit|429/i.test(msg)) {
+          const retryMs =
+            Number(err?.retryAfter || (err?.data?.retry_after ? err.data.retry_after * 1000 : 0)) ||
+            Math.max(1000, Number(this.config.TIMINGS?.MEMBER_FETCH_429_BACKOFF_MS ?? 30000));
+          this.memberFetchBackoffUntil = Math.max(this.memberFetchBackoffUntil, this.now() + retryMs);
+          this.logErrorThrottled(
+            'member_fetch:429',
+            `[OYUN ETKİNLİĞİ UYARISI] guild.members.fetch hız sınırına (429) takıldı; ${Math.ceil(retryMs / 1000)} sn geri çekilme uygulandı.`
+          );
+        }
+        return cachedMember;
+      } finally {
+        if (timeoutHandle) {
+          this._clearTimeout(timeoutHandle);
+        }
+        this.inFlightMemberFetches.delete(uid);
+      }
+    })();
+
+    this.inFlightMemberFetches.set(uid, fetchPromise);
+    return fetchPromise;
   }
 
   markBotMoveIgnore(userId, targetChannelId = null) {
@@ -1275,17 +1426,17 @@ class ActivityTracker {
       this.syncMemberFamilyRoles(member, newFamily);
     } else if (member && !prevFamily) {
       this.syncMemberFamilyRoles(member, newFamily);
-    } else if (!member && guild?.members?.fetch) {
-      // Üye önbellekte yoksa getirip rolünü ve aktarmasını değerlendir
-      guild.members
-        .fetch(uid)
+    } else if (!member && guild) {
+      // Üye önbellekte yoksa korumalı safeFetchMember ile (30 sn cooldown + tek uçuş + fırtına korumalı) getir
+      this.safeFetchMember(guild, uid, { withPresences: true })
         .then((fetchedMember) => {
-          if (!fetchedMember) return;
           const liveSess = this.sessions.get(uid);
           if (!liveSess || !liveSess.confirmed || liveSess.gameId !== newGameId) return;
-          this.syncMemberFamilyRoles(fetchedMember, newFamily);
+          if (fetchedMember) {
+            this.syncMemberFamilyRoles(fetchedMember, newFamily);
+          }
           if (!skipEvaluate) {
-            this.evaluateTransfer(fetchedMember, 'game-confirmed').catch(() => {});
+            this.evaluateTransfer(fetchedMember || uid, 'game-confirmed').catch(() => {});
           }
         })
         .catch(() => {});
@@ -1486,8 +1637,8 @@ class ActivityTracker {
       guild?.members?.cache?.get?.(uid) ||
       null;
 
-    if (!member && typeof guild?.members?.fetch === 'function') {
-      member = await guild.members.fetch(uid).catch(() => null);
+    if (!member && guild) {
+      member = await this.safeFetchMember(guild, uid, { withPresences: true });
     }
 
     if (member?.user?.bot) {
@@ -1551,21 +1702,11 @@ class ActivityTracker {
       }
 
       let livePresence = member?.presence || guild?.presences?.cache?.get?.(uid) || null;
-      if (!livePresence && typeof guild?.members?.fetch === 'function') {
-        try {
-          const fetched = await guild.members.fetch({ user: [uid], withPresences: true });
-          const fetchedMember =
-            typeof fetched?.get === 'function'
-              ? fetched.get(uid)
-              : fetched?.id === uid
-                ? fetched
-                : null;
-          if (fetchedMember) {
-            member = fetchedMember;
-            livePresence = fetchedMember.presence || guild?.presences?.cache?.get?.(uid) || null;
-          }
-        } catch (fetchErr) {
-          // Sürüm veya ortam desteklemiyorsa tracker oturumuna düşer
+      if (!livePresence && guild) {
+        const fetchedMember = await this.safeFetchMember(guild, uid, { withPresences: true });
+        if (fetchedMember) {
+          member = fetchedMember;
+          livePresence = fetchedMember.presence || guild?.presences?.cache?.get?.(uid) || null;
         }
       }
 
@@ -2596,6 +2737,7 @@ class ActivityTracker {
     this.cancelActiveCountdown(uid, { consumeToken: true });
     this.lastDecisions.delete(uid);
     this.botMoveIgnoreUntil.delete(uid);
+    this.memberFetchLastAt.delete(uid);
 
     const session = this.sessions.get(uid);
     if (session) {
@@ -2641,6 +2783,7 @@ class ActivityTracker {
     this.cancelActiveCountdown(uid, { consumeToken: true });
     this.lastDecisions.delete(uid);
     this.botMoveIgnoreUntil.delete(uid);
+    this.memberFetchLastAt.delete(uid);
 
     const session = this.sessions.get(uid);
     if (session) {
@@ -2664,6 +2807,10 @@ class ActivityTracker {
     }
     this.voiceDebounceTimers.clear();
     this.botMoveIgnoreUntil.clear();
+    this.memberFetchLastAt.clear();
+    this.inFlightMemberFetches.clear();
+    this.memberFetchTimestamps = [];
+    this.memberFetchBackoffUntil = 0;
     this.lastDecisions.clear();
     this.evaluatingUsers.clear();
 

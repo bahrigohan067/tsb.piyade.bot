@@ -1123,3 +1123,109 @@ test('8. Presence Intent kapalı fallback ve yapılandırma doğrulama', async (
   const structRes = activityConfig.validateActivityConfigStructure(badCfg, { silent: true });
   assert.equal(structRes.valid, false);
 });
+
+test('9. safeFetchMember korumaları: tek-uçuş (in-flight), 30 sn kullanıcı cooldown, fırtına sınırı, 429 geri çekilme ve Sistem Durumu sayacı', async () => {
+  const clock = createFakeClock(Date.parse('2026-11-22T18:00:00Z'));
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+  const env = createMockActivityGuild();
+
+  const tracker = new ActivityTracker({
+    config: makeTestConfig({
+      TIMINGS: {
+        MEMBER_FETCH_COOLDOWN_SEC: 30,
+        MEMBER_FETCH_STORM_WINDOW_MS: 60000,
+        MEMBER_FETCH_STORM_MAX: 3,
+        MEMBER_FETCH_429_BACKOFF_MS: 20000,
+      },
+    }),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  tracker.guild = env.guild;
+
+  let rawFetchCallCount = 0;
+  let shouldThrow429 = false;
+  let pendingResolve = null;
+
+  env.guild.members.fetch = async (arg) => {
+    rawFetchCallCount += 1;
+    if (shouldThrow429) {
+      const err = new Error('You are being rate limited');
+      err.code = 429;
+      err.retryAfter = 20000;
+      throw err;
+    }
+    const uid = Array.isArray(arg?.user) ? String(arg.user[0]) : String(arg);
+    if (pendingResolve) {
+      await new Promise((r) => {
+        pendingResolve = r;
+      });
+    }
+    const fakeMember = {
+      id: uid,
+      guild: env.guild,
+      user: { id: uid, username: `fetched_${uid}`, bot: false },
+      presence: null, // Presence boş kalsa bile 30 sn cooldown tekrar fetch'i önlemeli
+    };
+    return new Collection([[uid, fakeMember]]);
+  };
+
+  // 1) Tek-uçuş (in-flight): Aynı üye için eşzamanlı 2 çağrı -> yalnızca 1 ağ isteği atılmalı
+  pendingResolve = true;
+  const p1 = tracker.safeFetchMember(env.guild, 'uncached_1');
+  const p2 = tracker.safeFetchMember(env.guild, 'uncached_1');
+  assert.equal(rawFetchCallCount, 1, 'Eşzamanlı çağrılarda tek istek atılmalı');
+  assert.equal(tracker.counters.memberFetchCalls, 1);
+  assert.equal(tracker.counters.memberFetchSkipped, 1);
+  const unblock = pendingResolve;
+  pendingResolve = null;
+  if (typeof unblock === 'function') unblock();
+  const [m1, m2] = await Promise.all([p1, p2]);
+  assert.equal(m1?.id, 'uncached_1');
+  assert.equal(m2?.id, 'uncached_1');
+  assert.equal(env.guild.members.cache.has('uncached_1'), true, 'Sonuç önbelleğe yazılmalı');
+
+  // 2) Kullanıcı başına 30 sn cooldown: presence null olsa bile 30 sn dolmadan aynı üye için tekrar fetch atılmaz
+  await tracker.safeFetchMember(env.guild, 'uncached_1');
+  assert.equal(rawFetchCallCount, 1, '30 sn dolmadan aynı üye için ikinci fetch atılmamalı');
+  assert.equal(tracker.counters.memberFetchSkipped, 2);
+
+  // 3) Fırtına sınırı (MEMBER_FETCH_STORM_MAX = 3): uncached_2 ve uncached_3 çağrılır (toplam 3 oldu), uncached_4 fırtına korumasına takılır
+  await tracker.safeFetchMember(env.guild, 'uncached_2');
+  await tracker.safeFetchMember(env.guild, 'uncached_3');
+  assert.equal(rawFetchCallCount, 3);
+
+  const stormBlocked = await tracker.safeFetchMember(env.guild, 'uncached_4');
+  assert.equal(stormBlocked, null);
+  assert.equal(rawFetchCallCount, 3, 'Fırtına sınırı aşılınca yeni REST çağrısı atılmamalı');
+  assert.equal(tracker.counters.memberFetchSkipped, 3);
+
+  // 4) 1 dakika ilerlet (fırtına penceresi ve 30 sn cooldown sıfırlanır) -> 429 hız sınırı geri çekilmesini test et
+  await clock.advanceBy(61000);
+  shouldThrow429 = true;
+  const rateLimitedRes = await tracker.safeFetchMember(env.guild, 'uncached_5');
+  assert.equal(rateLimitedRes, null, '429 hatası bot akışını çökertmemeli');
+  assert.equal(tracker.counters.memberFetchErrors, 1);
+
+  // 429 backoff (20 sn) aktifken farklı bir üye için bile ağa gitmeden anında dönmeli
+  shouldThrow429 = false;
+  const countBeforeBackoffTest = rawFetchCallCount;
+  await tracker.safeFetchMember(env.guild, 'uncached_6');
+  assert.equal(rawFetchCallCount, countBeforeBackoffTest, '429 geri çekilme süresince yeni fetch atılmamalı');
+
+  // 5) "🛠️ Sistem Durumu" çıktısında kimliksiz üyeFetch sayacı görünmeli
+  const sysStatus = aktivitemCmd.buildSystemStatusPayload({
+    guild: env.guild,
+    lang: 'tr',
+    tracker,
+    db: database,
+  });
+  assert.match(sysStatus.content, /üyeFetch=4 \(atlanan:4, hata:1\)/);
+
+  await tracker.shutdown();
+});

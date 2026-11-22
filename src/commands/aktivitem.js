@@ -720,11 +720,11 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     isEn
       ? `🔗 **Chain Counters (since startup):**\n` +
         `\`presence=${c.presenceReceived} | processed=${c.presenceProcessed} | playing=${c.presenceWithPlaying} | matched=${c.matchedGame} | roblox=${c.generalRoblox} | unmatched=${c.unmatchedActivity} | ignored=${c.ignoredActivity}\`\n` +
-        `\`confirmed=${c.sessionConfirmed} | roleAdd=${c.roleAdded} (err:${c.roleFailed}) | checkpoints=${c.checkpointWritten} | dbSave=${c.dbSaveSuccess} (err:${c.dbSaveFailed}) | voiceEvents=${c.voiceChangesReceived} | MOVED=${c.transfersMoved}\`\n` +
+        `\`confirmed=${c.sessionConfirmed} | roleAdd=${c.roleAdded} (err:${c.roleFailed}) | checkpoints=${c.checkpointWritten} | dbSave=${c.dbSaveSuccess} (err:${c.dbSaveFailed}) | voiceEvents=${c.voiceChangesReceived} | memberFetch=${c.memberFetchCalls || 0} (skip:${c.memberFetchSkipped || 0}, err:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved}\`\n` +
         `• **Decision Reasons:** \`${reasonSummary}\``
       : `🔗 **Zincir Sayaçları (açılıştan beri):**\n` +
         `\`presence=${c.presenceReceived} | işlenen=${c.presenceProcessed} | playing=${c.presenceWithPlaying} | eşleşen=${c.matchedGame} | genelRoblox=${c.generalRoblox} | eşleşmeyen=${c.unmatchedActivity} | yoksayılan=${c.ignoredActivity}\`\n` +
-        `\`onaylıOturum=${c.sessionConfirmed} | rolVerilen=${c.roleAdded} (hata:${c.roleFailed}) | süreCheckpoint=${c.checkpointWritten} | dbKayıt=${c.dbSaveSuccess} (hata:${c.dbSaveFailed}) | sesOlayı=${c.voiceChangesReceived} | MOVED=${c.transfersMoved}\`\n` +
+        `\`onaylıOturum=${c.sessionConfirmed} | rolVerilen=${c.roleAdded} (hata:${c.roleFailed}) | süreCheckpoint=${c.checkpointWritten} | dbKayıt=${c.dbSaveSuccess} (hata:${c.dbSaveFailed}) | sesOlayı=${c.voiceChangesReceived} | üyeFetch=${c.memberFetchCalls || 0} (atlanan:${c.memberFetchSkipped || 0}, hata:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved}\`\n` +
         `• **Karar Sebepleri:** \`${reasonSummary}\``,
   ];
 
