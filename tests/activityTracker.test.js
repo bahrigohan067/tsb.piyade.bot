@@ -125,6 +125,10 @@ function createFakeClock(startMs = 1764000000000) {
 function createMockActivityGuild({
   includeCommandChannel = true,
   commandChannelCanSend = true,
+  includeReturnChannel = true,
+  returnChannelType = ChannelType.GuildVoice,
+  returnChannelUserLimit = 0,
+  returnChannelCanConnect = true,
   botHasMovePermission = true,
   roleAddError = null,
   moveError = null,
@@ -194,6 +198,13 @@ function createMockActivityGuild({
 
   const lobbyChannel = makeVoiceChannel('voice_lobby_1', '🔊 Sohbet 1');
   const lobbyChannel2 = makeVoiceChannel('voice_lobby_2', '🔊 Sohbet 2');
+  const returnChannel = includeReturnChannel
+    ? makeVoiceChannel(activityConfig.RETURN_CHANNEL_ID, '🔊 Salon 1', {
+        type: returnChannelType,
+        userLimit: returnChannelUserLimit,
+        canConnect: returnChannelCanConnect,
+      })
+    : null;
   const afkChannel = makeVoiceChannel('voice_afk_1', '💤 AFK');
   const stageChannel = makeVoiceChannel('voice_stage_1', '🎙️ Sahne', {
     type: ChannelType.GuildStageVoice,
@@ -381,12 +392,13 @@ function createMockActivityGuild({
     return member;
   }
 
-  function makePresence(member, activities = []) {
+  function makePresence(member, activities = [], { status = 'online' } = {}) {
     const p = {
       userId: member.id,
       user: member.user,
       member,
       guild,
+      status,
       activities,
     };
     member.presence = p;
@@ -427,6 +439,7 @@ function createMockActivityGuild({
     channels,
     lobbyChannel,
     lobbyChannel2,
+    returnChannel,
     afkChannel,
     stageChannel,
     commandChannel,
@@ -440,6 +453,7 @@ function createMockActivityGuild({
 function makeTestConfig(overrides = {}) {
   return {
     ...activityConfig,
+    ...overrides,
     TIMINGS: {
       ...activityConfig.TIMINGS,
       ROLE_QUEUE_GAP_MS: 0,
@@ -454,7 +468,11 @@ test.beforeEach(() => {
   const curMonth = database.getCurrentIstanbulMonth();
   database.data.activityPrefs = {};
   database.data.activityStats = { month: curMonth, users: {} };
-  database.data.activityMeta = { announcedAt: Date.now(), lastResetMonth: curMonth };
+  database.data.activityMeta = {
+    announcedAt: Date.now(),
+    returnAnnouncedAt: Date.now(),
+    lastResetMonth: curMonth,
+  };
   database.data.languagePrefs = {};
   database.data.localeHints = {};
   database.save();
@@ -488,10 +506,10 @@ test('0. ZORUNLU Uçtan Uca Zincir: [presenceUpdate: "Roblox" / "Roblox Player"]
   });
   await tracker.initForGuild(env.guild);
 
-  // Varsayılan tercih kontrolü: activityPrefs'te kaydı OLMAYAN üye tracking:true, autoMove:true olmalı
+  // Varsayılan tercih kontrolü: activityPrefs'te kaydı OLMAYAN üye tracking:true, autoMove:true, returnToLobby:true olmalı
   const uE2E = env.makeMember('u_e2e');
   assert.equal(Object.prototype.hasOwnProperty.call(database.data.activityPrefs, 'u_e2e'), false);
-  assert.deepEqual(tracker.getPrefs('u_e2e'), { tracking: true, autoMove: true });
+  assert.deepEqual(tracker.getPrefs('u_e2e'), { tracking: true, autoMove: true, returnToLobby: true });
 
   // 1) "Roblox Player" etkinliği gelir
   const pRoblox = env.makePresence(uE2E, [{ type: ActivityType.Playing, name: 'Roblox Player' }]);
@@ -924,18 +942,23 @@ test('6. Sayaçlar, karar izi 30 dk TTL, 🧪 Neden aktarılmadım?, 🛠️ Sis
     member: regularMember,
     guild: env.guild,
   });
+  const regRow1Btns = regSettings.components[0].toJSON().components;
   const regRow2Btns = regSettings.components[1].toJSON().components;
-  assert.equal(regRow2Btns.length, 1);
-  assert.equal(regRow2Btns[0].custom_id, 'act_why:reg_u1');
+  assert.equal(regRow1Btns.length, 3);
+  assert.equal(regRow1Btns[2].custom_id, 'act_ret:reg_u1');
+  assert.equal(regRow2Btns.length, 2);
+  assert.equal(regRow2Btns[0].custom_id, 'act_diag:reg_u1');
+  assert.equal(regRow2Btns[1].custom_id, 'act_why:reg_u1');
 
   const devSettings = aktivitemCmd.buildSettingsPanelPayload('dev_u1', 'tr', null, database, {
     member: devMember,
     guild: env.guild,
   });
   const devRow2Btns = devSettings.components[1].toJSON().components;
-  assert.equal(devRow2Btns.length, 2);
-  assert.equal(devRow2Btns[0].custom_id, 'act_why:dev_u1');
-  assert.equal(devRow2Btns[1].custom_id, 'act_sys:dev_u1');
+  assert.equal(devRow2Btns.length, 3);
+  assert.equal(devRow2Btns[0].custom_id, 'act_diag:dev_u1');
+  assert.equal(devRow2Btns[1].custom_id, 'act_why:dev_u1');
+  assert.equal(devRow2Btns[2].custom_id, 'act_sys:dev_u1');
 
   // 2) "🧪 Neden aktarılmadım?" (TR ve EN)
   let whyTr = null;
@@ -1228,4 +1251,909 @@ test('9. safeFetchMember korumaları: tek-uçuş (in-flight), 30 sn kullanıcı 
   assert.match(sysStatus.content, /üyeFetch=4 \(atlanan:4, hata:1\)/);
 
   await tracker.shutdown();
+});
+
+
+// =========================================================================
+// 6. OYUN BİTİŞİ: HEMEN ROL ALMA + SALON 1'E SESSİZ DÖNÜŞ TESTLERİ (R1-R15)
+// =========================================================================
+
+test('R1 & R1b. Oyun kapanınca STOP_GRACE_SEC (5 sn) sonra aile rolü alınır ve OTHER GAMES / tüm oyun kanallarından Salon 1\'e sessizce taşınır', async () => {
+  assert.equal(activityConfig.TIMINGS.STOP_GRACE_SEC, 5, 'STOP_GRACE_SEC 5 sn olmalı');
+  assert.equal(activityConfig.RETURN_CHANNEL_ID, '1559927197056241816');
+
+  const clock = createFakeClock(Date.parse('2026-11-22T19:00:00Z'));
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+  const env = createMockActivityGuild();
+  const tracker = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  tracker.guild = env.guild;
+
+  // R1: OTHER GAMES (1571913882707165216) kanalındayken Roblox oynar -> 35 sn sonra kapatır -> 5 sn grace
+  const otherGamesCh = env.channels.get('1571913882707165216');
+  const uR1 = env.makeMember('u_r1', { voiceChannel: otherGamesCh });
+  const pStart = env.makePresence(uR1, [{ type: ActivityType.Playing, name: 'Roblox Player' }]);
+  tracker.handlePresenceUpdate(null, pStart);
+
+  // 15 sn onay + 20 sn daha oyun = toplam 35 sn
+  await clock.advanceBy(15000);
+  assert.equal(uR1.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), true);
+  await clock.advanceBy(20000);
+
+  const cmdCountBeforeStop = env.apiLog.commandMessages.length;
+  const pStop = env.makePresence(uR1, [], { status: 'online' });
+  tracker.handlePresenceUpdate(pStart, pStop);
+
+  // 4. saniyede henüz bitiş çalışmamış olmalı
+  await clock.advanceBy(4000);
+  assert.equal(uR1.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), true);
+  assert.equal(uR1.voice.channelId, '1571913882707165216');
+
+  // 5. saniyede (STOP_GRACE_SEC = 5) rol alınır ve Salon 1'e SESSİZCE taşınır
+  await clock.advanceBy(1000);
+  assert.equal(uR1.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), false, 'Roblox aktiflik rolü alınmalı');
+  assert.equal(uR1.voice.channelId, activityConfig.RETURN_CHANNEL_ID, 'Salon 1 kanalına taşınmalı');
+  assert.equal(tracker.sessions.has('u_r1'), false, 'Oturum temizlenmeli');
+  assert.equal(tracker.getLastDecision('u_r1')?.reason, TRANSFER_REASONS.RETURN_MOVED);
+  assert.equal(tracker.getLastDecision('u_r1')?.trigger, 'game-ended');
+  assert.equal(env.apiLog.commandMessages.length, cmdCountBeforeStop, 'Sessiz taşıma: komut kanalına mesaj atılmamalı');
+  // Süre son görülme anına kadar (35 sn) sayılmalı, 5 sn grace EKLENMEMELİ
+  assert.equal(database.getUserActivityStats('u_r1').games.roblox_unknown, 35);
+
+  // R1b: TSB, CS2, Zula ve Minecraft kanallarından (2 kanal dahil) Salon 1'e dönüş
+  const gameCases = [
+    { uid: 'u_tsb', chId: '1571912346773885050', name: 'The Strongest Battlegrounds', fam: 'roblox' },
+    { uid: 'u_cs2', chId: '1571915418728271973', name: 'Counter-Strike 2', fam: 'cs2' },
+    { uid: 'u_zula', chId: '1571914184860504074', name: 'Zula', fam: 'zula' },
+    { uid: 'u_mc1', chId: '1571914836248363169', name: 'Minecraft', fam: 'minecraft' },
+    { uid: 'u_mc2', chId: '1571914899569778698', name: 'TLauncher', fam: 'minecraft' },
+  ];
+
+  for (const tc of gameCases) {
+    const ch = env.channels.get(tc.chId);
+    const m = env.makeMember(tc.uid, { voiceChannel: ch });
+    const p1 = env.makePresence(m, [{ type: ActivityType.Playing, name: tc.name }]);
+    tracker.handlePresenceUpdate(null, p1);
+    await clock.advanceBy(15000);
+    assert.equal(m.roles.cache.has(activityConfig.FAMILIES[tc.fam].roleId), true);
+
+    const p2 = env.makePresence(m, [], { status: 'online' });
+    tracker.handlePresenceUpdate(p1, p2);
+    await clock.advanceBy(5000);
+    assert.equal(m.roles.cache.has(activityConfig.FAMILIES[tc.fam].roleId), false, `${tc.uid} rolü alınmalı`);
+    assert.equal(m.voice.channelId, activityConfig.RETURN_CHANNEL_ID, `${tc.uid} Salon 1'e taşınmalı`);
+    assert.equal(tracker.getLastDecision(tc.uid)?.reason, TRANSFER_REASONS.RETURN_MOVED);
+  }
+
+  await tracker.shutdown();
+});
+
+test('R2. 5 sn\'den kısa etkinlik kesintisinde hiçbir şey olmaz (rol kalır, taşıma yok)', async () => {
+  const clock = createFakeClock();
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+  const env = createMockActivityGuild();
+  const tracker = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  tracker.guild = env.guild;
+
+  const tsbCh = env.channels.get('1571912346773885050');
+  const m = env.makeMember('u_r2', { voiceChannel: tsbCh });
+  const pPlay = env.makePresence(m, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(null, pPlay);
+  await clock.advanceBy(15000);
+
+  // Etkinlik 3 sn kesilir, sonra aynı oyun geri döner
+  const pBlip = env.makePresence(m, [], { status: 'online' });
+  tracker.handlePresenceUpdate(pPlay, pBlip);
+  await clock.advanceBy(3000);
+
+  const pBack = env.makePresence(m, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(pBlip, pBack);
+  await clock.advanceBy(10000);
+
+  assert.equal(m.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), true, 'Rol korunmalı');
+  assert.equal(m.voice.channelId, tsbCh.id, 'Taşıma olmamalı');
+  assert.equal(tracker.sessions.get('u_r2')?.confirmed, true);
+  assert.equal(env.apiLog.moves.length, 0);
+
+  await tracker.shutdown();
+});
+
+test('R3 & R4. Seste değilken (sonradan girse de taşınmaz), oyun dışı kanalda ve zaten Salon 1\'deyken davranış', async () => {
+  const clock = createFakeClock();
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+  const env = createMockActivityGuild();
+  const tracker = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  tracker.guild = env.guild;
+
+  // R3: Seste değil -> rol alınır, RETURN_SKIPPED_NOT_IN_VOICE, sonradan oyun kanalına girse de TAŞINMAZ
+  const uR3 = env.makeMember('u_r3', { voiceChannel: null });
+  const p3a = env.makePresence(uR3, [{ type: ActivityType.Playing, name: 'CS2' }]);
+  tracker.handlePresenceUpdate(null, p3a);
+  await clock.advanceBy(15000);
+  assert.equal(uR3.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), true);
+
+  const p3b = env.makePresence(uR3, [], { status: 'online' });
+  tracker.handlePresenceUpdate(p3a, p3b);
+  await clock.advanceBy(5000);
+  assert.equal(uR3.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), false);
+  assert.equal(tracker.getLastDecision('u_r3')?.reason, TRANSFER_REASONS.RETURN_SKIPPED_NOT_IN_VOICE);
+  assert.equal(env.apiLog.moves.length, 0);
+
+  // Sonradan CS2 kanalına girerse taşınmamalı
+  const cs2Ch = env.channels.get('1571915418728271973');
+  const { oldState: o3, newState: n3 } = env.moveMemberVoice(uR3, cs2Ch);
+  tracker.handleVoiceStateUpdate(o3, n3);
+  await clock.advanceBy(15000);
+  assert.equal(uR3.voice.channelId, cs2Ch.id, 'Sonradan sese girince Salon 1\'e taşınmamalı');
+  assert.equal(env.apiLog.moves.length, 0);
+
+  // R4a: Yönetilen oyun kanalı DIŞINDA (lobbyChannel) -> rol alınır, RETURN_SKIPPED_NOT_GAME_CHANNEL
+  const uR4a = env.makeMember('u_r4a', { voiceChannel: env.lobbyChannel });
+  // İlk aktarma hakkını harcamış/oturumu açılışta gibi kabul edelim veya direkt confirmed kuralım
+  tracker.sessions.set('u_r4a', {
+    userId: 'u_r4a',
+    confirmed: true,
+    gameId: 'zula',
+    family: 'zula',
+    currentlyDetectedGameId: 'zula',
+    since: clock.nowFn() - 20000,
+    activityStartedAt: clock.nowFn() - 20000,
+    lastAccountedAt: clock.nowFn() - 20000,
+    lastSeen: clock.nowFn(),
+    moveToken: false,
+    sweepBlockedForMoveFail: false,
+  });
+  await uR4a.roles.add(activityConfig.FAMILIES.zula.roleId);
+  const p4a1 = env.makePresence(uR4a, [{ type: ActivityType.Playing, name: 'Zula' }]);
+  const p4a2 = env.makePresence(uR4a, [], { status: 'online' });
+  tracker.handlePresenceUpdate(p4a1, p4a2);
+  await clock.advanceBy(5000);
+  assert.equal(uR4a.roles.cache.has(activityConfig.FAMILIES.zula.roleId), false);
+  assert.equal(uR4a.voice.channelId, env.lobbyChannel.id, 'Oyun dışı kanaldan taşınmamalı');
+  assert.equal(tracker.getLastDecision('u_r4a')?.reason, TRANSFER_REASONS.RETURN_SKIPPED_NOT_GAME_CHANNEL);
+
+  // R4b: Üye ZATEN Salon 1'de -> rol alınır, hiçbir şey yapılmaz, hata yok
+  const uR4b = env.makeMember('u_r4b', { voiceChannel: env.returnChannel });
+  tracker.sessions.set('u_r4b', {
+    userId: 'u_r4b',
+    confirmed: true,
+    gameId: 'cs2',
+    family: 'cs2',
+    currentlyDetectedGameId: 'cs2',
+    since: clock.nowFn() - 20000,
+    activityStartedAt: clock.nowFn() - 20000,
+    lastAccountedAt: clock.nowFn() - 20000,
+    lastSeen: clock.nowFn(),
+    moveToken: false,
+    sweepBlockedForMoveFail: false,
+  });
+  await uR4b.roles.add(activityConfig.FAMILIES.cs2.roleId);
+  const p4b1 = env.makePresence(uR4b, [{ type: ActivityType.Playing, name: 'CS2' }]);
+  const p4b2 = env.makePresence(uR4b, [], { status: 'online' });
+  tracker.handlePresenceUpdate(p4b1, p4b2);
+  await clock.advanceBy(5000);
+  assert.equal(uR4b.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), false);
+  assert.equal(uR4b.voice.channelId, activityConfig.RETURN_CHANNEL_ID);
+  assert.equal(env.apiLog.moves.length, 0, 'Zaten Salon 1\'deyken setChannel çağrılmamalı');
+
+  await tracker.shutdown();
+});
+
+test('R5. Oyundan oyuna geçiş (A->B, Roblox->CS2, ROBLOX_UNKNOWN->belirli oyun, eşleşmeyen oyun, yoksayılan uygulama)', async () => {
+  const clock = createFakeClock();
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+  const env = createMockActivityGuild();
+  const tracker = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  tracker.guild = env.guild;
+
+  // 1) A -> B (TSB -> Bonk & Block, aynı Roblox ailesi): Salon 1'e dönüş YOK, rol değişmez, Bonk kanalına aktarılır
+  const tsbCh = env.channels.get('1571912346773885050');
+  const uAB = env.makeMember('u_ab', { voiceChannel: tsbCh });
+  const pTsb = env.makePresence(uAB, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(null, pTsb);
+  await clock.advanceBy(15000);
+  const removesBeforeAB = env.apiLog.roleRemoves.length;
+
+  const pBonk = env.makePresence(uAB, [{ type: ActivityType.Playing, name: 'Bonk & Block' }]);
+  tracker.handlePresenceUpdate(pTsb, pBonk);
+  await clock.advanceBy(6000); // 5 sn STOP_GRACE geçer ama Salon 1'e dönmemeli!
+  assert.equal(uAB.voice.channelId, tsbCh.id, '5 sn geçince Salon 1\'e dönmemeli');
+  await clock.advanceBy(9000); // 15 sn CONFIRM tamamlanır -> Bonk geri sayımı başlar
+  await clock.advanceBy(10000);
+  assert.equal(uAB.voice.channelId, '1571912742116401266', 'Bonk & Block kanalına aktarılmalı');
+  assert.equal(env.apiLog.roleRemoves.length, removesBeforeAB, 'Roblox içi geçişte rol alınmamalı');
+
+  // 2) Roblox -> CS2 (farklı aile): Salon 1'e dönüş YOK, CS2 rolü gelir, CS2 kanalına taşınır
+  const uRC = env.makeMember('u_rc', { voiceChannel: tsbCh });
+  const pRC1 = env.makePresence(uRC, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(null, pRC1);
+  await clock.advanceBy(15000);
+
+  const pRC2 = env.makePresence(uRC, [{ type: ActivityType.Playing, name: 'Counter-Strike 2' }]);
+  tracker.handlePresenceUpdate(pRC1, pRC2);
+  await clock.advanceBy(15000);
+  assert.equal(uRC.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), false);
+  assert.equal(uRC.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), true);
+  await clock.advanceBy(10000);
+  assert.equal(uRC.voice.channelId, '1571915418728271973');
+
+  // 3) ROBLOX_UNKNOWN -> belirli oyun (TSB): Salon 1'e dönüş YOK, OTHER GAMES -> TSB
+  const otherCh = env.channels.get('1571913882707165216');
+  const uUnk = env.makeMember('u_unk', { voiceChannel: otherCh });
+  const pUnk1 = env.makePresence(uUnk, [{ type: ActivityType.Playing, name: 'Roblox Player' }]);
+  tracker.handlePresenceUpdate(null, pUnk1);
+  await clock.advanceBy(15000);
+
+  const pUnk2 = env.makePresence(uUnk, [
+    { type: ActivityType.Playing, name: 'Roblox Player', details: 'The Strongest Battlegrounds' },
+  ]);
+  tracker.handlePresenceUpdate(pUnk1, pUnk2);
+  await clock.advanceBy(15000);
+  await clock.advanceBy(10000);
+  assert.equal(uUnk.voice.channelId, '1571912346773885050');
+
+  // 4) Desteklenmeyen başka bir Playing oyun (Valorant) açıksa -> eski rol alınır, RETURN_SKIPPED_OTHER_GAME_ACTIVE
+  const cs2Ch = env.channels.get('1571915418728271973');
+  const uVal = env.makeMember('u_val', { voiceChannel: cs2Ch });
+  const pVal1 = env.makePresence(uVal, [{ type: ActivityType.Playing, name: 'CS2' }]);
+  tracker.handlePresenceUpdate(null, pVal1);
+  await clock.advanceBy(15000);
+  const pVal2 = env.makePresence(uVal, [{ type: ActivityType.Playing, name: 'Valorant' }]);
+  tracker.handlePresenceUpdate(pVal1, pVal2);
+  await clock.advanceBy(5000);
+  assert.equal(uVal.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), false);
+  assert.equal(uVal.voice.channelId, cs2Ch.id);
+  assert.equal(tracker.getLastDecision('u_val')?.reason, TRANSFER_REASONS.RETURN_SKIPPED_OTHER_GAME_ACTIVE);
+
+  // 5) Yoksayılan uygulama (OBS Studio) arka planda çalışıyorsa -> oyun bitmiş sayılır, Salon 1'e DÖNER
+  const uObs = env.makeMember('u_obs', { voiceChannel: cs2Ch });
+  const pObs1 = env.makePresence(uObs, [{ type: ActivityType.Playing, name: 'CS2' }]);
+  tracker.handlePresenceUpdate(null, pObs1);
+  await clock.advanceBy(15000);
+  const pObs2 = env.makePresence(uObs, [{ type: ActivityType.Playing, name: 'OBS Studio' }]);
+  tracker.handlePresenceUpdate(pObs1, pObs2);
+  await clock.advanceBy(5000);
+  assert.equal(uObs.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), false);
+  assert.equal(uObs.voice.channelId, activityConfig.RETURN_CHANNEL_ID);
+  assert.equal(tracker.getLastDecision('u_obs')?.reason, TRANSFER_REASONS.RETURN_MOVED);
+
+  await tracker.shutdown();
+});
+
+test('R6 & R7. Görünmez/offline (RETURN_SKIPPED_NO_PRESENCE) ve kullanıcı tercihleri (returnToLobby, autoMove, tracking)', async () => {
+  const clock = createFakeClock();
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+  const env = createMockActivityGuild();
+  const tracker = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  tracker.guild = env.guild;
+
+  const tsbCh = env.channels.get('1571912346773885050');
+
+  // R6a: Durum "offline" (görünmez) -> oturum biter, rol alınır, TAŞIMA YOK (RETURN_SKIPPED_NO_PRESENCE)
+  const uInv = env.makeMember('u_inv', { voiceChannel: tsbCh });
+  const pInv1 = env.makePresence(uInv, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(null, pInv1);
+  await clock.advanceBy(15000);
+  assert.equal(uInv.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), true);
+
+  const pInv2 = env.makePresence(uInv, [], { status: 'offline' });
+  tracker.handlePresenceUpdate(pInv1, pInv2);
+  await clock.advanceBy(5000);
+  assert.equal(uInv.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), false, 'Görünmez olunca rol alınmalı');
+  assert.equal(uInv.voice.channelId, tsbCh.id, 'Görünmez olunca Salon 1\'e taşınmamalı');
+  assert.equal(tracker.getLastDecision('u_inv')?.reason, TRANSFER_REASONS.RETURN_SKIPPED_NO_PRESENCE);
+
+  // R6b: presence tamamen null -> oturum biter, rol alınır, TAŞIMA YOK (RETURN_SKIPPED_NO_PRESENCE)
+  const uNullP = env.makeMember('u_nullp', { voiceChannel: tsbCh });
+  const pNP1 = env.makePresence(uNullP, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(null, pNP1);
+  await clock.advanceBy(15000);
+  uNullP.presence = null;
+  env.guild.presences.cache.delete('u_nullp');
+  tracker.processDetectedGame({ userId: 'u_nullp', member: uNullP, guild: env.guild, detected: null });
+  await clock.advanceBy(5000);
+  assert.equal(uNullP.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), false);
+  assert.equal(uNullP.voice.channelId, tsbCh.id);
+  assert.equal(tracker.getLastDecision('u_nullp')?.reason, TRANSFER_REASONS.RETURN_SKIPPED_NO_PRESENCE);
+
+  // R7a: getPrefs varsayılanı returnToLobby: true; false yazılır, true'ya dönünce kayıt silinir
+  assert.deepEqual(tracker.getPrefs('u_default'), { tracking: true, autoMove: true, returnToLobby: true });
+  database.setActivityPrefs('u_pref_cycle', { returnToLobby: false });
+  assert.equal(database.data.activityPrefs.u_pref_cycle.returnToLobby, false);
+  // Diskten yeniden yükle
+  database.data.activityPrefs = {};
+  database.init();
+  assert.deepEqual(tracker.getPrefs('u_pref_cycle'), { tracking: true, autoMove: true, returnToLobby: false });
+  database.setActivityPrefs('u_pref_cycle', { returnToLobby: true });
+  assert.equal(Object.prototype.hasOwnProperty.call(database.data.activityPrefs, 'u_pref_cycle'), false);
+
+  // R7b: returnToLobby kapalı -> rol alınır, taşıma yok (RETURN_SKIPPED_OPTED_OUT)
+  const uOptRet = env.makeMember('u_opt_ret', { voiceChannel: tsbCh });
+  database.setActivityPrefs('u_opt_ret', { returnToLobby: false });
+  const pOR1 = env.makePresence(uOptRet, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(null, pOR1);
+  await clock.advanceBy(15000);
+  const pOR2 = env.makePresence(uOptRet, [], { status: 'online' });
+  tracker.handlePresenceUpdate(pOR1, pOR2);
+  await clock.advanceBy(5000);
+  assert.equal(uOptRet.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), false);
+  assert.equal(uOptRet.voice.channelId, tsbCh.id);
+  assert.equal(tracker.getLastDecision('u_opt_ret')?.reason, TRANSFER_REASONS.RETURN_SKIPPED_OPTED_OUT);
+
+  // R7c: autoMove kapalı -> rol alınır, taşıma yok (RETURN_SKIPPED_OPTED_OUT)
+  const uOptMove = env.makeMember('u_opt_move', { voiceChannel: tsbCh });
+  database.setActivityPrefs('u_opt_move', { autoMove: false });
+  const pOM1 = env.makePresence(uOptMove, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(null, pOM1);
+  await clock.advanceBy(15000);
+  const pOM2 = env.makePresence(uOptMove, [], { status: 'online' });
+  tracker.handlePresenceUpdate(pOM1, pOM2);
+  await clock.advanceBy(5000);
+  assert.equal(uOptMove.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), false);
+  assert.equal(uOptMove.voice.channelId, tsbCh.id);
+  assert.equal(tracker.getLastDecision('u_opt_move')?.reason, TRANSFER_REASONS.RETURN_SKIPPED_OPTED_OUT);
+
+  // R7d: tracking kapalı -> hiçbir işlem yapılmaz
+  const uNoTrack = env.makeMember('u_notrack', { voiceChannel: tsbCh });
+  database.setActivityPrefs('u_notrack', { tracking: false });
+  tracker.handlePresenceUpdate(null, env.makePresence(uNoTrack, [{ type: ActivityType.Playing, name: 'CS2' }]));
+  await clock.advanceBy(20000);
+  assert.equal(tracker.sessions.has('u_notrack'), false);
+  assert.equal(uNoTrack.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), false);
+
+  await tracker.shutdown();
+});
+
+test('R8. Salon 1 yok / dolu / izin yok / 40032 / diğer hata: ilgili RETURN_* kodu, çökme yok, yeniden deneme yok, saatte bir uyarı', async () => {
+  const clock = createFakeClock();
+
+  const runReturnCase = async (guildOpts, { fillReturnChannel = false } = {}) => {
+    const warns = [];
+    const env = createMockActivityGuild(guildOpts);
+    if (fillReturnChannel && env.returnChannel) {
+      env.makeMember('filler_1', { voiceChannel: env.returnChannel });
+    }
+    const tracker = new ActivityTracker({
+      config: makeTestConfig(),
+      db: database,
+      nowFn: clock.nowFn,
+      setTimeoutFn: clock.setTimeoutFn,
+      clearTimeoutFn: clock.clearTimeoutFn,
+      setIntervalFn: clock.setIntervalFn,
+      clearIntervalFn: clock.clearIntervalFn,
+      logger: { log: () => {}, warn: (m) => warns.push(m), error: () => {} },
+    });
+    tracker.guild = env.guild;
+
+    const cs2Ch = env.channels.get('1571915418728271973');
+    const m1 = env.makeMember('u_err1', { voiceChannel: cs2Ch });
+    const p1 = env.makePresence(m1, [{ type: ActivityType.Playing, name: 'CS2' }]);
+    tracker.handlePresenceUpdate(null, p1);
+    await clock.advanceBy(15000);
+    const p2 = env.makePresence(m1, [], { status: 'online' });
+    tracker.handlePresenceUpdate(p1, p2);
+    await clock.advanceBy(5000);
+
+    // Aynı hata ikinci kez oluşursa saatte bir uyarı kısıtı çalışmalı
+    const m2 = env.makeMember('u_err2', { voiceChannel: cs2Ch });
+    const p3 = env.makePresence(m2, [{ type: ActivityType.Playing, name: 'CS2' }]);
+    tracker.handlePresenceUpdate(null, p3);
+    await clock.advanceBy(15000);
+    const p4 = env.makePresence(m2, [], { status: 'online' });
+    tracker.handlePresenceUpdate(p3, p4);
+    await clock.advanceBy(5000);
+
+    const decision = tracker.getLastDecision('u_err1');
+    const movesCount = env.apiLog.moves.length;
+    await tracker.shutdown();
+    return { decision, warns, movesCount };
+  };
+
+  // 1) Salon 1 yok -> RETURN_TARGET_NOT_FOUND, 2 olayda yalnızca 1 uyarı
+  const resNotFound = await runReturnCase({ includeReturnChannel: false });
+  assert.equal(resNotFound.decision?.reason, TRANSFER_REASONS.RETURN_TARGET_NOT_FOUND);
+  assert.equal(resNotFound.warns.length, 1, 'Aynı sebep için uyarı saatte bir yazılmalı');
+  assert.equal(resNotFound.movesCount, 0);
+
+  // 2) Salon 1 dolu -> RETURN_TARGET_FULL
+  const resFull = await runReturnCase({ returnChannelUserLimit: 1 }, { fillReturnChannel: true });
+  assert.equal(resFull.decision?.reason, TRANSFER_REASONS.RETURN_TARGET_FULL);
+  assert.equal(resFull.warns.length, 1);
+
+  // 3) İzin yok (MoveMembers yok) -> RETURN_NO_PERMISSION
+  const resNoPerm = await runReturnCase({ botHasMovePermission: false });
+  assert.equal(resNoPerm.decision?.reason, TRANSFER_REASONS.RETURN_NO_PERMISSION);
+  assert.equal(resNoPerm.warns.length, 1);
+
+  // 4) API 50013 hatası -> RETURN_NO_PERMISSION, yeniden deneme yok
+  const err50013 = Object.assign(new Error('Missing Permissions'), { code: 50013 });
+  const res50013 = await runReturnCase({ moveError: err50013 });
+  assert.equal(res50013.decision?.reason, TRANSFER_REASONS.RETURN_NO_PERMISSION);
+  assert.equal(res50013.warns.length, 1);
+
+  // 5) API 40032 hatası -> sessizce RETURN_SKIPPED_NOT_IN_VOICE (uyarı logu yok)
+  const err40032 = Object.assign(new Error('Target user is not connected to voice'), { code: 40032 });
+  const res40032 = await runReturnCase({ moveError: err40032 });
+  assert.equal(res40032.decision?.reason, TRANSFER_REASONS.RETURN_SKIPPED_NOT_IN_VOICE);
+  assert.equal(res40032.warns.length, 0);
+
+  // 6) Diğer beklenmeyen hata -> RETURN_FAILED, yeniden deneme yok
+  const err500 = Object.assign(new Error('Internal Server Error'), { code: 500 });
+  const res500 = await runReturnCase({ moveError: err500 });
+  assert.equal(res500.decision?.reason, TRANSFER_REASONS.RETURN_FAILED);
+  assert.equal(res500.warns.length, 1);
+});
+
+test('R9. Bot yeniden başlar: açılış kimseyi taşımaz; yüklenen oturumda oyun bitince normal bitiş akışı çalışır', async () => {
+  const clock = createFakeClock();
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+  const env = createMockActivityGuild();
+
+  const cs2Ch = env.channels.get('1571915418728271973');
+  const uSeed = env.makeMember('u_seed_end', { voiceChannel: cs2Ch });
+  const pSeed = env.makePresence(uSeed, [{ type: ActivityType.Playing, name: 'Counter-Strike 2' }]);
+
+  const tracker = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  await tracker.initForGuild(env.guild);
+
+  // Açılışta hiç kimse taşınmamalı
+  assert.equal(env.apiLog.moves.length, 0);
+  assert.equal(tracker.sessions.get('u_seed_end')?.confirmed, true);
+  assert.equal(uSeed.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), true);
+
+  // Sonradan oyun bitince normal bitiş akışı rolü alıp Salon 1'e taşımalı
+  const pStop = env.makePresence(uSeed, [], { status: 'online' });
+  tracker.handlePresenceUpdate(pSeed, pStop);
+  await clock.advanceBy(5000);
+  assert.equal(uSeed.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), false);
+  assert.equal(uSeed.voice.channelId, activityConfig.RETURN_CHANNEL_ID);
+  assert.equal(tracker.getLastDecision('u_seed_end')?.reason, TRANSFER_REASONS.RETURN_MOVED);
+
+  await tracker.shutdown();
+});
+
+test('R10. Kaçan presenceUpdate sweep ile 30 sn içinde yakalanır; 5 dk rol temizliği yalnız role.members\'tan alır ve taşımaz', async () => {
+  const clock = createFakeClock();
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+  const env = createMockActivityGuild();
+  const tracker = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  await tracker.initForGuild(env.guild);
+
+  // 1) Kaçan presenceUpdate: üye TSB kanalında, presence'ı boşaldı ama handlePresenceUpdate ÇAĞRILMADI
+  const tsbCh = env.channels.get('1571912346773885050');
+  const uMissed = env.makeMember('u_missed', { voiceChannel: tsbCh });
+  const pStart = env.makePresence(uMissed, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(null, pStart);
+  await clock.advanceBy(15000);
+  assert.equal(uMissed.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), true);
+
+  // presenceUpdate olmadan canlı presence boşalır
+  env.makePresence(uMissed, [], { status: 'online' });
+
+  // t=15s -> 15 sn sonra (t=30s) ilk sweep çalıştığında bitiş zamanlayıcısı başlar (sweep doğrudan taşımaz!)
+  await clock.advanceBy(15000);
+  assert.equal(uMissed.voice.channelId, tsbCh.id, 'Sweep doğrudan Salon 1\'e taşımamalı');
+  // 5 sn grace dolunca (t=35s) endSession rolü alır ve Salon 1'e taşır
+  await clock.advanceBy(5000);
+  assert.equal(uMissed.roles.cache.has(activityConfig.FAMILIES.roblox.roleId), false);
+  assert.equal(uMissed.voice.channelId, activityConfig.RETURN_CHANNEL_ID);
+  assert.equal(tracker.getLastDecision('u_missed')?.reason, TRANSFER_REASONS.RETURN_MOVED);
+
+  // 2) 5 dakikalık periyodik rol temizliği
+  const movesBeforeCleanup = env.apiLog.moves.length;
+  const zulaRoleId = activityConfig.FAMILIES.zula.roleId;
+  const zulaCh = env.channels.get('1571914184860504074');
+
+  // uStale: Zula rolü var, oturumu yok, online ve oyun oynamıyor -> rol ALINMALI, TAŞINMAMALI
+  const uStale = env.makeMember('u_stale', { voiceChannel: zulaCh, roleIds: [zulaRoleId] });
+  env.makePresence(uStale, [], { status: 'online' });
+
+  // uOfflineRole: Zula rolü var, oturumu yok, offline -> belirsiz -> rol ALINMAMALI
+  const uOfflineRole = env.makeMember('u_offrole', { voiceChannel: zulaCh, roleIds: [zulaRoleId] });
+  env.makePresence(uOfflineRole, [], { status: 'offline' });
+
+  // uNoPresRole: Zula rolü var, oturumu yok, presence null -> belirsiz -> rol ALINMAMALI
+  const uNoPresRole = env.makeMember('u_nopresrole', { voiceChannel: zulaCh, roleIds: [zulaRoleId] });
+
+  const cleanRes = await tracker.runPeriodicRoleCleanup(env.guild);
+  assert.equal(cleanRes.removedCount, 1);
+  assert.equal(uStale.roles.cache.has(zulaRoleId), false, 'Pasif rol alınmalı');
+  assert.equal(uStale.voice.channelId, zulaCh.id, 'Periyodik temizlik Salon 1\'e taşımamalı');
+  assert.equal(uOfflineRole.roles.cache.has(zulaRoleId), true, 'Offline üyenin rolüne dokunulmamalı');
+  assert.equal(uNoPresRole.roles.cache.has(zulaRoleId), true, 'Presence olmayan üyenin rolüne dokunulmamalı');
+  assert.equal(env.apiLog.moves.length, movesBeforeCleanup, 'Rol temizliği hiç taşıma yapmamalı');
+
+  await tracker.shutdown();
+});
+
+test('R11 & R12. Salon 1\'e dönüş sonrası oyun yeniden açılınca yeni hak, bot taşıması tekrar tetiklemez; eşzamanlı endSession tek sefer ve öncelikli idempotent rol alma', async () => {
+  const clock = createFakeClock();
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+
+  let trackerRef = null;
+  const env = createMockActivityGuild({
+    simulateVoiceEventOnBotMove: true,
+    onBotMoveVoiceEvent: (o, n) => trackerRef?.handleVoiceStateUpdate(o, n),
+  });
+
+  const tracker = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  trackerRef = tracker;
+  tracker.guild = env.guild;
+
+  // R11: TSB kanalında oyun biter -> Salon 1'e taşınır -> voiceStateUpdate yoksayılır -> oyun tekrar açılır -> yeni hakla TSB kanalına döner
+  const tsbCh = env.channels.get('1571912346773885050');
+  const uCycle = env.makeMember('u_cycle', { voiceChannel: tsbCh });
+  const p1 = env.makePresence(uCycle, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(null, p1);
+  await clock.advanceBy(15000);
+
+  const p2 = env.makePresence(uCycle, [], { status: 'online' });
+  tracker.handlePresenceUpdate(p1, p2);
+  await clock.advanceBy(5000);
+  assert.equal(uCycle.voice.channelId, activityConfig.RETURN_CHANNEL_ID);
+  assert.equal(tracker.voiceDebounceTimers.has('u_cycle'), false, 'Botun Salon 1 taşıması yeni debounce başlatmamalı');
+
+  // Üye Salon 1'deyken oyunu yeniden açar -> yeni oturum + yeni moveToken -> 15 sn onay + 10 sn geri sayım -> TSB'ye geri taşınır!
+  const p3 = env.makePresence(uCycle, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tracker.handlePresenceUpdate(p2, p3);
+  await clock.advanceBy(15000);
+  assert.equal(tracker.sessions.get('u_cycle')?.moveToken, true);
+  assert.equal(tracker.getLastDecision('u_cycle')?.reason, TRANSFER_REASONS.COUNTDOWN_PENDING);
+  await clock.advanceBy(10000);
+  assert.equal(uCycle.voice.channelId, tsbCh.id);
+  assert.equal(tracker.getLastDecision('u_cycle')?.reason, TRANSFER_REASONS.MOVED);
+
+  // R12a: Eşzamanlı endSession çağrıları tek sefer çalışır
+  const cs2Ch = env.channels.get('1571915418728271973');
+  const uLock = env.makeMember('u_lock', { voiceChannel: cs2Ch });
+  const pL1 = env.makePresence(uLock, [{ type: ActivityType.Playing, name: 'CS2' }]);
+  tracker.handlePresenceUpdate(null, pL1);
+  await clock.advanceBy(15000);
+
+  env.makePresence(uLock, [], { status: 'online' });
+  const endedBefore = tracker.counters.gamesEnded;
+  const movesBefore = env.apiLog.moves.length;
+  const removesBefore = env.apiLog.roleRemoves.length;
+
+  await Promise.all([
+    tracker.endSession('u_lock', { memberHint: uLock, guildHint: env.guild }),
+    tracker.endSession('u_lock', { memberHint: uLock, guildHint: env.guild }),
+    tracker.endSession('u_lock', { memberHint: uLock, guildHint: env.guild }),
+  ]);
+
+  assert.equal(tracker.counters.gamesEnded - endedBefore, 1, 'Aynı oturum yalnızca 1 kez bitmeli');
+  assert.equal(env.apiLog.moves.length - movesBefore, 1, 'Yalnızca 1 kez Salon 1\'e taşınmalı');
+  assert.equal(env.apiLog.roleRemoves.length - removesBefore, 1, 'Rol kaldırma tek sefer ve idempotent olmalı');
+
+  // R12b: Rol kuyruğu yüksek öncelik testi (priority: true normal işlerin önüne geçer)
+  const order = [];
+  const pq = new activityTracker.RateLimitedQueue({
+    maxConcurrency: 1,
+    gapMs: 0,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    nowFn: clock.nowFn,
+  });
+  let releaseFirst;
+  const firstGate = new Promise((r) => {
+    releaseFirst = r;
+  });
+  const firstDone = pq.enqueue(async () => {
+    order.push('running');
+    await firstGate;
+  });
+  const normalTask = pq.enqueue(async () => order.push('normal'), { priority: false });
+  const highTask = pq.enqueue(async () => order.push('high_remove'), { priority: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseFirst();
+  await Promise.all([firstDone, normalTask, highTask]);
+  assert.deepEqual(order, ['running', 'high_remove', 'normal']);
+
+  await tracker.shutdown();
+});
+
+test('R13. Ayarlarım (≤5 düğme/satır, act_ret kalıcı/sahip/devre dışı, TR/EN), 🧪 RETURN_* açıklamaları, 🛠️ RETURN_CHANNEL_ID doğrulaması ve panel notu', async () => {
+  const clock = createFakeClock();
+  const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
+  const env = createMockActivityGuild();
+  const tracker = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: silentLogger,
+  });
+  tracker.guild = env.guild;
+
+  const userM = env.makeMember('u_ui');
+  const otherM = env.makeMember('u_other');
+  const devM = env.makeMember('u_dev', { roleIds: [config.ROLES.DEVELOPER] });
+
+  // 1) Düğme dizilimi (her satırda ≤5 düğme) ve TR/EN metinler
+  const panelTr = aktivitemCmd.buildSettingsPanelPayload('u_ui', 'tr', null, database, {
+    member: userM,
+    guild: env.guild,
+  });
+  assert.equal(panelTr.components.length, 2);
+  assert.ok(panelTr.components[0].toJSON().components.length <= 5);
+  assert.ok(panelTr.components[1].toJSON().components.length <= 5);
+  assert.match(panelTr.content, /Oyunu kapattığında oyun rolün alınır/);
+  assert.equal(panelTr.components[0].toJSON().components[2].custom_id, 'act_ret:u_ui');
+  assert.match(panelTr.components[0].toJSON().components[2].label, /Salon 1'e Dön: ✅ Açık/);
+
+  const panelEn = aktivitemCmd.buildSettingsPanelPayload('u_ui', 'en', null, database, {
+    member: userM,
+    guild: env.guild,
+  });
+  assert.match(panelEn.content, /When you close your game your game role is removed/);
+  assert.match(panelEn.components[0].toJSON().components[2].label, /Return to Lounge 1 after game: ✅ On/);
+
+  // 2) Başkası basarsa reddedilir, ayar değişmez
+  let otherReply = null;
+  await aktivitemCmd.handleActivityButton(
+    {
+      customId: 'act_ret:u_ui',
+      user: otherM.user,
+      member: otherM,
+      guild: env.guild,
+      locale: 'tr',
+      reply: async (p) => {
+        otherReply = p;
+      },
+    },
+    { tracker, db: database }
+  );
+  assert.equal(otherReply.ephemeral, true);
+  assert.equal(tracker.getPrefs('u_ui').returnToLobby, true);
+
+  // 3) Sahibi basar -> kapanır ve yeniden başlatmada (database.init) kalıcı olur
+  let updatedPanel = null;
+  await aktivitemCmd.handleActivityButton(
+    {
+      customId: 'act_ret:u_ui',
+      user: userM.user,
+      member: userM,
+      guild: env.guild,
+      locale: 'tr',
+      update: async (p) => {
+        updatedPanel = p;
+      },
+    },
+    { tracker, db: database }
+  );
+  assert.match(updatedPanel.components[0].toJSON().components[2].label, /❌ Kapalı/);
+  database.data.activityPrefs = {};
+  database.init();
+  assert.equal(tracker.getPrefs('u_ui').returnToLobby, false, 'returnToLobby diskten geri yüklenmeli');
+
+  // 4) autoMove kapalıyken act_ret düğmesi devre dışı (disabled) ve metinde açıklama var
+  database.setActivityPrefs('u_ui', { autoMove: false });
+  const disabledPanel = aktivitemCmd.buildSettingsPanelPayload('u_ui', 'tr', null, database, {
+    member: userM,
+    guild: env.guild,
+  });
+  assert.equal(disabledPanel.components[0].toJSON().components[2].disabled, true);
+  assert.match(disabledPanel.content, /devre dışıdır/);
+
+  // 5) 🧪 tüm RETURN_* açıklamaları (TR & EN) ve genel başlık
+  const returnReasons = [
+    TRANSFER_REASONS.RETURN_MOVED,
+    TRANSFER_REASONS.RETURN_SKIPPED_NOT_IN_VOICE,
+    TRANSFER_REASONS.RETURN_SKIPPED_NOT_GAME_CHANNEL,
+    TRANSFER_REASONS.RETURN_SKIPPED_OTHER_GAME_ACTIVE,
+    TRANSFER_REASONS.RETURN_SKIPPED_OPTED_OUT,
+    TRANSFER_REASONS.RETURN_SKIPPED_NO_PRESENCE,
+    TRANSFER_REASONS.RETURN_TARGET_NOT_FOUND,
+    TRANSFER_REASONS.RETURN_TARGET_FULL,
+    TRANSFER_REASONS.RETURN_NO_PERMISSION,
+    TRANSFER_REASONS.RETURN_FAILED,
+  ];
+  for (const code of returnReasons) {
+    tracker.recordDecision('u_ui', { trigger: 'game-ended', result: 'skipped', reason: code, game: 'CS2' });
+    const whyTr = aktivitemCmd.buildWhyNotMovedPayload({ userId: 'u_ui', lang: 'tr', tracker });
+    const whyEn = aktivitemCmd.buildWhyNotMovedPayload({ userId: 'u_ui', lang: 'en', tracker });
+    assert.match(whyTr.content, /Son Karar/);
+    assert.match(whyEn.content, /Last Decision/);
+    assert.ok(whyTr.content.includes(code));
+    assert.ok(!whyTr.content.includes('Sebep kodu:'), `${code} için TR açıklama tanımlı olmalı`);
+    assert.ok(!whyEn.content.includes('Reason code:'), `${code} için EN açıklama tanımlı olmalı`);
+  }
+
+  // 6) 🛠️ Sistem Durumu: Salon 1 geçerli (✅) ve eksik/izin yok (⚠️) + kimliksiz RETURN sayaçları
+  const sysOk = aktivitemCmd.buildSystemStatusPayload({
+    guild: env.guild,
+    lang: 'tr',
+    tracker,
+    db: database,
+  });
+  assert.match(sysOk.content, /✅ \*\*Dönüş Kanalı \(Salon 1\):\*\*/);
+  assert.match(sysOk.content, /RETURN_MOVED=/);
+  assert.match(sysOk.content, /oyunBitti=/);
+  assert.match(sysOk.content, /rolAlındı=/);
+
+  const missingRetEnv = createMockActivityGuild({ includeReturnChannel: false });
+  const sysWarn = aktivitemCmd.buildSystemStatusPayload({
+    guild: missingRetEnv.guild,
+    lang: 'tr',
+    tracker,
+    db: database,
+  });
+  assert.match(sysWarn.content, /⚠️ \*\*Dönüş Kanalı \(Salon 1\):\*\*/);
+
+  // Developer panelinde Satır 2'de 3 düğme olmalı (≤5)
+  const devPanel = aktivitemCmd.buildSettingsPanelPayload('u_dev', 'tr', null, database, {
+    member: devM,
+    guild: env.guild,
+  });
+  assert.equal(devPanel.components[1].toJSON().components.length, 3);
+
+  // Kayıt paneli notu Salon 1 dönüşünü de kapsamalı, customId'ler korunmalı
+  const regPanel = createRegisterPanel();
+  const regDesc = regPanel.embeds.map((e) => e.toJSON().description).join('\n');
+  assert.match(regDesc, /Salon 1/);
+  assert.match(regDesc, /Lounge 1/);
+  assert.equal(regPanel.components[0].toJSON().components[0].custom_id, 'btn_kayit_ol');
+  assert.equal(regPanel.components[0].toJSON().components[1].custom_id, 'btn_kayit_ol_en');
+
+  await tracker.shutdown();
+});
+
+test('R14 & R15. Tek seferlik dönüş duyurusu (etiketsiz, hata durumunda tekrar dener) ve gizlilik / kalıcı veri + konsol log kontrolü', async () => {
+  const clock = createFakeClock(Date.parse('2026-11-22T20:00:00Z'));
+  const loggedLines = [];
+  const captureLogger = {
+    log: (m) => loggedLines.push(String(m)),
+    warn: (m) => loggedLines.push(String(m)),
+    error: (m) => loggedLines.push(String(m)),
+  };
+
+  // R14a: Gönderim başarısız olursa returnAnnouncedAt İŞARETLENMEZ, sonra tekrar denenir
+  const curMonth = database.getCurrentIstanbulMonth();
+  database.data.activityMeta = { announcedAt: Date.now(), returnAnnouncedAt: null, lastResetMonth: curMonth };
+  database.save();
+
+  const failEnv = createMockActivityGuild({ commandChannelCanSend: false });
+  const tFail = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: captureLogger,
+  });
+  const failRes = await tFail.checkOneTimeReturnAnnouncement(failEnv.guild);
+  assert.equal(failRes.announced, false);
+  assert.equal(database.getActivityMeta().returnAnnouncedAt, null, 'Başarısız gönderimde işaretlenmemeli');
+  await tFail.shutdown();
+
+  // R14b: Komut kanalı erişilebilir olunca tek sefer gider, kimseyi etiketlemez, diskte kalıcı olur
+  const okEnv = createMockActivityGuild();
+  const tOk = new ActivityTracker({
+    config: makeTestConfig(),
+    db: database,
+    nowFn: clock.nowFn,
+    setTimeoutFn: clock.setTimeoutFn,
+    clearTimeoutFn: clock.clearTimeoutFn,
+    setIntervalFn: clock.setIntervalFn,
+    clearIntervalFn: clock.clearIntervalFn,
+    logger: captureLogger,
+  });
+  await tOk.initForGuild(okEnv.guild);
+  assert.equal(okEnv.apiLog.commandMessages.length, 1);
+  assert.deepEqual(okEnv.apiLog.commandMessages[0].allowedMentions, { parse: [] });
+  assert.match(okEnv.apiLog.commandMessages[0].content, /Salon 1'e aktarılırsın/);
+  assert.match(okEnv.apiLog.commandMessages[0].content, /Lounge 1/);
+  assert.ok(typeof database.getActivityMeta().returnAnnouncedAt === 'number');
+
+  // Diskten yeniden yükle ve tekrar çağır -> ikinci kez gönderilmemeli
+  database.data.activityMeta = { announcedAt: null, returnAnnouncedAt: null, lastResetMonth: '1999-01' };
+  database.init();
+  assert.ok(typeof database.getActivityMeta().returnAnnouncedAt === 'number', 'returnAnnouncedAt diskte kalıcı olmalı');
+  const secondRes = await tOk.checkOneTimeReturnAnnouncement(okEnv.guild);
+  assert.equal(secondRes.announced, false);
+  assert.equal(okEnv.apiLog.commandMessages.length, 1, 'Duyuru ikinci kez gönderilmemeli');
+
+  // R15: Oyun + bitiş + saatlik log sonrası diskte geçmiş/karar izi ve loglarda kullanıcı kimliği OLMAMALI
+  const tsbCh = okEnv.channels.get('1571912346773885050');
+  const uPriv = okEnv.makeMember('999888777666', { voiceChannel: tsbCh });
+  const p1 = okEnv.makePresence(uPriv, [{ type: ActivityType.Playing, name: 'The Strongest Battlegrounds' }]);
+  tOk.handlePresenceUpdate(null, p1);
+  await clock.advanceBy(15000);
+  const p2 = okEnv.makePresence(uPriv, [], { status: 'online' });
+  tOk.handlePresenceUpdate(p1, p2);
+  await clock.advanceBy(5000);
+
+  tOk.logCounterSummary('test özeti');
+  const lastLog = loggedLines[loggedLines.length - 1];
+  assert.match(lastLog, /oyunBitti=1/);
+  assert.match(lastLog, /rolAlındı=1/);
+  assert.match(lastLog, /RETURN_MOVED=1/);
+  assert.equal(loggedLines.join('\n').includes('999888777666'), false, 'Konsol loglarında kullanıcı ID olmamalı');
+
+  database.save();
+  const diskJson = JSON.parse(fs.readFileSync(path.join(tempDataDir, 'database.json'), 'utf8'));
+  assert.equal(diskJson.lastDecisions, undefined);
+  assert.equal(diskJson.counters, undefined);
+  assert.equal(diskJson.activityHistory, undefined);
+  assert.equal(diskJson.activitySessions, undefined);
+  assert.equal(diskJson.returnHistory, undefined);
+  assert.ok(diskJson.activityPrefs && diskJson.activityStats && diskJson.activityMeta);
+
+  await tOk.shutdown();
 });
