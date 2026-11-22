@@ -200,6 +200,9 @@ function matchSingleActivity(activity, cfg = activityConfig, disabledGameIds = n
  * Eşitlikte timestamps.start değeri en yeni olan, yoksa listedeki ilk etkinlik seçilir.
  */
 function detectGame(presence, cfg = activityConfig, disabledGameIds = new Set()) {
+  const rawStatus = typeof presence?.status === 'string' ? presence.status.toLowerCase() : null;
+  if (rawStatus === 'offline' || rawStatus === 'invisible') return null;
+
   const activities = Array.isArray(presence?.activities) ? presence.activities : [];
   if (activities.length === 0) return null;
 
@@ -248,6 +251,11 @@ function detectGame(presence, cfg = activityConfig, disabledGameIds = new Set())
 function classifyPresence(presence, cfg = activityConfig, disabledGameIds = new Set()) {
   if (!presence || typeof presence !== 'object') {
     return { kind: 'no_presence', hasPlaying: false, detected: null, rawName: null };
+  }
+
+  const rawStatus = typeof presence.status === 'string' ? presence.status.toLowerCase() : null;
+  if (rawStatus === 'offline' || rawStatus === 'invisible') {
+    return { kind: 'not_playing', hasPlaying: false, detected: null, rawName: null };
   }
 
   const activities = Array.isArray(presence.activities) ? presence.activities : [];
@@ -461,7 +469,9 @@ function createEmptyCounters() {
     unmatchedActivity: 0,
     ignoredActivity: 0,
     sessionConfirmed: 0,
+    gamesEnded: 0,
     roleAdded: 0,
+    rolesRemoved: 0,
     roleFailed: 0,
     checkpointWritten: 0,
     dbSaveSuccess: 0,
@@ -494,10 +504,21 @@ class RateLimitedQueue {
     this._closed = false;
   }
 
-  enqueue(taskFn) {
+  enqueue(taskFn, { priority = false } = {}) {
     if (this._closed) return Promise.resolve(null);
     return new Promise((resolve) => {
-      this._queue.push({ taskFn, resolve });
+      const item = { taskFn, resolve, priority: Boolean(priority) };
+      if (item.priority) {
+        // Yüksek öncelikli işler (örn. oyun bitişinde rol alma) normal işlerin önüne geçer
+        const firstNormalIdx = this._queue.findIndex((q) => !q.priority);
+        if (firstNormalIdx === -1) {
+          this._queue.push(item);
+        } else {
+          this._queue.splice(firstNormalIdx, 0, item);
+        }
+      } else {
+        this._queue.push(item);
+      }
       this._drain();
     });
   }
@@ -600,6 +621,9 @@ class ActivityTracker {
     // Üye başına eşzamanlı evaluateTransfer kilidi
     this.evaluatingUsers = new Set();
 
+    // Üye başına eşzamanlı endSession (oyun bitişi) kilidi — her oturum için tek sefer çalışır
+    this.endingSessions = new Set();
+
     // Üye başına 3 sn ses kanalı değişimi debounce zamanlayıcıları
     this.voiceDebounceTimers = new Map();
 
@@ -661,12 +685,13 @@ class ActivityTracker {
     this.monthlyCheckInterval = null;
     this.startupCleanupTimer = null;
     this.sweepInterval = null;
+    this.roleCleanupInterval = null;
     this.hourlyLogInterval = null;
   }
 
   /**
    * Tek merkezi kullanıcı etkinlik tercihi okuyucusu.
-   * activityPrefs'te kaydı olmayan her üyeye { tracking: true, autoMove: true } döner.
+   * activityPrefs'te kaydı olmayan her üyeye { tracking: true, autoMove: true, returnToLobby: true } döner.
    */
   getPrefs(userId) {
     if (typeof this.db?.getPrefs === 'function') {
@@ -675,7 +700,7 @@ class ActivityTracker {
     if (typeof this.db?.getActivityPrefs === 'function') {
       return this.db.getActivityPrefs(userId);
     }
-    return { tracking: true, autoMove: true };
+    return { tracking: true, autoMove: true, returnToLobby: true };
   }
 
   getGameLabel(gameId, lang = 'tr') {
@@ -700,9 +725,22 @@ class ActivityTracker {
    */
   logCounterSummary(periodLabel = 'son 1 saat') {
     const c = this.counters;
+    const r = c.reasons || {};
     const dbStatus = this.db?.lastSaveOk === false ? 'ERR' : 'OK';
+    const returnSkipTotal =
+      (r.RETURN_SKIPPED_NOT_IN_VOICE || 0) +
+      (r.RETURN_SKIPPED_NOT_GAME_CHANNEL || 0) +
+      (r.RETURN_SKIPPED_OTHER_GAME_ACTIVE || 0) +
+      (r.RETURN_SKIPPED_OPTED_OUT || 0) +
+      (r.RETURN_SKIPPED_NO_PRESENCE || 0);
+    const returnErrTotal =
+      (r.RETURN_TARGET_NOT_FOUND || 0) +
+      (r.RETURN_TARGET_FULL || 0) +
+      (r.RETURN_NO_PERMISSION || 0) +
+      (r.RETURN_FAILED || 0);
+
     this.logger.log(
-      `[OYUN ETKİNLİĞİ] ${periodLabel}: presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} rol=${c.roleAdded} süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} uyeFetch=${c.memberFetchCalls}(atlanan:${c.memberFetchSkipped},hata:${c.memberFetchErrors}) | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${c.reasons.NOT_IN_VOICE}`
+      `[OYUN ETKİNLİĞİ] ${periodLabel}: presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} oyunBitti=${c.gamesEnded} rol=${c.roleAdded} rolAlındı=${c.rolesRemoved} süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} uyeFetch=${c.memberFetchCalls}(atlanan:${c.memberFetchSkipped},hata:${c.memberFetchErrors}) | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${r.NOT_IN_VOICE || 0} | dönüş: RETURN_MOVED=${r.RETURN_MOVED || 0} RETURN_SKIP=${returnSkipTotal} RETURN_ERR=${returnErrTotal}`
     );
   }
 
@@ -964,8 +1002,9 @@ class ActivityTracker {
     // 2. Aylık sıfırlama kontrolü (bot ay dönümünde kapalıydıysa açılışta temizler)
     await this.checkMonthlyReset(guild);
 
-    // 3. Sistem ilk kez çalışıyorsa tek seferlik iki dilli duyuru
+    // 3. Sistem ilk kez çalışıyorsa tek seferlik iki dilli duyuru + oyun bitişi duyurusu
     await this.checkOneTimeAnnouncement(guild);
+    await this.checkOneTimeReturnAnnouncement(guild);
 
     // 4. Önbellekteki mevcut presence'lerden oturumları kur (üyeleri fetch ETME, açılışta taşıma YAPMA)
     let seededCount = 0;
@@ -1052,6 +1091,14 @@ class ActivityTracker {
       this.sweepInterval?.unref?.();
     }
 
+    const roleCleanupMs = Number(this.config.TIMINGS.ROLE_CLEANUP_INTERVAL_MS ?? 300000);
+    if (roleCleanupMs > 0) {
+      this.roleCleanupInterval = this._setInterval(() => {
+        this.runPeriodicRoleCleanup(guild).catch(() => {});
+      }, Math.max(5000, roleCleanupMs));
+      this.roleCleanupInterval?.unref?.();
+    }
+
     const hourlyMs = Math.max(60000, Number(this.config.TIMINGS.HOURLY_LOG_INTERVAL_MS || 3600000));
     this.hourlyLogInterval = this._setInterval(() => {
       this.logCounterSummary('son 1 saat');
@@ -1079,6 +1126,10 @@ class ActivityTracker {
       this._clearInterval(this.sweepInterval);
       this.sweepInterval = null;
     }
+    if (this.roleCleanupInterval) {
+      this._clearInterval(this.roleCleanupInterval);
+      this.roleCleanupInterval = null;
+    }
     if (this.hourlyLogInterval) {
       this._clearInterval(this.hourlyLogInterval);
       this.hourlyLogInterval = null;
@@ -1087,6 +1138,64 @@ class ActivityTracker {
       this._clearTimeout(this.startupCleanupTimer);
       this.startupCleanupTimer = null;
     }
+  }
+
+  /**
+   * 5 dakikada bir SADECE 4 aktiflik rolünün role.members önbelleğindeki üyeler için
+   * pasif rol temizliği yapar (tüm sunucu üyelerini dolaşmaz, Salon 1'e taşıma YAPMAZ).
+   * Presence verisi yoksa veya offline/görünmez ise belirsiz sayıp role dokunmaz.
+   */
+  async runPeriodicRoleCleanup(guild = this.guild) {
+    if (!guild || !this.isPresenceIntentAvailable()) return { removedCount: 0 };
+
+    let removedCount = 0;
+    const promises = [];
+
+    for (const [familyKey, family] of Object.entries(this.config.FAMILIES || {})) {
+      if (this.disabledFamilyIds.has(familyKey) || !family.roleId) continue;
+      const role = guild.roles?.cache?.get?.(family.roleId);
+      if (!role || !role.members) continue;
+
+      for (const member of role.members.values()) {
+        if (!member || member.user?.bot) continue;
+        const userId = String(member.id);
+
+        // Tracker'da bu aileden aktif veya onay bekleyen oturum varsa dokunma
+        const session = this.sessions.get(userId);
+        if (
+          session &&
+          ((session.confirmed && session.family === familyKey) || session.pendingFamily === familyKey)
+        ) {
+          continue;
+        }
+
+        // Canlı presence kontrolü: veri yoksa veya offline/görünmez ise belirsiz -> rolü ALMA
+        const livePresence = member.presence || guild.presences?.cache?.get?.(userId) || null;
+        if (!livePresence) continue;
+        const rawStatus =
+          typeof livePresence.status === 'string' ? livePresence.status.toLowerCase() : null;
+        const isOnlineStatus =
+          rawStatus === 'online' || rawStatus === 'idle' || rawStatus === 'dnd';
+        if (!isOnlineStatus) continue;
+
+        const liveDetected = detectGame(livePresence, this.config, this.disabledGameIds);
+        if (liveDetected && liveDetected.family === familyKey) {
+          continue;
+        }
+
+        removedCount += 1;
+        promises.push(
+          this.enqueueRoleRemove(member, family.roleId, familyKey, 'Periyodik aktiflik rolü temizliği', {
+            priority: false,
+          })
+        );
+      }
+    }
+
+    if (promises.length > 0) {
+      await Promise.all(promises);
+    }
+    return { removedCount };
   }
 
   /**
@@ -1158,8 +1267,12 @@ class ActivityTracker {
     const prefs = this.getPrefs(uid);
     if (!prefs.tracking) return;
 
-    // Hızlı eleme: Playing etkinlikleri birebir aynıysa ağır iş yapma
-    if (oldPresence && getPlayingActivitiesSignature(oldPresence) === getPlayingActivitiesSignature(newPresence)) {
+    // Hızlı eleme: durum ve Playing etkinlikleri birebir aynıysa ağır iş yapma
+    if (
+      oldPresence &&
+      oldPresence.status === newPresence.status &&
+      getPlayingActivitiesSignature(oldPresence) === getPlayingActivitiesSignature(newPresence)
+    ) {
       return;
     }
 
@@ -1307,6 +1420,9 @@ class ActivityTracker {
     }
 
     // 3c. Farklı bir oyuna geçildi (detected.gameId !== session.gameId)
+    // Yeni oyuna geçiş olduğu için varsa bitiş zamanlayıcısını iptal et (Salon 1'e dönüş YAPILMAZ!)
+    this._clearTimer(session, 'stopGraceTimer');
+
     if (session.currentlyDetectedGameId === session.gameId) {
       session.lastSeen = now;
       this._flushSessionElapsed(session, now);
@@ -1337,11 +1453,6 @@ class ActivityTracker {
       session.pendingActivityStartedAt =
         detected.startedAt > 0 && detected.startedAt <= now ? detected.startedAt : now;
       this._scheduleConfirm(session, member, guild, { skipEvaluate });
-    }
-
-    // Yeni oyun CONFIRM_SEC'ten önce kapanırsa eski oturumun sonsuza dek asılı kalmaması için stopGrace garanti et
-    if (!session.stopGraceTimer) {
-      this._scheduleStopGrace(session, member, guild);
     }
   }
 
@@ -1451,7 +1562,7 @@ class ActivityTracker {
 
   _scheduleStopGrace(session, member, guild) {
     this._clearTimer(session, 'stopGraceTimer');
-    const graceMs = Math.max(0, Number(this.config.TIMINGS.STOP_GRACE_SEC ?? 60) * 1000);
+    const graceMs = Math.max(0, Number(this.config.TIMINGS.STOP_GRACE_SEC ?? 5) * 1000);
 
     session.stopGraceTimer = this._setTimeout(() => {
       session.stopGraceTimer = null;
@@ -1461,30 +1572,434 @@ class ActivityTracker {
   }
 
   _onStopGraceElapsed(userId, memberHint, guildHint) {
-    const uid = String(userId);
-    const session = this.sessions.get(uid);
-    if (!session) return;
+    return this.endSession(userId, { memberHint, guildHint, trigger: 'game-ended' }).catch(() => {});
+  }
 
-    // Son görülme anına kadar olan süreyi kaydet (bekleme süresi ASLA eklenmez)
-    if (session.confirmed && session.gameId) {
-      this._flushSessionElapsed(session, session.lastSeen || this.now());
-      this.db.flushDirty();
+  /**
+   * MERKEZİ OYUN BİTİŞ AKIŞI (endSession).
+   * STOP_GRACE_SEC dolduğunda çalışır; her oturum için tek sefer çalışacak şekilde kilitlidir:
+   * 1. Canlı presence'ı yeniden okur (boşsa 30 sn cooldown + tek uçuş korumalı safeFetchMember yedeği).
+   * 2. Oyun geri geldiyse iptal eder; farklı oyun varsa mevcut oyun değişimi mantığına devreder.
+   * 3. Oyun gerçekten bittiyse (veya offline/presence yoksa):
+   *    (i) Süreyi son görülme anına kadar finalize eder (STOP_GRACE süresi sayılmaz),
+   *    (ii) Aile rolünü rol kuyruğunda yüksek öncelikle HEMEN alır,
+   *    (iii) Salon 1'e sessiz dönüş kurallarını değerlendirir (offline/presence yoksa taşımaz),
+   *    (iv) Oturumu temizler, karar izini ve kimliksiz sayaçları günceller.
+   */
+  async endSession(userId, { memberHint = null, guildHint = null, trigger = 'game-ended' } = {}) {
+    const uid = String(userId || '');
+    if (!uid) return { ended: false };
+
+    // Aynı oturum için eşzamanlı tetikleyicilere karşı kilit
+    if (this.endingSessions.has(uid)) {
+      return { ended: false, alreadyEnding: true };
     }
 
-    const oldFamily = session.family;
-    const guild = guildHint || this.guild;
-    const member = guild?.members?.cache?.get?.(uid) || memberHint || null;
+    const session = this.sessions.get(uid);
+    if (!session || !session.confirmed) {
+      return { ended: false };
+    }
 
-    this.cancelActiveCountdown(uid, { consumeToken: false });
-    this._clearSessionTimers(session);
-    this.sessions.delete(uid);
+    this.endingSessions.add(uid);
+    try {
+      const guild = guildHint || this.guild;
+      let member = guild?.members?.cache?.get?.(uid) || memberHint || null;
 
-    if (member && oldFamily && !this.disabledFamilyIds.has(oldFamily)) {
-      const roleId = this.config.FAMILIES?.[oldFamily]?.roleId;
-      if (roleId) {
-        this.enqueueRoleRemove(member, roleId, oldFamily, 'Oyun etkinliği sona erdi');
+      // 1. Canlı presence'ı (ve önbellekte yoksa üyeyi) yeniden oku (30 sn cooldown + tek-uçuş korumalı safeFetchMember yedeği)
+      let livePresence = member?.presence || guild?.presences?.cache?.get?.(uid) || null;
+      if ((!livePresence || !member) && guild) {
+        const fetched = await this.safeFetchMember(guild, uid, { withPresences: true });
+        if (fetched) {
+          member = fetched;
+          livePresence = fetched.presence || guild?.presences?.cache?.get?.(uid) || livePresence;
+        }
+      }
+
+      // Asenkron bekleme sırasında oturum silindiyse veya değiştiyse çık
+      if (this.sessions.get(uid) !== session || !session.confirmed) {
+        return { ended: false, stale: true };
+      }
+
+      // Takip kapatıldıysa oturumu sessizce temizle (taşıma yok)
+      const prefs = this.getPrefs(uid);
+      if (!prefs.tracking) {
+        this.cancelActiveCountdown(uid, { consumeToken: false });
+        this._clearSessionTimers(session);
+        this.sessions.delete(uid);
+        return { ended: true, reason: TRANSFER_REASONS.RETURN_SKIPPED_OPTED_OUT };
+      }
+
+      // 2. Canlı presence durumunu incele
+      const rawStatus =
+        typeof livePresence?.status === 'string' ? livePresence.status.toLowerCase() : null;
+      const isOnlineStatus =
+        rawStatus === 'online' || rawStatus === 'idle' || rawStatus === 'dnd';
+      const isPresenceMissingOrOffline = !livePresence || !isOnlineStatus;
+
+      let classified = null;
+      if (!isPresenceMissingOrOffline) {
+        classified = classifyPresence(livePresence, this.config, this.disabledGameIds);
+
+        // (a) Aynı oyun geri geldi -> iptal, hiçbir şey olmaz
+        if (classified.detected && classified.detected.gameId === session.gameId) {
+          const now = this.now();
+          if (session.currentlyDetectedGameId !== session.gameId) {
+            session.lastAccountedAt = now;
+          }
+          session.currentlyDetectedGameId = session.gameId;
+          session.lastSeen = now;
+          this._clearTimer(session, 'stopGraceTimer');
+          return { ended: false, aborted: 'same_game_returned' };
+        }
+
+        // (b) Farklı bir desteklenen oyun algılandı -> mevcut oyun değişimi mantığı (Salon 1'e dönüş YOK)
+        if (classified.detected && classified.detected.gameId !== session.gameId) {
+          this._clearTimer(session, 'stopGraceTimer');
+          this.processDetectedGame({
+            userId: uid,
+            member,
+            guild,
+            detected: classified.detected,
+          });
+          return { ended: false, aborted: 'switched_game' };
+        }
+      }
+
+      // 3. Bitiş sırası:
+      // (i) Süreyi son görülme anına kadar finalize et (STOP_GRACE bekleme süresi sayılmaz)
+      const oldGameId = session.gameId;
+      const oldFamily = session.family;
+      const displayGameName = this.getGameLabel(oldGameId);
+
+      if (oldGameId) {
+        this._flushSessionElapsed(session, session.lastSeen || this.now());
+        this.db.flushDirty();
+      }
+
+      // Oturumu ve zamanlayıcılarını temizle
+      this.cancelActiveCountdown(uid, { consumeToken: false });
+      this._clearSessionTimers(session);
+      this.sessions.delete(uid);
+      this.counters.gamesEnded += 1;
+
+      // (ii) Aile rolünü HEMEN al (rol kuyruğunda yüksek öncelik; aynı aileden başka oturum varsa dokunma)
+      const currentSessAfterDelete = this.sessions.get(uid);
+      const hasSameFamilyActive = Boolean(
+        currentSessAfterDelete &&
+          currentSessAfterDelete.confirmed &&
+          currentSessAfterDelete.family === oldFamily
+      );
+      let roleRemovePromise = Promise.resolve(false);
+      if (member && oldFamily && !this.disabledFamilyIds.has(oldFamily) && !hasSameFamilyActive) {
+        const roleId = this.config.FAMILIES?.[oldFamily]?.roleId;
+        if (roleId) {
+          roleRemovePromise = this.enqueueRoleRemove(
+            member,
+            roleId,
+            oldFamily,
+            'Oyun etkinliği sona erdi',
+            { priority: true }
+          );
+        }
+      }
+
+      // (iii) Salon 1'e sessiz dönüş kurallarını değerlendir
+      const returnPromise = this.evaluateReturnToLobby({
+        userId: uid,
+        member,
+        guild,
+        displayGameName,
+        trigger,
+        isPresenceMissingOrOffline,
+        hasOtherPlayingActivity: Boolean(classified && classified.kind === 'unmatched'),
+      });
+
+      const [, returnOutcome] = await Promise.all([roleRemovePromise, returnPromise]);
+      return {
+        ended: true,
+        gameId: oldGameId,
+        family: oldFamily,
+        returnOutcome,
+      };
+    } finally {
+      this.endingSessions.delete(uid);
+    }
+  }
+
+  /**
+   * Oyun bitişinde üyenin Salon 1 (RETURN_CHANNEL_ID) ses kanalına sessizce aktarılıp aktarılmayacağını değerlendirir.
+   * Geri sayım, kanal mesajı ve DM göndermez; botun kendi taşıması BOT_MOVE_IGNORE_SEC ile işaretlenir.
+   */
+  async evaluateReturnToLobby({
+    userId,
+    member,
+    guild,
+    displayGameName = null,
+    trigger = 'game-ended',
+    isPresenceMissingOrOffline = false,
+    hasOtherPlayingActivity = false,
+  }) {
+    const uid = String(userId || '');
+    if (!uid) return { moved: false };
+
+    // 1. Genel özellik anahtarı ve kullanıcı tercihleri (tracking + autoMove + returnToLobby)
+    const prefs = this.getPrefs(uid);
+    if (
+      this.config.RETURN_ENABLED === false ||
+      !prefs.tracking ||
+      !prefs.autoMove ||
+      !prefs.returnToLobby
+    ) {
+      return this.recordDecision(uid, {
+        trigger,
+        result: 'skipped',
+        reason: TRANSFER_REASONS.RETURN_SKIPPED_OPTED_OUT,
+        game: displayGameName,
+      });
+    }
+
+    // 2. Kesin kanıt kontrolü (presence yok veya offline/görünmez -> kanıt yetersiz, taşıma yok)
+    if (isPresenceMissingOrOffline) {
+      return this.recordDecision(uid, {
+        trigger,
+        result: 'skipped',
+        reason: TRANSFER_REASONS.RETURN_SKIPPED_NO_PRESENCE,
+        game: displayGameName,
+      });
+    }
+
+    // 3. Üye şu an canlı olarak bir ses kanalında mı? (Değilse bekleyen "sonra taşı" KURULMAZ)
+    const voiceState = member?.voice || guild?.voiceStates?.cache?.get?.(uid) || null;
+    const currentChannelId = voiceState?.channelId ? String(voiceState.channelId) : null;
+    if (!currentChannelId) {
+      return this.recordDecision(uid, {
+        trigger,
+        result: 'skipped',
+        reason: TRANSFER_REASONS.RETURN_SKIPPED_NOT_IN_VOICE,
+        game: displayGameName,
+      });
+    }
+
+    const returnChannelId = this.config.RETURN_CHANNEL_ID
+      ? String(this.config.RETURN_CHANNEL_ID)
+      : null;
+
+    // Üye zaten Salon 1'deyse hiçbir şey yapma (hata verme)
+    if (returnChannelId && currentChannelId === returnChannelId) {
+      return { moved: false, alreadyInReturnChannel: true };
+    }
+
+    // 4. Yalnızca yönetilen oyun kanallarındakiler Salon 1'e aktarılır (RETURN_ONLY_FROM_GAME_CHANNELS)
+    if (this.config.RETURN_ONLY_FROM_GAME_CHANNELS !== false) {
+      const managedIds =
+        typeof this.config.getManagedGameChannelIds === 'function'
+          ? this.config.getManagedGameChannelIds(this.config)
+          : activityConfig.getManagedGameChannelIds(this.config);
+
+      if (!managedIds.has(currentChannelId)) {
+        return this.recordDecision(uid, {
+          trigger,
+          result: 'skipped',
+          reason: TRANSFER_REASONS.RETURN_SKIPPED_NOT_GAME_CHANNEL,
+          game: displayGameName,
+          fromChannelId: currentChannelId,
+        });
       }
     }
+
+    // 5. Üyenin başka aktif oyun oturumu veya başka Playing oyun etkinliği varsa taşıma
+    const otherActiveSession = this.sessions.get(uid);
+    if (hasOtherPlayingActivity || (otherActiveSession && otherActiveSession.confirmed)) {
+      return this.recordDecision(uid, {
+        trigger,
+        result: 'skipped',
+        reason: TRANSFER_REASONS.RETURN_SKIPPED_OTHER_GAME_ACTIVE,
+        game: displayGameName,
+        fromChannelId: currentChannelId,
+      });
+    }
+
+    // 6. Salon 1 varlık ve normal ses kanalı kontrolü
+    const returnChannel =
+      returnChannelId && guild?.channels?.cache?.get
+        ? guild.channels.cache.get(returnChannelId) || null
+        : null;
+    if (!returnChannel || !this.config.isRegularVoiceChannel(returnChannel)) {
+      this.logErrorThrottled(
+        'return:target_not_found',
+        `[OYUN ETKİNLİĞİ DÖNÜŞ UYARISI] Salon 1 kanalı (${returnChannelId || 'tanımsız'}) bulunamadı veya ses kanalı değil (RETURN_TARGET_NOT_FOUND).`
+      );
+      return this.recordDecision(uid, {
+        trigger,
+        result: 'skipped',
+        reason: TRANSFER_REASONS.RETURN_TARGET_NOT_FOUND,
+        game: displayGameName,
+        fromChannelId: currentChannelId,
+        toChannelId: returnChannelId,
+      });
+    }
+
+    // 7. Salon 1 kapasite (userLimit) kontrolü
+    const userLimit = Number(returnChannel.userLimit) || 0;
+    const memberCount = returnChannel.members?.size ?? 0;
+    if (userLimit > 0 && memberCount >= userLimit) {
+      this.logErrorThrottled(
+        'return:target_full',
+        `[OYUN ETKİNLİĞİ DÖNÜŞ UYARISI] Salon 1 kanalı dolu (${memberCount}/${userLimit}); dönüş yapılamadı (RETURN_TARGET_FULL).`
+      );
+      return this.recordDecision(uid, {
+        trigger,
+        result: 'skipped',
+        reason: TRANSFER_REASONS.RETURN_TARGET_FULL,
+        game: displayGameName,
+        fromChannelId: currentChannelId,
+        toChannelId: returnChannel.id,
+      });
+    }
+
+    // 8. Bot izin kontrolleri (MoveMembers + Salon 1 ViewChannel/Connect)
+    const botMember = guild?.members?.me || null;
+    let hasPermission = true;
+    if (botMember?.permissions?.has && !botMember.permissions.has(PermissionFlagsBits.MoveMembers)) {
+      hasPermission = false;
+    }
+    if (hasPermission && botMember && typeof returnChannel.permissionsFor === 'function') {
+      const perms = returnChannel.permissionsFor(botMember);
+      if (perms && typeof perms.has === 'function') {
+        if (!perms.has(PermissionFlagsBits.ViewChannel) || !perms.has(PermissionFlagsBits.Connect)) {
+          hasPermission = false;
+        }
+      }
+    }
+    if (!hasPermission) {
+      this.logErrorThrottled(
+        'return:no_permission',
+        '[OYUN ETKİNLİĞİ DÖNÜŞ UYARISI] Salon 1 kanalına dönüş için bot yetkisi yetersiz (RETURN_NO_PERMISSION: Üyeleri Taşı veya Görüntüle/Bağlan izni eksik).'
+      );
+      return this.recordDecision(uid, {
+        trigger,
+        result: 'skipped',
+        reason: TRANSFER_REASONS.RETURN_NO_PERMISSION,
+        game: displayGameName,
+        fromChannelId: currentChannelId,
+        toChannelId: returnChannel.id,
+      });
+    }
+
+    if (typeof member?.voice?.setChannel !== 'function') {
+      this.logErrorThrottled(
+        'return:failed:no_setChannel',
+        '[OYUN ETKİNLİĞİ DÖNÜŞ HATASI] Üye ses taşıma yöntemi erişilebilir değil (RETURN_FAILED).'
+      );
+      return this.recordDecision(uid, {
+        trigger,
+        result: 'skipped',
+        reason: TRANSFER_REASONS.RETURN_FAILED,
+        game: displayGameName,
+        fromChannelId: currentChannelId,
+        toChannelId: returnChannel.id,
+      });
+    }
+
+    // 9. Mevcut taşıma kuyruğundan sessizce geçir; voiceStateUpdate tekrar tetiklenmesin diye BOT_MOVE_IGNORE_SEC koy
+    let outcome = null;
+    await this.moveQueue.enqueue(async () => {
+      const liveCh =
+        member?.voice?.channelId || guild?.voiceStates?.cache?.get?.(uid)?.channelId || null;
+      if (!liveCh) {
+        outcome = this.recordDecision(uid, {
+          trigger,
+          result: 'skipped',
+          reason: TRANSFER_REASONS.RETURN_SKIPPED_NOT_IN_VOICE,
+          game: displayGameName,
+          fromChannelId: currentChannelId,
+          toChannelId: returnChannel.id,
+        });
+        return;
+      }
+
+      if (String(liveCh) === String(returnChannel.id)) {
+        outcome = { moved: false, alreadyInReturnChannel: true };
+        return;
+      }
+
+      // Kuyrukta beklerken üye yeni bir oyun başlattıysa taşımadan vazgeç
+      if (this.sessions.has(uid)) {
+        outcome = this.recordDecision(uid, {
+          trigger,
+          result: 'skipped',
+          reason: TRANSFER_REASONS.RETURN_SKIPPED_OTHER_GAME_ACTIVE,
+          game: displayGameName,
+          fromChannelId: String(liveCh),
+          toChannelId: returnChannel.id,
+        });
+        return;
+      }
+
+      this.markBotMoveIgnore(uid, returnChannel.id);
+      try {
+        await member.voice.setChannel(returnChannel.id, "Oyun bitti: Salon 1'e dönüş");
+        outcome = this.recordDecision(uid, {
+          trigger,
+          result: 'moved',
+          reason: TRANSFER_REASONS.RETURN_MOVED,
+          game: displayGameName,
+          fromChannelId: String(liveCh),
+          toChannelId: returnChannel.id,
+        });
+      } catch (err) {
+        this.botMoveIgnoreUntil.delete(uid);
+        const code = err?.code || err?.status;
+        if (code === 40032) {
+          // Üye artık sesten çıkmış -> sessizce RETURN_SKIPPED_NOT_IN_VOICE
+          outcome = this.recordDecision(uid, {
+            trigger,
+            result: 'skipped',
+            reason: TRANSFER_REASONS.RETURN_SKIPPED_NOT_IN_VOICE,
+            game: displayGameName,
+            fromChannelId: String(liveCh),
+            toChannelId: returnChannel.id,
+          });
+        } else if (code === 50013 || code === 50001) {
+          this.logErrorThrottled(
+            'return:no_permission',
+            `[OYUN ETKİNLİĞİ DÖNÜŞ HATASI] Salon 1 kanalına taşıma izni yetersiz (${code} - RETURN_NO_PERMISSION).`
+          );
+          outcome = this.recordDecision(uid, {
+            trigger,
+            result: 'skipped',
+            reason: TRANSFER_REASONS.RETURN_NO_PERMISSION,
+            game: displayGameName,
+            fromChannelId: String(liveCh),
+            toChannelId: returnChannel.id,
+          });
+        } else {
+          if (code === 429) {
+            const retryMs = Number(err?.retryAfter || err?.data?.retry_after * 1000) || 2000;
+            this.moveQueue.pauseFor(retryMs);
+            this.logErrorThrottled(
+              'return:429',
+              '[OYUN ETKİNLİĞİ DÖNÜŞ UYARISI] Discord ses taşıma hız sınırına (429) takılındı; otomatik yeniden deneme yapılmadı (RETURN_FAILED).'
+            );
+          } else {
+            this.logErrorThrottled(
+              `return:failed:${code || 'err'}`,
+              `[OYUN ETKİNLİĞİ DÖNÜŞ HATASI] Salon 1 kanalına taşıma başarısız (${code || err?.message || 'bilinmeyen hata'} - RETURN_FAILED).`
+            );
+          }
+          outcome = this.recordDecision(uid, {
+            trigger,
+            result: 'skipped',
+            reason: TRANSFER_REASONS.RETURN_FAILED,
+            game: displayGameName,
+            fromChannelId: String(liveCh),
+            toChannelId: returnChannel.id,
+          });
+        }
+      }
+    });
+
+    return outcome || { moved: false };
   }
 
   // =========================================================================
@@ -1536,22 +2051,26 @@ class ActivityTracker {
     });
   }
 
-  enqueueRoleRemove(member, roleId, familyKey, reason) {
+  enqueueRoleRemove(member, roleId, familyKey, reason, { priority = false } = {}) {
     if (!member || !roleId || member.user?.bot) return Promise.resolve(false);
-    // Zaten yoksa gereksiz API çağrısı yapma
+    // Zaten yoksa gereksiz API çağrısı yapma (idempotent)
     if (!member.roles?.cache?.has?.(roleId)) return Promise.resolve(false);
 
-    return this.roleQueue.enqueue(async () => {
-      if (!member.roles?.cache?.has?.(roleId)) return false;
-      try {
-        await member.roles.remove(roleId, reason);
-        return true;
-      } catch (err) {
-        this.counters.roleFailed += 1;
-        this._handleRoleApiError(err, familyKey, 'kaldırılamadı');
-        return false;
-      }
-    });
+    return this.roleQueue.enqueue(
+      async () => {
+        if (!member.roles?.cache?.has?.(roleId)) return false;
+        try {
+          await member.roles.remove(roleId, reason);
+          this.counters.rolesRemoved += 1;
+          return true;
+        } catch (err) {
+          this.counters.roleFailed += 1;
+          this._handleRoleApiError(err, familyKey, 'kaldırılamadı');
+          return false;
+        }
+      },
+      { priority }
+    );
   }
 
   _handleRoleApiError(err, familyKey, actionText) {
@@ -2538,16 +3057,54 @@ class ActivityTracker {
   }
 
   /**
-   * Her SWEEP_SEC (30 sn) yalnızca şu anda bir ses kanalında olan botsuz üyeler için yedek tarama yapar.
-   * Tüm sunucu üyelerini dolaşmaz.
+   * Her SWEEP_SEC (30 sn) iki hafif kontrol yapar (tüm sunucu üyelerini dolaşmaz):
+   * 1. Onaylı oturumu olan üyelerde canlı presence'ı kontrol eder; oyun görünmüyor ve
+   *    bitiş zamanlayıcısı yoksa başlatır (kaçırılmış presenceUpdate yakalanır; Salon 1'e doğrudan taşımaz).
+   * 2. Şu anda bir ses kanalında olan botsuz üyeler için oyuna giriş yedek aktarma taraması yapar.
    */
   async runSweep(guild = this.guild) {
-    if (!guild || !this.isPresenceIntentAvailable()) return { evaluated: 0 };
+    if (!guild || !this.isPresenceIntentAvailable()) return { evaluated: 0, stopChecksStarted: 0 };
 
     const now = this.now();
+
+    // 1. Onaylı oturumlarda kaçırılmış oyun bitişini (presenceUpdate) yakala
+    let stopChecksStarted = 0;
+    for (const [uid, session] of Array.from(this.sessions.entries())) {
+      if (!session || !session.confirmed || !session.gameId) continue;
+      if (!this.getPrefs(uid).tracking) continue;
+      if (session.stopGraceTimer || this.endingSessions.has(uid)) continue;
+
+      const member = guild.members?.cache?.get?.(uid) || null;
+      const livePresence = member?.presence || guild.presences?.cache?.get?.(uid) || null;
+      const liveDetected = livePresence
+        ? detectGame(livePresence, this.config, this.disabledGameIds)
+        : null;
+
+      if (!liveDetected) {
+        stopChecksStarted += 1;
+        this.processDetectedGame({
+          userId: uid,
+          member,
+          guild,
+          detected: null,
+          skipEvaluate: true,
+        });
+      } else if (
+        liveDetected.gameId !== session.gameId &&
+        session.pendingGameId !== liveDetected.gameId
+      ) {
+        this.processDetectedGame({
+          userId: uid,
+          member,
+          guild,
+          detected: liveDetected,
+        });
+      }
+    }
+
     const candidates = new Map();
 
-    // 1. Öncelikle guild.voiceStates.cache üzerindeki aktif ses üyelerine bak
+    // 2. Öncelikle guild.voiceStates.cache üzerindeki aktif ses üyelerine bak
     if (guild.voiceStates?.cache && guild.voiceStates.cache.size > 0) {
       for (const [uid, vs] of guild.voiceStates.cache) {
         if (!vs?.channelId) continue;
@@ -2595,7 +3152,7 @@ class ActivityTracker {
     if (tasks.length > 0) {
       await Promise.all(tasks);
     }
-    return { evaluated };
+    return { evaluated, stopChecksStarted };
   }
 
   // =========================================================================
@@ -2728,6 +3285,44 @@ class ActivityTracker {
   }
 
   /**
+   * Oyun bitişi (rol alma + Salon 1'e dönüş) özelliği ilk kez çalıştığında
+   * (activityMeta.returnAnnouncedAt boşsa) tek seferlik iki dilli duyuru gönderir.
+   * Gönderilemezse sessizce loglar ve alanı işaretlemez (sonra tekrar dener).
+   */
+  async checkOneTimeReturnAnnouncement(guild = this.guild) {
+    const meta = this.db.getActivityMeta();
+    if (meta.returnAnnouncedAt) return { announced: false };
+
+    const cmdChannel = guild?.channels?.cache?.get?.(this.config.COMMAND_CHANNEL_ID) || null;
+    if (!cmdChannel || typeof cmdChannel.send !== 'function') {
+      this.logErrorThrottled(
+        'return_announce:no_channel',
+        '[OYUN ETKİNLİĞİ DUYURU] Oyun bitişi yenilik duyurusu için komut kanalı bulunamadı; daha sonra tekrar denenecek.'
+      );
+      return { announced: false, reason: 'no_channel' };
+    }
+
+    const message =
+      "🔙 Yenilik: Oyunu kapattığında oyun rolün alınır ve bir oyun ses kanalındaysan Salon 1'e aktarılırsın. İstemiyorsan /aktivitem → ⚙️ Ayarlarım'dan kapatabilirsin.\n" +
+      "🔙 New: When you close your game, your game role is removed and, if you're in a game voice channel, you'll be moved to Lounge 1. You can turn this off in /activity → ⚙️ My Settings.";
+
+    try {
+      await cmdChannel.send({
+        content: message,
+        allowedMentions: { parse: [] },
+      });
+      this.db.setActivityReturnAnnounced(this.now());
+      return { announced: true };
+    } catch (err) {
+      this.logErrorThrottled(
+        'return_announce:send_failed',
+        `[OYUN ETKİNLİĞİ DUYURU] Oyun bitişi yenilik duyurusu gönderilemedi (${err?.code || err?.message || 'bilinmeyen hata'}); daha sonra tekrar denenecek.`
+      );
+      return { announced: false, reason: 'send_failed' };
+    }
+  }
+
+  /**
    * Kullanıcı takibi kapattığında: tüm zamanlayıcıları/geri sayımları iptal et,
    * karar izini sil, 4 aktiflik rolünü hemen al, bu ayki süreleri sil ve bellekten temizle.
    */
@@ -2738,6 +3333,7 @@ class ActivityTracker {
     this.lastDecisions.delete(uid);
     this.botMoveIgnoreUntil.delete(uid);
     this.memberFetchLastAt.delete(uid);
+    this.endingSessions.delete(uid);
 
     const session = this.sessions.get(uid);
     if (session) {
@@ -2784,6 +3380,7 @@ class ActivityTracker {
     this.lastDecisions.delete(uid);
     this.botMoveIgnoreUntil.delete(uid);
     this.memberFetchLastAt.delete(uid);
+    this.endingSessions.delete(uid);
 
     const session = this.sessions.get(uid);
     if (session) {
@@ -2813,6 +3410,7 @@ class ActivityTracker {
     this.memberFetchBackoffUntil = 0;
     this.lastDecisions.clear();
     this.evaluatingUsers.clear();
+    this.endingSessions.clear();
 
     if (this._unsubscribeDbSave) {
       this._unsubscribeDbSave();
