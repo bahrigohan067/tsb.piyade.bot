@@ -18,6 +18,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
+  MessageFlags,
   PermissionFlagsBits,
 } = require('discord.js');
 
@@ -637,6 +638,10 @@ class ActivityTracker {
     // Üye başına 3 sn ses kanalı değişimi debounce zamanlayıcıları
     this.voiceDebounceTimers = new Map();
 
+    // Sesten düşme sonrası yeniden aktarma (rearm) hız sınırı zaman damgaları ve bekleme zamanlayıcıları (yalnızca bellekte)
+    this.lastCountdownStartedAt = new Map();
+    this.rearmRetryTimers = new Map();
+
     // Botun kendi taşımasının 5 sn boyunca voiceStateUpdate'i tekrar tetiklememesi için harita
     this.botMoveIgnoreUntil = new Map();
 
@@ -794,7 +799,7 @@ class ActivityTracker {
       (r.RETURN_FAILED || 0);
 
     this.logger.log(
-      `[OYUN ETKİNLİĞİ] ${periodLabel}: presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} oyunBitti=${c.gamesEnded} rol=${c.roleAdded} rolAlındı=${c.rolesRemoved} manuel=+${c.manuelVerilen}/-${c.manuelGeriAlinan} gece=${c.geceTemizligiAlinan}(hata:${c.geceTemizligiBasarisiz}) süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} uyeFetch=${c.memberFetchCalls}(atlanan:${c.memberFetchSkipped},hata:${c.memberFetchErrors}) | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${r.NOT_IN_VOICE || 0} | dönüş: RETURN_MOVED=${r.RETURN_MOVED || 0} RETURN_SKIP=${returnSkipTotal} RETURN_ERR=${returnErrTotal}`
+      `[OYUN ETKİNLİĞİ] ${periodLabel}: presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} oyunBitti=${c.gamesEnded} rol=${c.roleAdded} rolAlındı=${c.rolesRemoved} rolSesBekliyor=${r.ROLE_WAITING_FOR_VOICE || 0} manuel=+${c.manuelVerilen}/-${c.manuelGeriAlinan} gece=${c.geceTemizligiAlinan}(hata:${c.geceTemizligiBasarisiz}) süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} uyeFetch=${c.memberFetchCalls}(atlanan:${c.memberFetchSkipped},hata:${c.memberFetchErrors}) | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${r.NOT_IN_VOICE || 0} rearm=${r.REARMED_AFTER_DISCONNECT || 0}(limit:${r.REARM_LIMIT_REACHED || 0},hız:${r.REARM_RATE_LIMITED || 0}) | dönüş: RETURN_MOVED=${r.RETURN_MOVED || 0} RETURN_SKIP=${returnSkipTotal} RETURN_ERR=${returnErrTotal}`
     );
   }
 
@@ -1056,10 +1061,11 @@ class ActivityTracker {
     // 2. Aylık sıfırlama kontrolü (bot ay dönümünde kapalıydıysa açılışta temizler)
     await this.checkMonthlyReset(guild);
 
-    // 3. Sistem ilk kez çalışıyorsa tek seferlik iki dilli duyurular (genel + oyun bitişi + mobil /oyun)
+    // 3. Sistem ilk kez çalışıyorsa tek seferlik iki dilli duyurular (genel + oyun bitişi + mobil /oyun + ses-rolü)
     await this.checkOneTimeAnnouncement(guild);
     await this.checkOneTimeReturnAnnouncement(guild);
     await this.checkOneTimeManualAnnouncement(guild);
+    await this.checkOneTimeVoiceRoleAnnouncement(guild);
 
     // 4. Önbellekteki mevcut presence'lerden oturumları kur (üyeleri fetch ETME, açılışta taşıma YAPMA)
     let seededCount = 0;
@@ -1077,9 +1083,15 @@ class ActivityTracker {
         const detected = detectGame(presence, this.config, this.disabledGameIds);
         if (!detected) continue;
 
-        const inVoiceAtStartup = Boolean(
-          member?.voice?.channelId || guild.voiceStates?.cache?.get?.(uid)?.channelId
-        );
+        const startupChannelId =
+          member?.voice?.channelId || guild.voiceStates?.cache?.get?.(uid)?.channelId || null;
+        const inVoiceAtStartup = Boolean(startupChannelId);
+        const targetIds = this.getRawConfiguredChannelIds(detected.gameId);
+        const startupMoveState = !inVoiceAtStartup
+          ? 'unspent'
+          : targetIds.includes(String(startupChannelId))
+            ? 'inTarget'
+            : 'moved';
 
         const session = {
           userId: uid,
@@ -1092,7 +1104,9 @@ class ActivityTracker {
           lastAccountedAt: now,
           lastSeen: now,
           // Sesteyse hak tüketilmiş sayılır (sürpriz taşıma yok); ses dışındaysa hak VAR (sonradan sese girerse aktarılır)
-          moveToken: !inVoiceAtStartup,
+          moveToken: startupMoveState === 'unspent',
+          moveState: startupMoveState,
+          rearmCount: 0,
           sweepBlockedForMoveFail: false,
           pendingGameId: null,
           pendingFamily: null,
@@ -1106,8 +1120,12 @@ class ActivityTracker {
         this.counters.sessionConfirmed += 1;
         seededCount += 1;
 
+        // Açılışta: seste ve oynayan üyeye rolü (eksikse) sessizce ver; ses dışındakilere verme; mevcut rolü olanlardan rol ALMA
         if (member) {
-          this.syncMemberFamilyRoles(member, detected.family);
+          this.ensureActivityRole(member, session, {
+            reason: 'Açılışta aktif oyun rolü senkronizasyonu',
+            syncOtherFamilies: false,
+          });
         }
       }
     }
@@ -1612,6 +1630,8 @@ class ActivityTracker {
         lastAccountedAt: null,
         lastSeen: null,
         moveToken: false,
+        moveState: 'unspent',
+        rearmCount: 0,
         sweepBlockedForMoveFail: false,
         pendingGameId: detected.gameId,
         pendingFamily: detected.family,
@@ -1797,7 +1817,7 @@ class ActivityTracker {
     this._clearTimer(session, 'stopGraceTimer');
     this._clearTimer(session, 'voiceJoinTimer');
 
-    // Yeni oturumu onayla ve yeni aktarma hakkı (moveToken = true) ver
+    // Yeni oturumu onayla ve yeni aktarma hakkı (moveState = 'unspent', rearmCount = 0) ver
     session.confirmed = true;
     session.gameId = newGameId;
     session.family = newFamily;
@@ -1806,40 +1826,69 @@ class ActivityTracker {
     session.activityStartedAt = activityStartedAt || startedSince;
     session.lastAccountedAt = startedSince;
     session.lastSeen = now;
-    session.moveToken = true;
+    this._setSessionMoveState(session, 'unspent');
+    session.rearmCount = 0;
     session.sweepBlockedForMoveFail = false;
     session.pendingGameId = null;
     session.pendingFamily = null;
     session.pendingSince = null;
     session.pendingActivityStartedAt = null;
 
+    // Yeni oyun oturumunda önceki oturuma ait yeniden aktarma sayaç ve zamanlayıcılarını sıfırla
+    this.lastCountdownStartedAt.delete(uid);
+    this._clearRearmRetryTimer(uid);
+
     this.counters.sessionConfirmed += 1;
 
-    // Rol senkronizasyonu: aynı aile içinde (örn: Roblox -> Roblox) rol DEĞİŞTİRME
-    if (member && prevFamily !== newFamily) {
-      this.syncMemberFamilyRoles(member, newFamily);
-    } else if (member && !prevFamily) {
-      this.syncMemberFamilyRoles(member, newFamily);
-    } else if (!member && guild) {
+    const finalizeConfirmedMember = (targetMember) => {
+      if (targetMember) {
+        // Aile değiştiyse (örn. Roblox -> CS2) önceki ailenin otomatik rolünü (manuel değilse) kaldır
+        if (prevFamily && prevFamily !== newFamily && !this.hasManualRoleMark(uid, prevFamily)) {
+          const prevRoleId = this.config.FAMILIES?.[prevFamily]?.roleId;
+          if (prevRoleId && targetMember.roles?.cache?.has?.(prevRoleId)) {
+            this.enqueueRoleRemove(targetMember, prevRoleId, prevFamily, 'Oyun ailesi değişti');
+          }
+        }
+
+        // Tek idempotent rol verme yolu: ROLE_REQUIRES_VOICE true ise üye sesteyken verir, değilse ROLE_WAITING_FOR_VOICE kaydeder
+        const roleRes = this.ensureActivityRole(targetMember, session, {
+          reason: 'Oyun etkinliği başladı',
+          syncOtherFamilies: prevFamily !== newFamily || !prevFamily,
+        });
+
+        if (roleRes.waitingForVoice) {
+          if (!skipEvaluate) {
+            this.recordDecision(uid, {
+              trigger: 'game-confirmed',
+              result: 'skipped',
+              reason: TRANSFER_REASONS.ROLE_WAITING_FOR_VOICE,
+              game: this.getGameLabel(newGameId),
+            });
+          }
+          return;
+        }
+      }
+
+      // Tek merkezi aktarma değerlendirme fonksiyonunu çağır
+      if (!skipEvaluate && (targetMember || guild)) {
+        this.evaluateTransfer(targetMember || uid, 'game-confirmed').catch(() => {});
+      }
+    };
+
+    if (member) {
+      finalizeConfirmedMember(member);
+      return;
+    }
+
+    if (guild) {
       // Üye önbellekte yoksa korumalı safeFetchMember ile (30 sn cooldown + tek uçuş + fırtına korumalı) getir
       this.safeFetchMember(guild, uid, { withPresences: true })
         .then((fetchedMember) => {
           const liveSess = this.sessions.get(uid);
           if (!liveSess || !liveSess.confirmed || liveSess.gameId !== newGameId) return;
-          if (fetchedMember) {
-            this.syncMemberFamilyRoles(fetchedMember, newFamily);
-          }
-          if (!skipEvaluate) {
-            this.evaluateTransfer(fetchedMember || uid, 'game-confirmed').catch(() => {});
-          }
+          finalizeConfirmedMember(fetchedMember);
         })
         .catch(() => {});
-      return;
-    }
-
-    // Tek merkezi aktarma değerlendirme fonksiyonunu çağır
-    if (!skipEvaluate && (member || guild)) {
-      this.evaluateTransfer(member || uid, 'game-confirmed').catch(() => {});
     }
   }
 
@@ -1961,6 +2010,8 @@ class ActivityTracker {
 
       // Oturumu ve zamanlayıcılarını temizle
       this.cancelActiveCountdown(uid, { consumeToken: false });
+      this._clearRearmRetryTimer(uid);
+      this.lastCountdownStartedAt.delete(uid);
       this._clearSessionTimers(session);
       this.sessions.delete(uid);
       this.counters.gamesEnded += 1;
@@ -2296,6 +2347,78 @@ class ActivityTracker {
   // 5. AKTİFLİK ROLLERİ YÖNETİMİ (Kuyruklu ve Hata Dayanıklı)
   // =========================================================================
 
+  _setSessionMoveState(session, state) {
+    if (!session) return;
+    session.moveState = state;
+    session.moveToken = state === 'unspent';
+  }
+
+  _getSessionMoveState(session) {
+    if (!session) return 'moved';
+    if (session.moveState) return session.moveState;
+    return session.moveToken ? 'unspent' : 'moved';
+  }
+
+  /**
+   * Tek idempotent otomatik aktiflik rolü verme fonksiyonu.
+   * - ROLE_REQUIRES_VOICE true iken yalnızca üye CANLI olarak bir ses kanalındaysa rol verir.
+   * - Rol zaten varsa API çağrısı yapmaz (idempotent).
+   * - Takibi kapalı üyelere veya botlara rol vermez.
+   * - Manuel /oyun rollerine (activityManual) asla dokunmaz.
+   */
+  ensureActivityRole(
+    member,
+    session,
+    { reason = 'Oyun etkinliği başladı', syncOtherFamilies = true } = {}
+  ) {
+    if (!member || member.user?.bot || !session || !session.confirmed || !session.family) {
+      return { granted: false, waitingForVoice: false, alreadyHas: false };
+    }
+
+    const uid = String(member.id);
+    if (!this.getPrefs(uid).tracking) {
+      return { granted: false, waitingForVoice: false, alreadyHas: false };
+    }
+
+    const targetFamily = session.family;
+    if (this.disabledFamilyIds.has(targetFamily)) {
+      return { granted: false, waitingForVoice: false, alreadyHas: false };
+    }
+
+    const roleId = this.config.FAMILIES?.[targetFamily]?.roleId || null;
+    if (!roleId) {
+      return { granted: false, waitingForVoice: false, alreadyHas: false };
+    }
+
+    const roleRequiresVoice = this.config.ROLE_REQUIRES_VOICE !== false;
+    const inVoice = Boolean(
+      member.voice?.channelId ||
+        member.guild?.voiceStates?.cache?.get?.(uid)?.channelId ||
+        this.guild?.voiceStates?.cache?.get?.(uid)?.channelId
+    );
+
+    if (roleRequiresVoice && !inVoice) {
+      return { granted: false, waitingForVoice: true, alreadyHas: false };
+    }
+
+    if (syncOtherFamilies) {
+      for (const [familyKey, family] of Object.entries(this.config.FAMILIES || {})) {
+        if (familyKey === targetFamily) continue;
+        if (this.disabledFamilyIds.has(familyKey) || !family.roleId) continue;
+        if (!member.roles?.cache?.has?.(family.roleId)) continue;
+        if (this.hasManualRoleMark(uid, familyKey)) continue;
+        this.enqueueRoleRemove(member, family.roleId, familyKey, 'Oyun ailesi değişti');
+      }
+    }
+
+    if (member.roles?.cache?.has?.(roleId)) {
+      return { granted: false, waitingForVoice: false, alreadyHas: true };
+    }
+
+    this.enqueueRoleAdd(member, roleId, targetFamily, reason);
+    return { granted: true, waitingForVoice: false, alreadyHas: false };
+  }
+
   syncMemberFamilyRoles(member, targetFamily) {
     if (!member || member.user?.bot) return;
     if (!this.getPrefs(member.id).tracking) return;
@@ -2502,6 +2625,19 @@ class ActivityTracker {
         });
       }
       if (!prefs.autoMove) {
+        // Takip açık ama otomatik aktarma kapalıysa ve üye şu an sesteyken onaylı oyunu varsa rolünü yine de ver
+        const existingSess = this.sessions.get(uid);
+        if (
+          member &&
+          existingSess &&
+          existingSess.confirmed &&
+          existingSess.currentlyDetectedGameId === existingSess.gameId
+        ) {
+          this.ensureActivityRole(member, existingSess, {
+            reason: 'Ses kanalında aktif oyun rolü',
+            syncOtherFamilies: true,
+          });
+        }
         return this.recordDecision(uid, {
           trigger,
           result: 'skipped',
@@ -2523,6 +2659,19 @@ class ActivityTracker {
       const currentChannel =
         voiceState?.channel || guild?.channels?.cache?.get?.(currentChannelId) || null;
       if (this.isChannelBlockedForMove(guild, currentChannel)) {
+        // AFK/Sahne gibi taşınmaz bir ses kanalına girse bile üye sesteyken oyun aktiflik rolünü alabilir
+        const existingSess = this.sessions.get(uid);
+        if (
+          member &&
+          existingSess &&
+          existingSess.confirmed &&
+          existingSess.currentlyDetectedGameId === existingSess.gameId
+        ) {
+          this.ensureActivityRole(member, existingSess, {
+            reason: 'Ses kanalında aktif oyun rolü',
+            syncOtherFamilies: true,
+          });
+        }
         return this.recordDecision(uid, {
           trigger,
           result: 'skipped',
@@ -2719,10 +2868,19 @@ class ActivityTracker {
         });
       }
 
+      // Üye ses kanalında ve onaylı oyun oturumu aktif: rolü eksikse tek idempotent yoldan hemen ver
+      if (member) {
+        this.ensureActivityRole(member, session, {
+          reason: 'Ses kanalında aktif oyun rolü',
+          syncOtherFamilies: true,
+        });
+      }
+
       const displayGameName = this.getGameLabel(session.gameId);
 
-      // ADIM 6: Aktarma hakkı (moveToken) kontrolü
-      if (!session.moveToken) {
+      // ADIM 6: Aktarma hakkı (moveState / moveToken) kontrolü
+      const currentMoveState = this._getSessionMoveState(session);
+      if (currentMoveState !== 'unspent') {
         return this.recordDecision(uid, {
           trigger,
           result: 'skipped',
@@ -2742,9 +2900,9 @@ class ActivityTracker {
       const candidateIds = this.getCandidateChannelIds(session.gameId);
       const checkIds = rawChannelIds.length > 0 ? rawChannelIds : candidateIds;
 
-      // Üye ZATEN hedef kanallardan birindeyse -> ALREADY_IN_TARGET ve hak TÜKETİLİR
+      // Üye ZATEN hedef kanallardan birindeyse -> ALREADY_IN_TARGET ve moveState = 'inTarget'
       if (checkIds.includes(String(currentChannelId))) {
-        session.moveToken = false;
+        this._setSessionMoveState(session, 'inTarget');
         return this.recordDecision(uid, {
           trigger,
           result: 'skipped',
@@ -2753,6 +2911,23 @@ class ActivityTracker {
           fromChannelId: currentChannelId,
           toChannelId: currentChannelId,
         });
+      }
+
+      // ADIM 7b: Yeniden aktarma hız sınırı (REARM_MIN_GAP_SEC) — aynı üye için iki yeniden aktarma geri sayımı arası en az 30 sn
+      if ((session.rearmCount || 0) > 0) {
+        const minGapMs = Math.max(0, Number(this.config.REARM_MIN_GAP_SEC ?? 30) * 1000);
+        const lastCountdownAt = this.lastCountdownStartedAt.get(uid) || 0;
+        if (minGapMs > 0 && lastCountdownAt > 0 && now - lastCountdownAt < minGapMs) {
+          const remainingMs = minGapMs - (now - lastCountdownAt);
+          this._scheduleRearmRetry(guild, member, uid, remainingMs);
+          return this.recordDecision(uid, {
+            trigger,
+            result: 'skipped',
+            reason: TRANSFER_REASONS.REARM_RATE_LIMITED,
+            game: displayGameName,
+            fromChannelId: currentChannelId,
+          });
+        }
       }
 
       if (candidateIds.length === 0) {
@@ -2915,6 +3090,8 @@ class ActivityTracker {
       countdownEntry.timer?.unref?.();
 
       this.activeCountdowns.set(uid, countdownEntry);
+      this.lastCountdownStartedAt.set(uid, this.now());
+      this._clearRearmRetryTimer(uid);
       const decision = this.recordDecision(uid, {
         trigger,
         result: 'pending',
@@ -3011,9 +3188,9 @@ class ActivityTracker {
     const rawChannelIds = this.getRawConfiguredChannelIds(session.gameId);
     const checkIds = rawChannelIds.length > 0 ? rawChannelIds : candidateIds;
 
-    // 5. Üye kendisi hedef kanala geçtiyse -> ALREADY_IN_TARGET (hak TÜKETİLİR!)
+    // 5. Üye kendisi hedef kanala geçtiyse -> ALREADY_IN_TARGET (moveState = 'inTarget')
     if (checkIds.includes(String(liveChannelId))) {
-      session.moveToken = false;
+      this._setSessionMoveState(session, 'inTarget');
       await deleteMsg();
       this.recordDecision(uid, {
         trigger: entry.trigger,
@@ -3078,8 +3255,8 @@ class ActivityTracker {
     await this.moveQueue.enqueue(async () => {
       try {
         await member.voice.setChannel(targetChannelId, `Oyun aktarımı: ${entry.displayGameName}`);
-        // Başarılı taşıma -> hak TÜKETİLİR!
-        session.moveToken = false;
+        // Başarılı taşıma -> moveState = 'moved'
+        this._setSessionMoveState(session, 'moved');
         this.recordDecision(uid, {
           trigger: entry.trigger,
           result: 'moved',
@@ -3160,7 +3337,7 @@ class ActivityTracker {
     );
   }
 
-  cancelActiveCountdown(userId, { consumeToken = false } = {}) {
+  cancelActiveCountdown(userId, { consumeToken = false, moveState = 'cancelled' } = {}) {
     const uid = String(userId);
     const entry = this.activeCountdowns.get(uid);
     if (!entry) return false;
@@ -3174,7 +3351,7 @@ class ActivityTracker {
     if (consumeToken) {
       const session = this.sessions.get(uid);
       if (session && session.gameId === entry.gameId) {
-        session.moveToken = false;
+        this._setSessionMoveState(session, moveState);
       }
     }
 
@@ -3195,7 +3372,7 @@ class ActivityTracker {
     if (parts.length !== 3 || !targetUserId || !token) {
       return interaction.reply({
         content: isEn ? '⏱️ This transfer offer has expired.' : '⏱️ Bu aktarma teklifi eskidi.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });
     }
@@ -3204,7 +3381,7 @@ class ActivityTracker {
     if (!entry || entry.token !== token) {
       return interaction.reply({
         content: isEn ? '⏱️ This transfer offer has expired.' : '⏱️ Bu aktarma teklifi eskidi.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });
     }
@@ -3212,21 +3389,22 @@ class ActivityTracker {
     if (String(interaction.user?.id) !== String(targetUserId)) {
       return interaction.reply({
         content: isEn ? '❌ This button is not for you.' : '❌ Bu buton sana ait değil.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
         allowedMentions: { parse: [] },
       });
     }
 
-    // Sahibi iptal etti: zamanlayıcıyı durdur, hakkı tüket, karar izine yaz, mesajı güncelle ve 5 sn sonra sil
+    // Sahibi iptal etti: zamanlayıcıyı durdur, moveState = 'cancelled' (oturum boyunca kalıcı!), karar izine yaz, mesajı güncelle ve 5 sn sonra sil
     if (entry.timer) {
       this._clearTimeout(entry.timer);
       entry.timer = null;
     }
     this.activeCountdowns.delete(targetUserId);
+    this._clearRearmRetryTimer(targetUserId);
 
     const session = this.sessions.get(targetUserId);
     if (session && session.gameId === entry.gameId) {
-      session.moveToken = false;
+      this._setSessionMoveState(session, 'cancelled');
     }
 
     this.recordDecision(targetUserId, {
@@ -3287,15 +3465,16 @@ class ActivityTracker {
       }
     }
 
-    // Varsa bekleyen ses debounce zamanlayıcısını sıfırla
+    // Varsa bekleyen ses debounce ve yeniden aktarma bekleme zamanlayıcısını sıfırla
     this._clearVoiceDebounce(uid);
+    this._clearRearmRetryTimer(uid);
     const session = this.sessions.get(uid);
     if (session) {
       this._clearTimer(session, 'voiceJoinTimer');
       session.sweepBlockedForMoveFail = false;
     }
 
-    // 1. Sesten tamamen çıktıysa (newChannelId boş)
+    // 1. Sesten tamamen çıktıysa (oldChannelId dolu VE newChannelId boş — kanaldan kanala geçiş DEĞİL)
     if (!newChannelId) {
       if (this.activeCountdowns.has(uid)) {
         const cd = this.activeCountdowns.get(uid);
@@ -3309,6 +3488,45 @@ class ActivityTracker {
           fromChannelId: cd.fromChannelId,
           toChannelId: cd.targetChannelId,
         });
+      } else if (
+        oldChannelId &&
+        session &&
+        session.confirmed &&
+        session.currentlyDetectedGameId === session.gameId
+      ) {
+        // Sesten düşme sonrası yeniden silahlanma (rearm): yalnızca 'moved' veya 'inTarget' durumundaysa ('cancelled' ASLA yeniden silahlanmaz)
+        const prefs = this.getPrefs(uid);
+        if (prefs.tracking && prefs.autoMove && this.config.REARM_AFTER_DISCONNECT !== false) {
+          const curState = this._getSessionMoveState(session);
+          if (curState === 'moved' || curState === 'inTarget') {
+            const maxRearms = Math.max(0, Number(this.config.REARM_MAX_PER_SESSION ?? 3));
+            const usedRearms = Number(session.rearmCount) || 0;
+            if (usedRearms < maxRearms) {
+              session.rearmCount = usedRearms + 1;
+              this._setSessionMoveState(session, 'unspent');
+              this.recordDecision(uid, {
+                trigger: 'voice-disconnect',
+                result: 'rearmed',
+                reason: TRANSFER_REASONS.REARMED_AFTER_DISCONNECT,
+                game: this.getGameLabel(session.gameId),
+                fromChannelId: oldChannelId,
+              });
+            } else {
+              this.recordDecision(uid, {
+                trigger: 'voice-disconnect',
+                result: 'skipped',
+                reason: TRANSFER_REASONS.REARM_LIMIT_REACHED,
+                game: this.getGameLabel(session.gameId),
+                fromChannelId: oldChannelId,
+              });
+            }
+          }
+        }
+      }
+
+      // İsteğe bağlı ayar: ROLE_REMOVE_ON_VOICE_LEAVE true ise sesten tamamen çıkınca otomatik aktiflik rolü alınır (manuel /oyun rolleri HARİÇ)
+      if (this.config.ROLE_REMOVE_ON_VOICE_LEAVE === true && member) {
+        this.removeAllActivityRoles(member, 'Ses kanalından ayrıldığı için aktiflik rolü alındı').catch(() => {});
       }
       return;
     }
@@ -3321,8 +3539,8 @@ class ActivityTracker {
       const newChannel = newState?.channel || guild?.channels?.cache?.get?.(newChannelId) || null;
 
       if (candidateIds.includes(String(newChannelId))) {
-        // Kendisi hedef kanala geçti -> ALREADY_IN_TARGET (hak TÜKETİLİR!)
-        this.cancelActiveCountdown(uid, { consumeToken: true });
+        // Kendisi hedef kanala geçti -> ALREADY_IN_TARGET (moveState = 'inTarget')
+        this.cancelActiveCountdown(uid, { consumeToken: true, moveState: 'inTarget' });
         this.recordDecision(uid, {
           trigger: 'voice-switch',
           result: 'skipped',
@@ -3375,6 +3593,38 @@ class ActivityTracker {
       this._clearTimeout(t);
       this.voiceDebounceTimers.delete(uid);
     }
+  }
+
+  _clearRearmRetryTimer(userId) {
+    const uid = String(userId);
+    const t = this.rearmRetryTimers.get(uid);
+    if (t) {
+      this._clearTimeout(t);
+      this.rearmRetryTimers.delete(uid);
+    }
+  }
+
+  _scheduleRearmRetry(guild, memberHint, userId, delayMs) {
+    const uid = String(userId);
+    this._clearRearmRetryTimer(uid);
+    const waitMs = Math.max(50, Number(delayMs) || 1000);
+
+    const timer = this._setTimeout(() => {
+      this.rearmRetryTimers.delete(uid);
+      const liveSess = this.sessions.get(uid);
+      if (!liveSess || !liveSess.confirmed || this._getSessionMoveState(liveSess) !== 'unspent') {
+        return;
+      }
+      if (this.activeCountdowns.has(uid) || this.evaluatingUsers.has(uid)) return;
+      const liveMember = guild?.members?.cache?.get?.(uid) || memberHint || null;
+      const inVoice = Boolean(
+        liveMember?.voice?.channelId || guild?.voiceStates?.cache?.get?.(uid)?.channelId
+      );
+      if (!liveMember || !inVoice) return;
+      this.evaluateTransfer(liveMember, 'voice-join').catch(() => {});
+    }, waitMs);
+    timer?.unref?.();
+    this.rearmRetryTimers.set(uid, timer);
   }
 
   /**
@@ -3449,13 +3699,27 @@ class ActivityTracker {
 
     for (const [uid, member] of candidates) {
       const prefs = this.getPrefs(uid);
-      if (!prefs.tracking || !prefs.autoMove) continue;
+      if (!prefs.tracking) continue;
 
       const session = this.sessions.get(uid);
-      if (!session || !session.confirmed || !session.moveToken) continue;
+      if (!session || !session.confirmed) continue;
       if (session.currentlyDetectedGameId !== session.gameId) continue;
+
+      // Kaçan olay güvenlik ağı: ses kanalında ve onaylı oturumu olan üyenin rolü eksikse ver
+      this.ensureActivityRole(member, session, {
+        reason: 'Yedek tarama aktiflik rolü tamamlama',
+        syncOtherFamilies: false,
+      });
+
+      if (!prefs.autoMove) continue;
+      if (this._getSessionMoveState(session) !== 'unspent') continue;
       if (session.sweepBlockedForMoveFail) continue;
-      if (this.activeCountdowns.has(uid) || this.voiceDebounceTimers.has(uid) || this.evaluatingUsers.has(uid)) {
+      if (
+        this.activeCountdowns.has(uid) ||
+        this.voiceDebounceTimers.has(uid) ||
+        this.rearmRetryTimers.has(uid) ||
+        this.evaluatingUsers.has(uid)
+      ) {
         continue;
       }
 
@@ -3681,12 +3945,51 @@ class ActivityTracker {
   }
 
   /**
+   * Ses-bazlı rol ve sesten düşme sonrası yeniden aktarma özelliği ilk kez çalıştığında
+   * (activityMeta.voiceRoleAnnouncedAt boşsa) tek seferlik iki dilli duyuru gönderir.
+   */
+  async checkOneTimeVoiceRoleAnnouncement(guild = this.guild) {
+    const meta = this.db.getActivityMeta();
+    if (meta.voiceRoleAnnouncedAt) return { announced: false };
+
+    const cmdChannel = guild?.channels?.cache?.get?.(this.config.COMMAND_CHANNEL_ID) || null;
+    if (!cmdChannel || typeof cmdChannel.send !== 'function') {
+      this.logErrorThrottled(
+        'voice_role_announce:no_channel',
+        '[OYUN ETKİNLİĞİ DUYURU] Ses-rolü güncelleme duyurusu için komut kanalı bulunamadı; daha sonra tekrar denenecek.'
+      );
+      return { announced: false, reason: 'no_channel' };
+    }
+
+    const message =
+      "🎮 Güncelleme: Oyun rolün artık bir ses kanalındayken oyun oynadığında verilir. Sesten düşersen tekrar girdiğinde, oyun sürüyorsa seni oyunun ses kanalına yeniden aktarırım. İstemiyorsan /aktivitem → ⚙️ Ayarlarım'dan kapatabilirsin.\n" +
+      "🎮 Update: Your game role is now given while you're in a voice channel and playing. If you get disconnected, I'll move you to your game's voice channel again when you rejoin. You can turn this off in /activity → ⚙️ My Settings.";
+
+    try {
+      await cmdChannel.send({
+        content: message,
+        allowedMentions: { parse: [] },
+      });
+      this.db.setActivityVoiceRoleAnnounced(this.now());
+      return { announced: true };
+    } catch (err) {
+      this.logErrorThrottled(
+        'voice_role_announce:send_failed',
+        `[OYUN ETKİNLİĞİ DUYURU] Ses-rolü güncelleme duyurusu gönderilemedi (${err?.code || err?.message || 'bilinmeyen hata'}); daha sonra tekrar denenecek.`
+      );
+      return { announced: false, reason: 'send_failed' };
+    }
+  }
+
+  /**
    * Kullanıcı takibi kapattığında: tüm zamanlayıcıları/geri sayımları iptal et,
    * karar izini sil, 4 aktiflik rolünü hemen al, bu ayki süreleri sil ve bellekten temizle.
    */
   async disableTrackingForUser(userId, member = null) {
     const uid = String(userId);
     this._clearVoiceDebounce(uid);
+    this._clearRearmRetryTimer(uid);
+    this.lastCountdownStartedAt.delete(uid);
     this.cancelActiveCountdown(uid, { consumeToken: true });
     this.lastDecisions.delete(uid);
     this.botMoveIgnoreUntil.delete(uid);
@@ -3734,6 +4037,8 @@ class ActivityTracker {
     const uid = String(userId);
 
     this._clearVoiceDebounce(uid);
+    this._clearRearmRetryTimer(uid);
+    this.lastCountdownStartedAt.delete(uid);
     this.cancelActiveCountdown(uid, { consumeToken: true });
     this.lastDecisions.delete(uid);
     this.botMoveIgnoreUntil.delete(uid);
@@ -3766,6 +4071,11 @@ class ActivityTracker {
       this._clearTimeout(timer);
     }
     this.voiceDebounceTimers.clear();
+    for (const timer of this.rearmRetryTimers.values()) {
+      this._clearTimeout(timer);
+    }
+    this.rearmRetryTimers.clear();
+    this.lastCountdownStartedAt.clear();
     this.botMoveIgnoreUntil.clear();
     this.memberFetchLastAt.clear();
     this.inFlightMemberFetches.clear();
