@@ -232,6 +232,22 @@ function getReasonExplanation(reason, lang = 'tr') {
       tr: "Salon 1 kanalına aktarım yapılamadı. Yetkililere haber ver.",
       en: 'Could not move you to Lounge 1. Please notify server staff.',
     },
+    [TRANSFER_REASONS.ROLE_WAITING_FOR_VOICE]: {
+      tr: 'Oyun rolün, bir ses kanalındayken oyun oynarken verilir. Bir ses kanalına girdiğinde verilecek.',
+      en: "Your game role is given while you're in a voice channel and playing. You'll receive it once you join a voice channel.",
+    },
+    [TRANSFER_REASONS.REARMED_AFTER_DISCONNECT]: {
+      tr: 'Sesten düştüğün için bir sonraki girişinde seni oyunun ses kanalına tekrar aktaracağım.',
+      en: "Since you disconnected from voice, I'll move you to your game's voice channel again when you rejoin.",
+    },
+    [TRANSFER_REASONS.REARM_LIMIT_REACHED]: {
+      tr: 'Bu oyun oturumunda tekrar aktarma sınırına ulaştın.',
+      en: "You've reached the re-transfer limit for this game session.",
+    },
+    [TRANSFER_REASONS.REARM_RATE_LIMITED]: {
+      tr: 'Çok sık giriş/çıkış yaptığın için biraz bekliyorum.',
+      en: "You've been joining and leaving voice too frequently, so I'm waiting a bit before trying again.",
+    },
   };
 
   const entry = map[reason];
@@ -251,6 +267,7 @@ function formatTriggerLabel(trigger, lang = 'tr') {
     'game-ended': isEn ? 'Game ended' : 'Oyun sona erdi',
     'voice-join': isEn ? 'Joined a voice channel' : 'Ses kanalına girdi',
     'voice-switch': isEn ? 'Switched voice channel' : 'Ses kanalı değiştirdi',
+    'voice-disconnect': isEn ? 'Disconnected from voice' : 'Ses kanalından ayrıldı',
     sweep: isEn ? 'Backup sweep (30s)' : 'Yedek tarama (30 sn)',
   };
   return labels[trigger] || String(trigger || '-');
@@ -494,13 +511,15 @@ function buildSettingsPanelPayload(
 
   const infoText = isEn
     ? '⚙️ **Game Activity Settings**\n' +
-      "The bot reads your Discord game activity to assign game activity roles, count your monthly playtime, and transfer you to the game's voice channel.\n" +
+      "Your game role is given while you're in a voice channel and playing, and removed when you stop.\n" +
+      "If you get disconnected from voice, I'll move you back to your game's voice channel when you rejoin while still playing.\n" +
       "When you close your game your game role is removed, and if you're in a game voice channel you'll be moved to Lounge 1. You can turn this off below.\n" +
       '📱 Playing on mobile? Use the `/game` command.\n' +
       'ℹ️ *If Discord Settings > Activity Privacy is turned off, the bot cannot see anything.*' +
       returnDisabledHint
     : '⚙️ **Oyun Etkinliği Ayarların**\n' +
-      "Bot, Discord'daki oyun etkinliğini okuyarak oyun rollerini verir, süreni sayar ve oyunun ses kanalına aktarır.\n" +
+      'Oyun rolün, bir ses kanalındayken oyun oynadığında verilir; oyunu bırakınca alınır.\n' +
+      'Sesten düşersen tekrar girdiğinde, oyun hâlâ sürüyorsa seni oyunun ses kanalına tekrar aktarırım.\n' +
       "Oyunu kapattığında oyun rolün alınır; bir oyun ses kanalındaysan Salon 1'e aktarılırsın. İstemiyorsan aşağıdan kapatabilirsin.\n" +
       '📱 Mobilden oynuyorsan `/oyun` komutunu kullan.\n' +
       "ℹ️ *Discord'da Ayarlar > Etkinlik Gizliliği kapalıysa bot hiçbir şey göremez.*" +
@@ -595,6 +614,7 @@ function buildWhyNotMovedPayload({ userId, lang = 'tr', tracker = activityTracke
     moved: isEn ? '✅ Moved' : '✅ Aktarıldı',
     pending: isEn ? '⏳ Pending / Countdown' : '⏳ Beklemede / Geri Sayımda',
     cancelled: isEn ? '❌ Cancelled' : '❌ İptal Edildi',
+    rearmed: isEn ? '🔄 Rearmed' : '🔄 Yeniden Hazırlandı',
     skipped: isEn ? '⏭️ Not Moved' : '⏭️ Aktarılmadı',
   };
   const resultText = resultBadgeMap[decision.result] || decision.result;
@@ -932,6 +952,21 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     (r.RETURN_NO_PERMISSION || 0) +
     (r.RETURN_FAILED || 0);
 
+  const cfgRef = tracker.config || activityConfig;
+  const roleRequiresVoice = cfgRef.ROLE_REQUIRES_VOICE !== false;
+  const roleRemoveOnLeave = cfgRef.ROLE_REMOVE_ON_VOICE_LEAVE === true;
+  const rearmEnabled = cfgRef.REARM_AFTER_DISCONNECT !== false;
+  const rearmMax = Number(cfgRef.REARM_MAX_PER_SESSION ?? 3);
+  const rearmGapSec = Number(cfgRef.REARM_MIN_GAP_SEC ?? 30);
+
+  const voiceRoleSettingsLine = isEn
+    ? `⚙️ **Voice-Role & Rearm:** \`ROLE_REQUIRES_VOICE=${roleRequiresVoice}\` | \`REMOVE_ON_LEAVE=${roleRemoveOnLeave}\` | \`REARM=${rearmEnabled} (max:${rearmMax}, gap:${rearmGapSec}s)\``
+    : `⚙️ **Ses-Rol & Yeniden Aktarma:** \`ROLE_REQUIRES_VOICE=${roleRequiresVoice}\` | \`REMOVE_ON_LEAVE=${roleRemoveOnLeave}\` | \`REARM=${rearmEnabled} (max:${rearmMax}, ara:${rearmGapSec}sn)\``;
+
+  const voiceRoleCountersLine = isEn
+    ? `🔄 **Voice-Role / Rearm Counters:** \`ROLE_WAITING_FOR_VOICE=${r.ROLE_WAITING_FOR_VOICE || 0} | REARMED_AFTER_DISCONNECT=${r.REARMED_AFTER_DISCONNECT || 0} | REARM_LIMIT_REACHED=${r.REARM_LIMIT_REACHED || 0} | REARM_RATE_LIMITED=${r.REARM_RATE_LIMITED || 0}\``
+    : `🔄 **Ses-Rol / Yeniden Aktarma Sayaçları:** \`ROLE_WAITING_FOR_VOICE=${r.ROLE_WAITING_FOR_VOICE || 0} | REARMED_AFTER_DISCONNECT=${r.REARMED_AFTER_DISCONNECT || 0} | REARM_LIMIT_REACHED=${r.REARM_LIMIT_REACHED || 0} | REARM_RATE_LIMITED=${r.REARM_RATE_LIMITED || 0}\``;
+
   const lines = [
     isEn ? '🛠️ **Game Activity System Status**' : '🛠️ **Oyun Etkinliği Sistem Durumu**',
     presenceStatusLine,
@@ -941,19 +976,22 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     voiceSummaryLine,
     returnChannelLine,
     manualSummaryLine,
+    voiceRoleSettingsLine,
     ...roleLines,
     '━━━━━━━━━━━━━━━━━━━━',
     isEn
-      ? `📊 **Active Sessions:** \`${confirmedSessionCount}\` • **Tracking Enabled Members:** \`${trackingOpenCount}\` (Disabled: \`${disabledTrackingCount}\`) • **Last DB Save:** ${dbOk ? '✅ OK' : '⚠️ Failed'}`
-      : `📊 **Aktif Oturum:** \`${confirmedSessionCount}\` • **Takibi Açık Üye:** \`${trackingOpenCount}\` (Kapalı: \`${disabledTrackingCount}\`) • **Son DB Kaydı:** ${dbOk ? '✅ Başarılı' : '⚠️ Başarısız'}`,
+      ? `📊 **Active Sessions:** \`${confirmedSessionCount}\` • **Tracking Enabled:** \`${trackingOpenCount}\` (Off: \`${disabledTrackingCount}\`) • **DB Save:** ${dbOk ? '✅ OK' : '⚠️ Failed'}`
+      : `📊 **Aktif Oturum:** \`${confirmedSessionCount}\` • **Takibi Açık:** \`${trackingOpenCount}\` (Kapalı: \`${disabledTrackingCount}\`) • **Son DB:** ${dbOk ? '✅ OK' : '⚠️ Hata'}`,
     isEn
       ? `🔗 **Chain Counters (since startup):**\n` +
-        `\`presence=${c.presenceReceived} | processed=${c.presenceProcessed} | playing=${c.presenceWithPlaying} | matched=${c.matchedGame} | roblox=${c.generalRoblox} | unmatched=${c.unmatchedActivity} | ignored=${c.ignoredActivity}\`\n` +
-        `\`confirmed=${c.sessionConfirmed} | ended=${c.gamesEnded || 0} | roleAdd=${c.roleAdded} | roleRem=${c.rolesRemoved || 0} (err:${c.roleFailed}) | manual=+${c.manuelVerilen || 0}/-${c.manuelGeriAlinan || 0} | midnight=${c.geceTemizligiAlinan || 0}(err:${c.geceTemizligiBasarisiz || 0}) | checkpoints=${c.checkpointWritten} | dbSave=${c.dbSaveSuccess} (err:${c.dbSaveFailed}) | voiceEvents=${c.voiceChangesReceived} | memberFetch=${c.memberFetchCalls || 0} (skip:${c.memberFetchSkipped || 0}, err:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved} | RETURN_MOVED=${r.RETURN_MOVED || 0} (skip:${returnSkipTotal}, err:${returnErrTotal})\`\n` +
+        `\`pres=${c.presenceReceived}|proc=${c.presenceProcessed}|play=${c.presenceWithPlaying}|match=${c.matchedGame}|rblx=${c.generalRoblox}|unm=${c.unmatchedActivity}|ign=${c.ignoredActivity}\`\n` +
+        `\`conf=${c.sessionConfirmed}|end=${c.gamesEnded || 0}|rAdd=${c.roleAdded}|rRem=${c.rolesRemoved || 0}(e:${c.roleFailed})|man=+${c.manuelVerilen || 0}/-${c.manuelGeriAlinan || 0}|00h=${c.geceTemizligiAlinan || 0}(e:${c.geceTemizligiBasarisiz || 0})|chk=${c.checkpointWritten}|db=${c.dbSaveSuccess}(e:${c.dbSaveFailed})|vEvt=${c.voiceChangesReceived}|fetch=${c.memberFetchCalls || 0}(sk:${c.memberFetchSkipped || 0},e:${c.memberFetchErrors || 0})|MOVED=${c.transfersMoved}|RET=${r.RETURN_MOVED || 0}(sk:${returnSkipTotal},e:${returnErrTotal})\`\n` +
+        `${voiceRoleCountersLine}\n` +
         `• **Decision Reasons:** \`${reasonSummary}\``
       : `🔗 **Zincir Sayaçları (açılıştan beri):**\n` +
-        `\`presence=${c.presenceReceived} | işlenen=${c.presenceProcessed} | playing=${c.presenceWithPlaying} | eşleşen=${c.matchedGame} | genelRoblox=${c.generalRoblox} | eşleşmeyen=${c.unmatchedActivity} | yoksayılan=${c.ignoredActivity}\`\n` +
-        `\`onaylıOturum=${c.sessionConfirmed} | oyunBitti=${c.gamesEnded || 0} | rolVerilen=${c.roleAdded} | rolAlındı=${c.rolesRemoved || 0} (hata:${c.roleFailed}) | manuel=+${c.manuelVerilen || 0}/-${c.manuelGeriAlinan || 0} | gece=${c.geceTemizligiAlinan || 0}(hata:${c.geceTemizligiBasarisiz || 0}) | süreCheckpoint=${c.checkpointWritten} | dbKayıt=${c.dbSaveSuccess} (hata:${c.dbSaveFailed}) | sesOlayı=${c.voiceChangesReceived} | üyeFetch=${c.memberFetchCalls || 0} (atlanan:${c.memberFetchSkipped || 0}, hata:${c.memberFetchErrors || 0}) | MOVED=${c.transfersMoved} | RETURN_MOVED=${r.RETURN_MOVED || 0} (atlanan:${returnSkipTotal}, hata:${returnErrTotal})\`\n` +
+        `\`pres=${c.presenceReceived}|işl=${c.presenceProcessed}|play=${c.presenceWithPlaying}|eşl=${c.matchedGame}|rblx=${c.generalRoblox}|eşlm=${c.unmatchedActivity}|yok=${c.ignoredActivity}\`\n` +
+        `\`oturum=${c.sessionConfirmed}|oyunBitti=${c.gamesEnded || 0}|rolVer=${c.roleAdded}|rolAlındı=${c.rolesRemoved || 0}(h:${c.roleFailed})|man=+${c.manuelVerilen || 0}/-${c.manuelGeriAlinan || 0}|gece=${c.geceTemizligiAlinan || 0}(h:${c.geceTemizligiBasarisiz || 0})|chk=${c.checkpointWritten}|db=${c.dbSaveSuccess}(h:${c.dbSaveFailed})|ses=${c.voiceChangesReceived}|üyeFetch=${c.memberFetchCalls || 0} (atlanan:${c.memberFetchSkipped || 0}, hata:${c.memberFetchErrors || 0})|MOVED=${c.transfersMoved}|RETURN_MOVED=${r.RETURN_MOVED || 0}(at:${returnSkipTotal},h:${returnErrTotal})\`\n` +
+        `${voiceRoleCountersLine}\n` +
         `• **Karar Sebepleri:** \`${reasonSummary}\``,
   ];
 
