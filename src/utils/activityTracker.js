@@ -1181,7 +1181,7 @@ class ActivityTracker {
         ? this.db.getManualActivityData(today)
         : { day: today, users: {} };
 
-    const isDayRollover = Boolean(force) || manualData.day !== today;
+    const isDayRollover = Boolean(force) || manualData.day < today;
     if (!isDayRollover && this.manualCleanupRetryCounts.size === 0) {
       return { ran: false, day: today, removed: 0, failed: 0 };
     }
@@ -2412,11 +2412,11 @@ class ActivityTracker {
     }
 
     if (member.roles?.cache?.has?.(roleId)) {
-      return { granted: false, waitingForVoice: false, alreadyHas: true };
+      return { granted: false, waitingForVoice: false, alreadyHas: true, promise: null };
     }
 
-    this.enqueueRoleAdd(member, roleId, targetFamily, reason);
-    return { granted: true, waitingForVoice: false, alreadyHas: false };
+    const promise = this.enqueueRoleAdd(member, roleId, targetFamily, reason);
+    return { granted: true, waitingForVoice: false, alreadyHas: false, promise };
   }
 
   syncMemberFamilyRoles(member, targetFamily) {
@@ -3706,10 +3706,13 @@ class ActivityTracker {
       if (session.currentlyDetectedGameId !== session.gameId) continue;
 
       // Kaçan olay güvenlik ağı: ses kanalında ve onaylı oturumu olan üyenin rolü eksikse ver
-      this.ensureActivityRole(member, session, {
+      const roleRes = this.ensureActivityRole(member, session, {
         reason: 'Yedek tarama aktiflik rolü tamamlama',
         syncOtherFamilies: false,
       });
+      if (roleRes?.promise) {
+        tasks.push(roleRes.promise);
+      }
 
       if (!prefs.autoMove) continue;
       if (this._getSessionMoveState(session) !== 'unspent') continue;
