@@ -369,6 +369,7 @@ test.beforeEach(() => {
     announcedAt: Date.now(),
     returnAnnouncedAt: Date.now(),
     manualAnnouncedAt: Date.now(),
+    voiceRoleAnnouncedAt: Date.now(),
     lastResetMonth: curMonth,
   };
   database.data.activityManual = { day: curDay, users: {} };

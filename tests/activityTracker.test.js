@@ -474,6 +474,7 @@ test.beforeEach(() => {
     announcedAt: Date.now(),
     returnAnnouncedAt: Date.now(),
     manualAnnouncedAt: Date.now(),
+    voiceRoleAnnouncedAt: Date.now(),
     lastResetMonth: curMonth,
   };
   database.data.activityManual = { day: curDay, users: {} };
@@ -511,7 +512,8 @@ test('0. ZORUNLU Uçtan Uca Zincir: [presenceUpdate: "Roblox" / "Roblox Player"]
   await tracker.initForGuild(env.guild);
 
   // Varsayılan tercih kontrolü: activityPrefs'te kaydı OLMAYAN üye tracking:true, autoMove:true, returnToLobby:true olmalı
-  const uE2E = env.makeMember('u_e2e');
+  // ROLE_REQUIRES_VOICE=true olduğundan rol alması için ses kanalında (taşınmayan AFK) konumlandırılır
+  const uE2E = env.makeMember('u_e2e', { voiceChannel: env.afkChannel });
   assert.equal(Object.prototype.hasOwnProperty.call(database.data.activityPrefs, 'u_e2e'), false);
   assert.deepEqual(tracker.getPrefs('u_e2e'), { tracking: true, autoMove: true, returnToLobby: true });
 
@@ -665,11 +667,11 @@ test('3. Senaryo B (B1, B2, B3): ÖNCE oyunu açıp SONRA ses kanalına girme, n
   });
   tracker.guild = env.guild;
 
-  // B1: Üye seste değilken oyunu açar -> 20 sn geçer -> sese girer -> 3 sn debounce -> 10 sn geri sayım -> taşınır!
+  // B1: Üye seste değilken oyunu açar -> 20 sn geçer (ROLE_WAITING_FOR_VOICE, hak korunur) -> sese girer -> 3 sn debounce -> rol + 10 sn geri sayım -> taşınır!
   const uB1 = env.makeMember('uB1', { voiceChannel: null });
   tracker.handlePresenceUpdate(null, env.makePresence(uB1, [{ type: ActivityType.Playing, name: 'Roblox Player' }]));
   await clock.advanceBy(20000);
-  assert.equal(tracker.getLastDecision('uB1')?.reason, TRANSFER_REASONS.NOT_IN_VOICE);
+  assert.equal(tracker.getLastDecision('uB1')?.reason, TRANSFER_REASONS.ROLE_WAITING_FOR_VOICE);
   assert.equal(tracker.sessions.get('uB1')?.moveToken, true, 'Seste değilken hak tüketilmemeli');
 
   const { oldState: b1Old, newState: b1New } = env.moveMemberVoice(uB1, env.lobbyChannel);
@@ -925,7 +927,7 @@ test('6. Sayaçlar, karar izi 30 dk TTL, 🧪 Neden aktarılmadım?, 🛠️ Sis
   const regularMember = env.makeMember('reg_u1');
   const devMember = env.makeMember('dev_u1', { roleIds: [config.ROLES.DEVELOPER] });
 
-  // regularMember ses dışındayken Roblox oynar -> NOT_IN_VOICE karar izi oluşur
+  // regularMember ses dışındayken Roblox oynar -> ROLE_WAITING_FOR_VOICE karar izi oluşur
   tracker.handlePresenceUpdate(
     null,
     env.makePresence(regularMember, [{ type: ActivityType.Playing, name: 'Roblox Player' }])
@@ -938,7 +940,7 @@ test('6. Sayaçlar, karar izi 30 dk TTL, 🧪 Neden aktarılmadım?, 🛠️ Sis
   assert.equal(tracker.counters.presenceWithPlaying, 1);
   assert.equal(tracker.counters.generalRoblox, 1);
   assert.equal(tracker.counters.sessionConfirmed, 1);
-  assert.equal(tracker.counters.reasons.NOT_IN_VOICE, 1);
+  assert.equal(tracker.counters.reasons.ROLE_WAITING_FOR_VOICE, 1);
   assert.equal(JSON.stringify(tracker.counters).includes('reg_u1'), false, 'Sayaçlar kullanıcı ID si içermemeli');
 
   // 1) "⚙️ Ayarlarım" paneli: normal üyede "🛠️ Sistem Durumu" GÖRÜNMEZ, Developer üyede GÖRÜNÜR
@@ -980,8 +982,8 @@ test('6. Sayaçlar, karar izi 30 dk TTL, 🧪 Neden aktarılmadım?, 🛠️ Sis
     { tracker, db: database }
   );
   assert.equal(whyTr.ephemeral, true);
-  assert.match(whyTr.content, /NOT_IN_VOICE/);
-  assert.match(whyTr.content, /Bir ses kanalında değildin/);
+  assert.match(whyTr.content, /ROLE_WAITING_FOR_VOICE/);
+  assert.match(whyTr.content, /bir ses kanalındayken oyun oynarken verilir/);
 
   let whyEn = null;
   await aktivitemCmd.handleActivityButton(
@@ -997,7 +999,7 @@ test('6. Sayaçlar, karar izi 30 dk TTL, 🧪 Neden aktarılmadım?, 🛠️ Sis
     },
     { tracker, db: database }
   );
-  assert.match(whyEn.content, /You were not in a voice channel/);
+  assert.match(whyEn.content, /while you're in a voice channel and playing/);
 
   // 3) 30 dakika (DECISION_TTL_MIN) geçince karar izi bellekten silinir
   await clock.advanceBy(30 * 60 * 1000 + 1000);
@@ -1395,12 +1397,16 @@ test('R3 & R4. Seste değilken (sonradan girse de taşınmaz), oyun dışı kana
   });
   tracker.guild = env.guild;
 
-  // R3: Seste değil -> rol alınır, RETURN_SKIPPED_NOT_IN_VOICE, sonradan oyun kanalına girse de TAŞINMAZ
-  const uR3 = env.makeMember('u_r3', { voiceChannel: null });
+  // R3: Sesteyken CS2 rolü alır -> sesten çıkar -> oyun biter -> rol alınır, RETURN_SKIPPED_NOT_IN_VOICE, sonradan oyun kanalına girse de TAŞINMAZ
+  const uR3 = env.makeMember('u_r3', { voiceChannel: env.afkChannel });
   const p3a = env.makePresence(uR3, [{ type: ActivityType.Playing, name: 'CS2' }]);
   tracker.handlePresenceUpdate(null, p3a);
   await clock.advanceBy(15000);
   assert.equal(uR3.roles.cache.has(activityConfig.FAMILIES.cs2.roleId), true);
+
+  // Oyun kapanmadan önce sesten tamamen çıkar (ROLE_REMOVE_ON_VOICE_LEAVE=false olduğundan rol kalır)
+  const { oldState: leave3Old, newState: leave3New } = env.moveMemberVoice(uR3, null);
+  tracker.handleVoiceStateUpdate(leave3Old, leave3New);
 
   const p3b = env.makePresence(uR3, [], { status: 'online' });
   tracker.handlePresenceUpdate(p3a, p3b);
@@ -2091,6 +2097,7 @@ test('R14 & R15. Tek seferlik dönüş duyurusu (etiketsiz, hata durumunda tekra
     announcedAt: Date.now(),
     returnAnnouncedAt: null,
     manualAnnouncedAt: Date.now(),
+    voiceRoleAnnouncedAt: Date.now(),
     lastResetMonth: curMonth,
   };
   database.save();
