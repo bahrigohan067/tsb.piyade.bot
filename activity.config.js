@@ -24,6 +24,24 @@ const RETURN_ONLY_FROM_GAME_CHANNELS = true;
 // Oyun bitince Salon 1'e otomatik dönüş özelliği genel açma/kapama anahtarı
 const RETURN_ENABLED = true;
 
+// true iken otomatik Oyun Aktiflik Rolü yalnızca üye bir ses kanalındayken verilir.
+// false yapılırsa eski davranış (rol oyun onaylanınca, sesten bağımsız) aynen çalışır.
+const ROLE_REQUIRES_VOICE = true;
+
+// true yapılırsa üye ses kanalından tamamen çıkınca otomatik (manuel /oyun olmayan) aktiflik rolü de alınır.
+// Varsayılan false: rol yalnızca oyun bitince alınır (mevcut davranış).
+const ROLE_REMOVE_ON_VOICE_LEAVE = false;
+
+// Üye oyun ses kanalına aktarıldıktan sonra sesten tamamen düşerse (bağlantı kopması vb.) ve oyun sürüyorsa
+// tekrar bir ses kanalına girdiğinde yeniden geri sayım başlatıp oyunun kanalına aktarır.
+const REARM_AFTER_DISCONNECT = true;
+
+// Aynı oyun oturumunda en çok kaç kez sesten düşme sonrası yeniden aktarma hakkı verilebilir
+const REARM_MAX_PER_SESSION = 3;
+
+// Aynı üye için iki yeniden aktarma geri sayımı arasında en az kaç saniye geçmelidir (spam koruması)
+const REARM_MIN_GAP_SEC = 30;
+
 // Aylık sıfırlama ve tarih hesaplamalarında kullanılan saat dilimi
 const TIMEZONE = 'Europe/Istanbul';
 
@@ -96,6 +114,11 @@ const TRANSFER_REASONS = Object.freeze({
   RETURN_TARGET_FULL: 'RETURN_TARGET_FULL',
   RETURN_NO_PERMISSION: 'RETURN_NO_PERMISSION',
   RETURN_FAILED: 'RETURN_FAILED',
+  // Ses-bazlı rol ve sesten düşme sonrası yeniden aktarma sebep kodları
+  ROLE_WAITING_FOR_VOICE: 'ROLE_WAITING_FOR_VOICE',
+  REARMED_AFTER_DISCONNECT: 'REARMED_AFTER_DISCONNECT',
+  REARM_LIMIT_REACHED: 'REARM_LIMIT_REACHED',
+  REARM_RATE_LIMITED: 'REARM_RATE_LIMITED',
 });
 
 // Hiçbir koşulda otomatik ses aktarımı yapılmayacak özel ses kanalları (ileride doldurulabilir)
@@ -771,6 +794,11 @@ const exportedConfig = {
   RETURN_CHANNEL_ID,
   RETURN_ONLY_FROM_GAME_CHANNELS,
   RETURN_ENABLED,
+  ROLE_REQUIRES_VOICE,
+  ROLE_REMOVE_ON_VOICE_LEAVE,
+  REARM_AFTER_DISCONNECT,
+  REARM_MAX_PER_SESSION,
+  REARM_MIN_GAP_SEC,
   TIMEZONE,
   MANUAL_TIMEZONE,
   MANUAL_CLEAR_ALL_ACTIVITY_ROLES,

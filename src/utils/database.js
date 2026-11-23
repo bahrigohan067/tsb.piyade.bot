@@ -74,10 +74,11 @@ class DatabaseManager {
         month: initialMonth,
         users: {},
       },
-      activityMeta: {                 // İlk duyuru, dönüş duyurusu, /oyun duyurusu ve son sıfırlanan ay bilgisi
+      activityMeta: {                 // İlk duyuru, dönüş duyurusu, /oyun duyurusu, ses-rolü duyurusu ve son sıfırlanan ay bilgisi
         announcedAt: null,
         returnAnnouncedAt: null,
         manualAnnouncedAt: null,
+        voiceRoleAnnouncedAt: null,
         lastResetMonth: initialMonth,
       },
       activityManual: {               // Mobil /oyun komutuyla bugün alınmış manuel aktiflik rolleri (00:00'da silinir; geçmiş DEĞİLDİR)
@@ -215,6 +216,10 @@ class DatabaseManager {
           manualAnnouncedAt:
             typeof rawMeta.manualAnnouncedAt === 'number' && Number.isFinite(rawMeta.manualAnnouncedAt)
               ? rawMeta.manualAnnouncedAt
+              : null,
+          voiceRoleAnnouncedAt:
+            typeof rawMeta.voiceRoleAnnouncedAt === 'number' && Number.isFinite(rawMeta.voiceRoleAnnouncedAt)
+              ? rawMeta.voiceRoleAnnouncedAt
               : null,
           lastResetMonth:
             typeof rawMeta.lastResetMonth === 'string' && /^\d{4}-\d{2}$/.test(rawMeta.lastResetMonth)
@@ -1640,6 +1645,7 @@ class DatabaseManager {
         announcedAt: null,
         returnAnnouncedAt: null,
         manualAnnouncedAt: null,
+        voiceRoleAnnouncedAt: null,
         lastResetMonth: targetMonth,
       };
     } else {
@@ -1684,6 +1690,7 @@ class DatabaseManager {
       announcedAt: typeof meta.announcedAt === 'number' ? meta.announcedAt : null,
       returnAnnouncedAt: typeof meta.returnAnnouncedAt === 'number' ? meta.returnAnnouncedAt : null,
       manualAnnouncedAt: typeof meta.manualAnnouncedAt === 'number' ? meta.manualAnnouncedAt : null,
+      voiceRoleAnnouncedAt: typeof meta.voiceRoleAnnouncedAt === 'number' ? meta.voiceRoleAnnouncedAt : null,
       lastResetMonth: meta.lastResetMonth || this.data.activityStats?.month || getCurrentIstanbulMonth(),
     };
   }
@@ -1694,6 +1701,7 @@ class DatabaseManager {
         announcedAt: timestamp,
         returnAnnouncedAt: null,
         manualAnnouncedAt: null,
+        voiceRoleAnnouncedAt: null,
         lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
       };
     } else {
@@ -1708,6 +1716,7 @@ class DatabaseManager {
         announcedAt: null,
         returnAnnouncedAt: timestamp,
         manualAnnouncedAt: null,
+        voiceRoleAnnouncedAt: null,
         lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
       };
     } else {
@@ -1722,10 +1731,26 @@ class DatabaseManager {
         announcedAt: null,
         returnAnnouncedAt: null,
         manualAnnouncedAt: timestamp,
+        voiceRoleAnnouncedAt: null,
         lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
       };
     } else {
       this.data.activityMeta.manualAnnouncedAt = timestamp;
+    }
+    this.save();
+  }
+
+  setActivityVoiceRoleAnnounced(timestamp = Date.now()) {
+    if (!this.data.activityMeta || typeof this.data.activityMeta !== 'object') {
+      this.data.activityMeta = {
+        announcedAt: null,
+        returnAnnouncedAt: null,
+        manualAnnouncedAt: null,
+        voiceRoleAnnouncedAt: timestamp,
+        lastResetMonth: this.data.activityStats?.month || getCurrentIstanbulMonth(),
+      };
+    } else {
+      this.data.activityMeta.voiceRoleAnnouncedAt = timestamp;
     }
     this.save();
   }
