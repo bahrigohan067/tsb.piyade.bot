@@ -155,10 +155,52 @@ Bot aynı Node.js sürecinde Express ile REST API sunar. `/api/health` dışınd
   - **Hata Kodları (`{ error, code, details? }`):** `NO_GAME_SELECTED`, `NAME_INVALID`, `GAME_USERNAME_INVALID` (`details.game`), `ROBLOX_NOT_FOUND`, `ROBLOX_BANNED`, `ROBLOX_LOOKUP_FAILED` (503 geçici hata), `ROBLOX_ALREADY_REGISTERED`, `ALREADY_REGISTERED`, `RATE_LIMITED`.
 * **`GET /api/register/status/:id`**, **`GET /api/member/:id/profile`**, **`GET /api/admin/members`**, **`GET /api/admin/members/:id`**:
   - Yanıtlardaki `registration` (ve `pending` durumunda `application`) nesnesi artık `displayName` ve `games: [{ id, username, verified, robloxId?, robloxProfileUrl? }]` alanlarını da içerir (eski kayıtlar okuma sırasında otomatik uyarlanır).
-* **`GET /api/member/:id/activity?lang=tr|en`**: Üyenin bu ayki kişisel oyun etkinliği özetini (`/aktivitem` ile birebir aynı mantıkla; canlı oturum dahil) döndürür.
-* **`GET /api/stats/top-games?scope=month|all&limit=8&lang=tr|en&group=game|family`**: Sunucuda en çok oynanan oyunların anonim sıralamasını döndürür (hiçbir kullanıcı ID'si içermez, 60 sn önbellekli).
-* **`GET /api/stats/summary`**: Sunucudaki aktif kayıtlı oyuncu sayısı, toplam üye, çevrimiçi ve şu an oynayan kişi sayısını anonim olarak döndürür (60 sn önbellekli).
+* **`GET /api/member/:id/activity?lang=tr|en`**: Üyenin bu ayki kişisel oyun etkinliği özetini (`/aktivitem` ile birebir aynı mantıkla; canlı oturum ve Roblox aile gruplaması dahil) döndürür.
+* **`GET /api/stats/top-games?scope=month|all&limit=8&lang=tr|en&group=family`**: Sunucuda en çok oynanan oyun ailelerinin anonim sıralamasını (`families` + geriye dönük `games`, `computedAt`) döndürür (hiçbir kullanıcı ID'si içermez, 60 sn önbellekli).
+* **`GET /api/stats/summary`**: Sunucudaki `activeThisMonth` ("Bu ay aktif"), `playingNow` ("Şu an oyunda"), `uncertainCount`, `computedAt`, `families` ile birlikte eski site uyumlu `activeRegisteredCount`, `totalMemberCount`, `onlineCount`, `playingCount`, `updatedAt` alanlarını anonim olarak döndürür (60 sn önbellekli).
 * Diğer uç noktalar: `GET /api/member/:id/roles`, `POST /api/feedback`, `POST /api/admin/warn`, `POST /api/admin/warn/:id/evidence`.
+
+---
+
+## 📊 İstatistik Katmanı, Süre Güvenceleri ve Roblox Gruplama
+
+### 1. "Bu ay aktif" ve "Şu an oyunda" Tanımları (`activity.config.js`)
+Tek bir belirsiz sayı yerine iki ayrı, kimliksiz ölçü hesaplanır:
+- **`activeThisMonth` ("Bu ay aktif" / "Active this month")**: Kayıtlı olan **VE** sunucuda hâlâ bulunan **VE** bot olmayan **VE** etkinlik takibi açık (`tracking: true`) **VE** bu ay en az `MIN_ACTIVE_MINUTES` (varsayılan `1` dk) kayıtlı süresi olan **benzersiz** üye sayısı. Bir üye kaç oyun oynarsa oynasın yalnızca **1 kez** sayılır; `/oyun` manuel rolleri sayıma girmez.
+- **`playingNow` ("Şu an oyunda" / "Playing now")**: Kayıtlı, sunucuda, bot olmayan, takibi açık ve o an onaylı (`CONFIRM_SEC` geçmiş) canlı oyun oturumu **canlı Discord presence ile doğrulanan** benzersiz üye sayısı. Önbellekten kalma ama artık oyun göstermeyen bayat oturumlar sayılmaz.
+- **`uncertainCount` (Belirsiz)**: Üye sunucu önbelleğinde değilse toplu `guild.members.fetch({ limit })` çağrısı **asla** yapılmaz; tur başına en çok `SAYIM_MEMBER_LOOKUP_CAP` (25) kişi, 1 saatlik önbellek ve kullanıcı başına 10 dk bekleme ile tek tek doğrulanır. Doğrulanamayanlar veya canlı presence bilgisi eksik oturumlar `uncertainCount` içinde ayrı tutulur. Sunucudan ayrılan üyenin kendi `activityStats` kaydı `guildMemberRemove` anında temizlenir.
+
+### 2. Süre Hesabı Güvenceleri
+- **Delta Esaslı Toplama (`lastCheckpointAt`)**: Her 60 sn checkpoint yalnızca son checkpoint'ten beri geçen farkı (`şimdi - lastCheckpointAt`) ekler; oturum başlangıcı kümülatif olarak tekrar toplanmaz.
+- **Boşluk Sınırı (`MAX_DELTA_SEC = CHECKPOINT_SEC × 2 = 120 sn`)**: Bot kapandıysa, olay döngüsü takıldıysa veya saat sıçradıysa 120 sn üstü boşluk sayılmaz; yalnızca `120 sn` eklenir ve kimliksiz `boşlukKırpıldı` sayacı artar. Bot açılışında önbellekten yüklenen oturumların saati açılış anından başlar.
+- **Discord `timestamps.start` Kuralı**: Discord'un etkinlik başlangıç zamanı süreye **asla** eklenmez; yalnızca onay (`CONFIRM_SEC`) kontrolünde kullanılır.
+- **Tek Saat ve Ay Sınırı (B3 Değişmez Kuralı)**: Bir üye aynı saniyede yalnızca tek bir oyuna süre yazabilir; aylık toplamı ayın başından (`Europe/Istanbul`) o ana geçen gerçek süreyi aşamaz. İhlal girişimleri kırpılır ve `çiftSayımEngellendi` sayacı artar.
+- **`STOP_GRACE_SEC` ve Ay Dönümü**: Oyun bırakıldıktan sonraki 5 sn bekleme süresi sayılmaz. Ay dönümünde (`00:00:00 Europe/Istanbul`) yarım kalan oturum tam sınırda bölünerek eski kısım eski aya (`activityAllTime`), yeni kısım yeni aya yazılır (kayıp ve çift yazım olmaz).
+- **Mevcut Veriyi Koruma (`REPAIR_OVERSIZED_TOTALS_ON_START: false`)**: Varsayılan kapalıdır; mevcut veritabanı kayıtları onaysız değiştirilmez. Onaylanıp `true` yapılırsa açılışta yalnızca ay süresini aşan toplamlar tek seferlik orantılı kırpılır ve konsola kimliksiz özet yazılır.
+- **Süre Biçimleyici (`formatDuration`)**: Bot ve sitede aynı kural geçerlidir (`0 dk`, `1 dk'dan az`, `1 sa`, `1 sa 59 dk`, `41 sa 47 dk`; `NaN`/`Infinity`/`undefined` üretmez).
+
+### 3. Roblox Aile Gruplama ve `SHOW_FAMILY_BREAKDOWN`
+- Aile eşlemesi yalnızca bottaki `activity.config.js` (`FAMILIES` + `GAMES` + `ROBLOX_UNKNOWN`) üzerinden `familyOfGame` ve `groupStatsByFamily` ile **okuma anında** yapılır; site kendi oyun listesini tutmaz.
+- Veritabanındaki `activityStats` anahtarları (`roblox_unknown`, `tsb`, `bonk`, `apeirophobia`, `scp`, `jailbreak`, `erlc`, `minecraft`, `cs2`, `zula`) **değiştirilmez** (migrasyon yok).
+- Tüm Roblox anahtarları tek **`🧱 Roblox`** satırında toplanır (`"Roblox (diğer)"` etiketi kaldırılmıştır); Minecraft (`⛏️`), CS2 (`🎯`) ve Zula (`🪖`) kendi satırlarında kalır.
+- `/aktivitem`, `/api/member/:id/activity`, `/api/stats/top-games` ve `/api/stats/summary` aynı fonksiyonu kullanır.
+- İsteğe bağlı `SHOW_FAMILY_BREAKDOWN` (varsayılan `false`): `true` yapılırsa Roblox satırının altında en çok 5 alt oyun ve `+N diğer` özeti gösterilir.
+
+### 4. Bot-Site Sözleşmesi ve Deploy Sırası
+- **Deploy Sırası: ÖNCE BOT, SONRA SİTE.**
+- Geriye dönük uyumluluk iki yönlüdür:
+  - Yeni bot, yeni alanların (`activeThisMonth`, `playingNow`, `uncertainCount`, `computedAt`, `families`) yanında tüm eski alanları (`activeRegisteredCount`, `playingCount`, `games`, `updatedAt`) döndürmeye devam ettiği için **eski site yeni botla** sorunsuz çalışır.
+  - Yeni site, yeni alanlar yoksa sessizce eski alanlara düştüğü için **yeni site eski botla** da çökmeden çalışır.
+- Herkese açık istatistik uçları (`summary`, `top-games`) asla kullanıcı ID'si veya kullanıcı adı içermez; Bearer `API_SECRET` ve hız sınırı korunur.
+
+### 5. Sorun Giderme (Sayı veya Süre Tuhaf Görünüyorsa)
+1. **Developer olarak `/aktivitem` -> `🛠️ Sistem Durumu` açın**:
+   - `Aktif Sayım`: `activeThisMonth`, `playingNow`, `belirsiz (uncertainCount)` ve son hesaplanma zamanına bakın. `belirsiz` yüksekse Discord REST hız sınırı veya Presence Intent kapalı olabilir.
+   - `Süre Sağlığı`: `boşluk kırpıldı`, `çift sayım engellendi` veya `ay süresini aşan üye` sıfır değilse `⚠️` görünür.
+   - `Aile Gruplama`: Eşlenemeyen oyun anahtarı varsa kimliksiz adıyla listelenir.
+2. **Saatlik konsol özetine bakın**: `[OYUN ETKİNLİĞİ] son 1 saat: activeThisMonth=... playingNow=... boşlukKırpıldı=... çiftSayımEngellendi=...` satırında artış olup olmadığını kontrol edin.
+3. **Sıralamadaki saatler neden yüksek görünebilir?**: Sıralamadaki değer kişi başı ortalama değil, **tüm aktif oyuncuların bu ayki toplam süresidir** (ör. 10 kişi × 4 saat = 40 saat). Ayrıca oyunu açık bırakıp AFK kalan üyeler Discord `Playing` bilgisini göndermeye devam ettiği için süreleri doğal olarak artar.
+4. **Çift bot örneği kontrolü**: Railway'de aynı token ile birden fazla replica çalışmadığından emin olun (tek süreç içinde `presenceUpdate` / `voiceStateUpdate` dinleyici sayısı `1` olarak korunur).
 
 ---
 
