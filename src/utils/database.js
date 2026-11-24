@@ -1547,6 +1547,124 @@ class DatabaseManager {
     return { month, games };
   }
 
+  /**
+   * Bir üyenin bu ay kaydettiği tüm oyunların toplam saniyesini döndürür (salt okunur).
+   */
+  getUserMonthlyTotalSeconds(userId) {
+    if (!userId) return 0;
+    const rawGames = this.data.activityStats?.users?.[String(userId)]?.games;
+    if (!rawGames || typeof rawGames !== 'object') return 0;
+    let total = 0;
+    for (const rawSec of Object.values(rawGames)) {
+      const sec = Math.floor(Number(rawSec));
+      if (Number.isFinite(sec) && sec > 0) {
+        total += sec;
+      }
+    }
+    return total;
+  }
+
+  /**
+   * Salt okunur B3 değişmez kuralı denetimi: bu ayki toplam süresi ayın başından beri
+   * geçen gerçek süreyi (maxElapsedSec) aşan üyeleri KİMLİKSİZ olarak sayar.
+   * Veritabanını ASLA değiştirmez.
+   */
+  inspectOversizedActivityUsers(maxElapsedSec) {
+    const cap = Math.max(0, Math.floor(Number(maxElapsedSec) || 0));
+    const users = this.data.activityStats?.users;
+    if (!users || typeof users !== 'object') {
+      return { oversizedUserCount: 0, totalExcessSeconds: 0, checkedUsers: 0 };
+    }
+
+    let oversizedUserCount = 0;
+    let totalExcessSeconds = 0;
+    let checkedUsers = 0;
+
+    for (const userObj of Object.values(users)) {
+      const games = userObj?.games;
+      if (!games || typeof games !== 'object') continue;
+      checkedUsers += 1;
+      let sum = 0;
+      for (const rawSec of Object.values(games)) {
+        const sec = Math.floor(Number(rawSec));
+        if (Number.isFinite(sec) && sec > 0) sum += sec;
+      }
+      if (sum > cap) {
+        oversizedUserCount += 1;
+        totalExcessSeconds += sum - cap;
+      }
+    }
+
+    return { oversizedUserCount, totalExcessSeconds, checkedUsers };
+  }
+
+  /**
+   * Yalnızca REPAIR_OVERSIZED_TOTALS_ON_START açık (true) ve dryRun: false olduğunda
+   * ay süresini aşan üyelerin toplamlarını geçen ay süresine orantılı olarak kırpar.
+   * Varsayılan (dryRun: true) mevcut veriye ASLA dokunmaz. Kimliksiz özet döner.
+   */
+  repairOversizedActivityTotals(maxElapsedSec, { dryRun = true } = {}) {
+    const cap = Math.max(0, Math.floor(Number(maxElapsedSec) || 0));
+    const users = this.data.activityStats?.users;
+    if (!users || typeof users !== 'object') {
+      return { repairedUsers: 0, totalSecondsTrimmed: 0, dryRun: Boolean(dryRun) };
+    }
+
+    let repairedUsers = 0;
+    let totalSecondsTrimmed = 0;
+
+    for (const [uid, userObj] of Object.entries(users)) {
+      const games = userObj?.games;
+      if (!games || typeof games !== 'object') continue;
+
+      let sum = 0;
+      const entries = [];
+      for (const [gid, rawSec] of Object.entries(games)) {
+        const sec = Math.floor(Number(rawSec));
+        if (gid && Number.isFinite(sec) && sec > 0) {
+          sum += sec;
+          entries.push([gid, sec]);
+        }
+      }
+      if (sum <= cap) continue;
+
+      repairedUsers += 1;
+      totalSecondsTrimmed += sum - cap;
+
+      if (!dryRun) {
+        if (cap === 0) {
+          delete this.data.activityStats.users[uid];
+        } else {
+          const scale = cap / sum;
+          const nextGames = {};
+          let allocated = 0;
+          for (let i = 0; i < entries.length; i++) {
+            const [gid, sec] = entries[i];
+            const scaled = Math.floor(sec * scale);
+            if (scaled > 0) {
+              nextGames[gid] = scaled;
+              allocated += scaled;
+            }
+          }
+          // Yuvarlama artığını en yüksek süreli oyuna ekleyerek tam cap'e ulaş (cap'i aşmadan)
+          const remainder = cap - allocated;
+          if (remainder > 0 && entries.length > 0) {
+            entries.sort((a, b) => b[1] - a[1]);
+            const topGid = entries[0][0];
+            nextGames[topGid] = (nextGames[topGid] || 0) + remainder;
+          }
+          this.data.activityStats.users[uid].games = nextGames;
+        }
+      }
+    }
+
+    if (!dryRun && repairedUsers > 0) {
+      this.save();
+    }
+
+    return { repairedUsers, totalSecondsTrimmed, dryRun: Boolean(dryRun) };
+  }
+
   clearUserActivityStats(userId, { immediate = true } = {}) {
     if (!userId || !this.data.activityStats?.users) return false;
     const uid = String(userId);

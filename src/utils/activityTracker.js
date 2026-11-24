@@ -18,6 +18,7 @@ const {
   ButtonBuilder,
   ButtonStyle,
   ChannelType,
+  Events,
   MessageFlags,
   PermissionFlagsBits,
 } = require('discord.js');
@@ -479,6 +480,8 @@ function createEmptyCounters() {
     geceTemizligiAlinan: 0,
     geceTemizligiBasarisiz: 0,
     checkpointWritten: 0,
+    gapClamped: 0,
+    doubleCountBlocked: 0,
     dbSaveSuccess: 0,
     dbSaveFailed: 0,
     voiceChangesReceived: 0,
@@ -654,6 +657,15 @@ class ActivityTracker {
     // Kullanıcı başına bellekte SON aktarma kararı (30 dk TTL, kalıcı olarak hiçbir yere yazılmaz)
     this.lastDecisions = new Map();
 
+    // Kullanıcı başına tek saat güvencesi: aynı saniyede birden fazla oyuna süre yazılmasını önler (yalnızca bellekte)
+    this.userLastAccountedSec = new Map();
+
+    // Son kimliksiz istatistik sayım özeti, süre sağlık kontrolü ve dinleyici sayısı (yalnızca bellekte)
+    this.lastStatsSummary = null;
+    this.lastDurationHealthCheck = null;
+    this.listenerHealth = { presenceUpdate: 0, voiceStateUpdate: 0 };
+    this._repairRanThisBoot = false;
+
     // Kimliksiz zincir sayaçları (bot açıldığından beri toplam)
     this.counters = createEmptyCounters();
 
@@ -781,6 +793,7 @@ class ActivityTracker {
 
   /**
    * Kimliksiz zincir sayaçlarını tek satır olarak konsola yazar (açılışta ve saat başı).
+   * Kullanıcı kimliği, kullanıcı adı veya kişiye özel oyun bilgisi ASLA içermez.
    */
   logCounterSummary(periodLabel = 'son 1 saat') {
     const c = this.counters;
@@ -798,9 +811,177 @@ class ActivityTracker {
       (r.RETURN_NO_PERMISSION || 0) +
       (r.RETURN_FAILED || 0);
 
+    const activeThisMonthVal =
+      typeof this.lastStatsSummary?.activeThisMonth === 'number'
+        ? this.lastStatsSummary.activeThisMonth
+        : this.countQuickActiveThisMonth();
+    const playingNowVal =
+      typeof this.lastStatsSummary?.playingNow === 'number'
+        ? this.lastStatsSummary.playingNow
+        : this.countQuickPlayingNow();
+
     this.logger.log(
-      `[OYUN ETKİNLİĞİ] ${periodLabel}: presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} oyunBitti=${c.gamesEnded} rol=${c.roleAdded} rolAlındı=${c.rolesRemoved} rolSesBekliyor=${r.ROLE_WAITING_FOR_VOICE || 0} manuel=+${c.manuelVerilen}/-${c.manuelGeriAlinan} gece=${c.geceTemizligiAlinan}(hata:${c.geceTemizligiBasarisiz}) süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} uyeFetch=${c.memberFetchCalls}(atlanan:${c.memberFetchSkipped},hata:${c.memberFetchErrors}) | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${r.NOT_IN_VOICE || 0} rearm=${r.REARMED_AFTER_DISCONNECT || 0}(limit:${r.REARM_LIMIT_REACHED || 0},hız:${r.REARM_RATE_LIMITED || 0}) | dönüş: RETURN_MOVED=${r.RETURN_MOVED || 0} RETURN_SKIP=${returnSkipTotal} RETURN_ERR=${returnErrTotal}`
+      `[OYUN ETKİNLİĞİ] ${periodLabel}: activeThisMonth=${activeThisMonthVal} playingNow=${playingNowVal} boşlukKırpıldı=${c.gapClamped || 0} çiftSayımEngellendi=${c.doubleCountBlocked || 0} | presence=${c.presenceReceived} playing=${c.presenceWithPlaying} matched=${c.matchedGame} roblox=${c.generalRoblox} oturum=${c.sessionConfirmed} oyunBitti=${c.gamesEnded} rol=${c.roleAdded} rolAlındı=${c.rolesRemoved} rolSesBekliyor=${r.ROLE_WAITING_FOR_VOICE || 0} manuel=+${c.manuelVerilen}/-${c.manuelGeriAlinan} gece=${c.geceTemizligiAlinan}(hata:${c.geceTemizligiBasarisiz}) süreYazıldı=${c.checkpointWritten} dbKayıt=${dbStatus} uyeFetch=${c.memberFetchCalls}(atlanan:${c.memberFetchSkipped},hata:${c.memberFetchErrors}) | aktarma: MOVED=${c.transfersMoved} NOT_IN_VOICE=${r.NOT_IN_VOICE || 0} rearm=${r.REARMED_AFTER_DISCONNECT || 0}(limit:${r.REARM_LIMIT_REACHED || 0},hız:${r.REARM_RATE_LIMITED || 0}) | dönüş: RETURN_MOVED=${r.RETURN_MOVED || 0} RETURN_SKIP=${returnSkipTotal} RETURN_ERR=${returnErrTotal}`
     );
+  }
+
+  /**
+   * İki checkpoint arası izin verilen en büyük süre farkını (saniye) döndürür (varsayılan CHECKPOINT_SEC x 2 = 120 sn).
+   */
+  getMaxDeltaSec() {
+    const chk = Math.max(1, Number(this.config.TIMINGS?.CHECKPOINT_SEC ?? 60));
+    const configured = Number(this.config.TIMINGS?.MAX_DELTA_SEC);
+    return Number.isFinite(configured) && configured > 0 ? Math.floor(configured) : chk * 2;
+  }
+
+  /**
+   * Oturumun son checkpoint zaman damgasını (lastCheckpointAt ve geriye dönük lastAccountedAt) senkron günceller.
+   */
+  _setSessionCheckpointAt(session, ms) {
+    if (!session) return;
+    session.lastCheckpointAt = ms;
+    session.lastAccountedAt = ms;
+  }
+
+  /**
+   * Oturumun son checkpoint zaman damgasını okur.
+   */
+  _getSessionCheckpointAt(session) {
+    if (!session) return null;
+    if (typeof session.lastCheckpointAt === 'number' && Number.isFinite(session.lastCheckpointAt)) {
+      return session.lastCheckpointAt;
+    }
+    if (typeof session.lastAccountedAt === 'number' && Number.isFinite(session.lastAccountedAt)) {
+      return session.lastAccountedAt;
+    }
+    return null;
+  }
+
+  /**
+   * Saatlik konsol satırı için ağ çağrısı yapmadan hızlı, kimliksiz activeThisMonth tahmini döndürür.
+   */
+  countQuickActiveThisMonth() {
+    const minSec = Math.max(0, Number(this.config.MIN_ACTIVE_MINUTES ?? activityConfig.MIN_ACTIVE_MINUTES ?? 1)) * 60;
+    const users = this.db?.data?.activityStats?.users;
+    if (!users || typeof users !== 'object') return 0;
+    let count = 0;
+    for (const [uid, userObj] of Object.entries(users)) {
+      if (!this.getPrefs(uid).tracking) continue;
+      const games = userObj?.games;
+      if (!games || typeof games !== 'object') continue;
+      let sum = 0;
+      for (const sec of Object.values(games)) {
+        const clean = Math.floor(Number(sec));
+        if (Number.isFinite(clean) && clean > 0) sum += clean;
+      }
+      if (sum >= minSec) count += 1;
+    }
+    return count;
+  }
+
+  /**
+   * Saatlik konsol satırı için hızlı, kimliksiz playingNow sayısı döndürür.
+   */
+  countQuickPlayingNow() {
+    let count = 0;
+    for (const [uid, session] of this.sessions.entries()) {
+      if (!session || !session.confirmed || !session.gameId) continue;
+      if (session.currentlyDetectedGameId !== session.gameId) continue;
+      if (!this.getPrefs(uid).tracking) continue;
+      count += 1;
+    }
+    return count;
+  }
+
+  /**
+   * İstatistik uç noktası her sayım yaptığında son kimliksiz özeti burada tutar (🛠️ Sistem Durumu ve konsol için).
+   */
+  updateLastStatsSummary(summary) {
+    if (!summary || typeof summary !== 'object') return;
+    this.lastStatsSummary = {
+      activeThisMonth:
+        typeof summary.activeThisMonth === 'number' && Number.isFinite(summary.activeThisMonth)
+          ? Math.max(0, Math.floor(summary.activeThisMonth))
+          : 0,
+      playingNow:
+        typeof summary.playingNow === 'number' && Number.isFinite(summary.playingNow)
+          ? Math.max(0, Math.floor(summary.playingNow))
+          : 0,
+      uncertainCount:
+        typeof summary.uncertainCount === 'number' && Number.isFinite(summary.uncertainCount)
+          ? Math.max(0, Math.floor(summary.uncertainCount))
+          : 0,
+      computedAt: typeof summary.computedAt === 'string' ? summary.computedAt : new Date(this.now()).toISOString(),
+    };
+  }
+
+  getLastStatsSummary() {
+    return this.lastStatsSummary ? { ...this.lastStatsSummary } : null;
+  }
+
+  /**
+   * Salt okunur B3 değişmez kuralı sağlık denetimi: mevcut veriyi ASLA değiştirmez.
+   * Ay başından (Europe/Istanbul) şimdiye kadar geçen gerçek süreyi aşan üye sayısını kimliksiz hesaplar.
+   */
+  checkDurationHealth(nowMs = this.now(), db = this.db) {
+    const monthStr = db?.data?.activityStats?.month || null;
+    const elapsedFn =
+      this.config.getElapsedSecondsInCurrentIstanbulMonth ||
+      activityConfig.getElapsedSecondsInCurrentIstanbulMonth;
+    const elapsedMonthSec = elapsedFn(nowMs, monthStr);
+    const inspection =
+      typeof db?.inspectOversizedActivityUsers === 'function'
+        ? db.inspectOversizedActivityUsers(elapsedMonthSec)
+        : { oversizedUserCount: 0, totalExcessSeconds: 0, checkedUsers: 0 };
+
+    const result = {
+      checkedAt: nowMs,
+      elapsedMonthSec,
+      oversizedUserCount: inspection.oversizedUserCount,
+      totalExcessSeconds: inspection.totalExcessSeconds,
+      checkedUsers: inspection.checkedUsers,
+    };
+    this.lastDurationHealthCheck = result;
+    return result;
+  }
+
+  /**
+   * Salt okunur aile gruplama sağlık denetimi: activityStats içindeki Roblox anahtarlarını ve
+   * hiçbir aileye eşlenemeyen anahtarları KİMLİKSİZ olarak listeler.
+   */
+  inspectFamilyGroupingHealth(db = this.db) {
+    const groupFn = this.config.groupStatsByFamily || activityConfig.groupStatsByFamily;
+    const grouped = groupFn(db?.data?.activityStats || { users: {} }, {
+      cfg: this.config,
+      lang: 'tr',
+      showBreakdown: false,
+    });
+    return {
+      robloxKeysFound: grouped.robloxKeysFound || [],
+      unmappedKeys: grouped.unmappedKeys || [],
+    };
+  }
+
+  /**
+   * presenceUpdate ve voiceStateUpdate dinleyicilerinin çift kaydedilip kaydedilmediğini denetler.
+   */
+  checkListenerCounts(client = this.client) {
+    if (!client || typeof client.listenerCount !== 'function') {
+      return this.listenerHealth;
+    }
+    const presenceCount = client.listenerCount(Events.PresenceUpdate);
+    const voiceCount = client.listenerCount(Events.VoiceStateUpdate);
+    this.listenerHealth = {
+      presenceUpdate: presenceCount,
+      voiceStateUpdate: voiceCount,
+    };
+    if (presenceCount > 1 || voiceCount > 1) {
+      this.logErrorThrottled(
+        'listener:duplicate',
+        `[OYUN ETKİNLİĞİ UYARISI] Çift olay dinleyicisi tespit edildi (presenceUpdate=${presenceCount}, voiceStateUpdate=${voiceCount}).`
+      );
+    }
+    return this.listenerHealth;
   }
 
   setPresenceEnabled(enabled) {
@@ -1052,14 +1233,31 @@ class ActivityTracker {
       return { enabled: false };
     }
 
-    // 1. Yapılandırma, rol, kanal ve izin doğrulaması
+    // 1. Yapılandırma, rol, kanal, izin ve çift dinleyici doğrulaması
     const validation = this.config.validateActivityConfigWithGuild(guild, this.config);
     this.disabledGameIds = validation.disabledGameIds;
     this.disabledFamilyIds = validation.disabledFamilyIds;
     this.validChannelIdsByGame = validation.validChannelIdsByGame;
+    this.checkListenerCounts(this.client);
 
     // 2. Aylık sıfırlama kontrolü (bot ay dönümünde kapalıydıysa açılışta temizler)
     await this.checkMonthlyReset(guild);
+
+    // 2b. Salt okunur B3 süre sağlığı kontrolü (REPAIR_OVERSIZED_TOTALS_ON_START kapalıyken veriye ASLA dokunulmaz)
+    const healthAtBoot = this.checkDurationHealth(this.now());
+    if (
+      this.config.REPAIR_OVERSIZED_TOTALS_ON_START === true &&
+      !this._repairRanThisBoot &&
+      healthAtBoot.oversizedUserCount > 0 &&
+      typeof this.db?.repairOversizedActivityTotals === 'function'
+    ) {
+      this._repairRanThisBoot = true;
+      const rep = this.db.repairOversizedActivityTotals(healthAtBoot.elapsedMonthSec, { dryRun: false });
+      this.logger.log(
+        `[OYUN ETKİNLİĞİ ONARIM] Ay süresini aşan toplamlar kırpıldı: etkilenenÜye=${rep.repairedUsers} kırpılanSaniye=${rep.totalSecondsTrimmed}`
+      );
+      this.checkDurationHealth(this.now());
+    }
 
     // 3. Sistem ilk kez çalışıyorsa tek seferlik iki dilli duyurular (genel + oyun bitişi + mobil /oyun + ses-rolü)
     await this.checkOneTimeAnnouncement(guild);
@@ -1099,10 +1297,14 @@ class ActivityTracker {
           gameId: detected.gameId,
           family: detected.family,
           currentlyDetectedGameId: detected.gameId,
+          // ÖNEMLİ: Açılışta önbellekten yüklenen oturumun sayma saati AÇILIŞ anından (now) başlar.
+          // Botun kapalı kaldığı süre veya Discord'un timestamps.start değeri ASLA oynama süresine eklenmez.
           since: now,
           activityStartedAt: detected.startedAt > 0 && detected.startedAt <= now ? detected.startedAt : now,
+          lastCheckpointAt: now,
           lastAccountedAt: now,
           lastSeen: now,
+          seededAtStartup: true,
           // Sesteyse hak tüketilmiş sayılır (sürpriz taşıma yok); ses dışındaysa hak VAR (sonradan sese girerse aktarılır)
           moveToken: startupMoveState === 'unspent',
           moveState: startupMoveState,
@@ -1627,6 +1829,7 @@ class ActivityTracker {
         currentlyDetectedGameId: detected.gameId,
         since: null,
         activityStartedAt: null,
+        lastCheckpointAt: null,
         lastAccountedAt: null,
         lastSeen: null,
         moveToken: false,
@@ -1670,9 +1873,9 @@ class ActivityTracker {
     // 3. Onaylı oturum sürüyor
     // 3a. Aynı oyun hâlâ aktif (veya STOP_GRACE içinde aynı oyun geri döndü)
     if (detected && detected.gameId === session.gameId) {
-      // Eğer stopGrace içindeyken geri döndüyse, duraklama aralığını süreye katmamak için lastAccountedAt'i şimdiye çek
+      // Eğer stopGrace içindeyken geri döndüyse, duraklama aralığını süreye katmamak için lastCheckpointAt'i şimdiye çek
       if (session.currentlyDetectedGameId !== session.gameId) {
-        session.lastAccountedAt = now;
+        this._setSessionCheckpointAt(session, now);
       }
       session.currentlyDetectedGameId = detected.gameId;
       session.lastSeen = now;
@@ -1818,14 +2021,18 @@ class ActivityTracker {
     this._clearTimer(session, 'voiceJoinTimer');
 
     // Yeni oturumu onayla ve yeni aktarma hakkı (moveState = 'unspent', rearmCount = 0) ver
+    // ÖNEMLİ: Discord'un timestamps.start değeri (activityStartedAt) süre toplamada ASLA kullanılmaz;
+    // yalnızca CONFIRM_SEC onay eşiğinde "oyun zaten en az 15 sn açık mı?" kontrolü içindir.
+    // Sayma saati (lastCheckpointAt) yalnızca botun gerçekten gözlemlediği startedSince anından başlar.
     session.confirmed = true;
     session.gameId = newGameId;
     session.family = newFamily;
     session.currentlyDetectedGameId = newGameId;
     session.since = startedSince;
     session.activityStartedAt = activityStartedAt || startedSince;
-    session.lastAccountedAt = startedSince;
+    this._setSessionCheckpointAt(session, startedSince);
     session.lastSeen = now;
+    session.seededAtStartup = false;
     this._setSessionMoveState(session, 'unspent');
     session.rearmCount = 0;
     session.sweepBlockedForMoveFail = false;
@@ -1976,7 +2183,7 @@ class ActivityTracker {
         if (classified.detected && classified.detected.gameId === session.gameId) {
           const now = this.now();
           if (session.currentlyDetectedGameId !== session.gameId) {
-            session.lastAccountedAt = now;
+            this._setSessionCheckpointAt(session, now);
           }
           session.currentlyDetectedGameId = session.gameId;
           session.lastSeen = now;
@@ -3747,41 +3954,137 @@ class ActivityTracker {
   // 7. SÜRE SAYIMI, CHECKPOINT, AYLIK SIFIRLAMA, DUYURU VE TEMİZLİK
   // =========================================================================
 
-  _flushSessionElapsed(session, upToMs) {
-    if (!session || !session.confirmed || !session.gameId || !session.lastAccountedAt) return 0;
-    const endMs = Math.max(session.lastAccountedAt, upToMs);
-    const deltaSec = Math.floor((endMs - session.lastAccountedAt) / 1000);
-    if (deltaSec <= 0) return 0;
+  /**
+   * Delta esaslı süre biriktirme:
+   * - Yalnızca (upToMs - lastCheckpointAt) farkını ekler; oturum başlangıcı (since) veya Discord timestamps.start ASLA kullanılmaz.
+   * - Boşluk sınırı (MAX_DELTA_SEC, varsayılan 120 sn): fark sınırı aşarsa yalnızca MAX_DELTA_SEC eklenir,
+   *   lastCheckpointAt doğrudan upToMs'e çekilir ve boşlukKırpıldı (gapClamped) sayacı artırılır.
+   * - Kullanıcı başına tek saat güvencesi (userLastAccountedSec): aynı saniyede birden fazla oyuna süre yazılamaz;
+   *   çakışma varsa engellenir ve çiftSayımEngellendi (doubleCountBlocked) sayacı artırılır.
+   * - B3 değişmez kuralı: üyenin bu ayki toplam süresi ay başından beri geçen gerçek süreyi aşamaz; aşarsa kırpılır.
+   */
+  _flushSessionElapsed(session, upToMs, { monthOverride = null } = {}) {
+    const checkpointAt = this._getSessionCheckpointAt(session);
+    if (!session || !session.confirmed || !session.gameId || !checkpointAt) return 0;
 
-    if (this.getPrefs(session.userId).tracking) {
-      this.db.addActivitySeconds(session.userId, session.gameId, deltaSec, { immediate: false });
-      this.counters.checkpointWritten += 1;
+    const uid = String(session.userId || '');
+    if (!uid) return 0;
+
+    const endMs = Math.max(checkpointAt, Number(upToMs) || checkpointAt);
+    const rawDeltaSec = Math.floor((endMs - checkpointAt) / 1000);
+    if (rawDeltaSec <= 0) return 0;
+
+    // 1) Boşluk sınırı (gap cap): bot duraklaması, olay döngüsü takılması veya saat sıçraması koruması
+    const maxDeltaSec = this.getMaxDeltaSec();
+    let deltaSec = rawDeltaSec;
+    let nextCheckpointMs = checkpointAt + rawDeltaSec * 1000;
+
+    if (rawDeltaSec > maxDeltaSec) {
+      deltaSec = maxDeltaSec;
+      // Aşan boşluğu tamamen atlayarak bir sonraki checkpoint'te tekrar sayılmasını önle
+      nextCheckpointMs = endMs;
+      this.counters.gapClamped += 1;
     }
-    session.lastAccountedAt += deltaSec * 1000;
+
+    // 2) Kullanıcı başına tek saat güvencesi: aynı saniyede yalnızca TEK oyuna süre yazılabilir
+    const endSec = Math.floor(endMs / 1000);
+    const windowStartSec = endSec - deltaSec;
+    const prevCreditedSec = this.userLastAccountedSec.get(uid);
+    if (typeof prevCreditedSec === 'number' && Number.isFinite(prevCreditedSec)) {
+      // Yalnızca ileri/aynı zaman penceresinde çakışmayı denetle (testlerde veya sistem saatinde büyük geri sıçrama hariç)
+      if (endSec >= prevCreditedSec - 300 && windowStartSec < prevCreditedSec) {
+        const nonOverlapping = Math.max(0, endSec - prevCreditedSec);
+        if (nonOverlapping < deltaSec) {
+          deltaSec = nonOverlapping;
+          this.counters.doubleCountBlocked += 1;
+        }
+      }
+    }
+
+    // 3) B3 değişmez kuralı: üyenin aylık toplamı ay başından şimdiye kadar geçen gerçek süreyi aşamaz
+    const elapsedMonthFn =
+      this.config.getElapsedSecondsInCurrentIstanbulMonth ||
+      activityConfig.getElapsedSecondsInCurrentIstanbulMonth;
+    const effectiveMonth =
+      typeof monthOverride === 'string' && /^\d{4}-\d{2}$/.test(monthOverride) ? monthOverride : null;
+    const elapsedMonthSec = elapsedMonthFn(endMs, effectiveMonth);
+    const currentUserMonthlyTotal =
+      typeof this.db?.getUserMonthlyTotalSeconds === 'function'
+        ? this.db.getUserMonthlyTotalSeconds(uid)
+        : 0;
+    const allowedHeadroom = Math.max(0, elapsedMonthSec - currentUserMonthlyTotal);
+    if (deltaSec > allowedHeadroom) {
+      deltaSec = allowedHeadroom;
+      this.counters.doubleCountBlocked += 1;
+    }
+
+    if (deltaSec > 0 && this.getPrefs(uid).tracking) {
+      this.db.addActivitySeconds(uid, session.gameId, deltaSec, { immediate: false });
+      this.counters.checkpointWritten += 1;
+      const nextCredited =
+        typeof prevCreditedSec === 'number' && prevCreditedSec <= endSec + 300
+          ? Math.max(prevCreditedSec, endSec)
+          : endSec;
+      this.userLastAccountedSec.set(uid, nextCredited);
+    }
+
+    this._setSessionCheckpointAt(session, nextCheckpointMs);
     return deltaSec;
   }
 
   /**
+   * Birden fazla oturumu (bir hata nedeniyle aynı kullanıcı için iki oturum oluşsa bile)
+   * en son başlayan oturuma öncelik vererek tek saat kuralıyla işler.
+   */
+  _flushSessionsList(sessionsIterable, nowMs) {
+    const activeSessions = [];
+    for (const session of sessionsIterable) {
+      if (!session || !session.confirmed || !session.gameId) continue;
+      // Sadece şu an gerçekten o oyunu oynayanları (stopGrace'te olmayanları) ilerlet
+      if (session.currentlyDetectedGameId === session.gameId) {
+        activeSessions.push(session);
+      }
+    }
+
+    // Aynı kullanıcı için birden fazla oturum varsa (hata durumunda bile) en son başlayan oturum önce yazılır;
+    // diğeri userLastAccountedSec tarafından engellenir (çift sayım yapılamaz).
+    activeSessions.sort((a, b) => (Number(b.since) || 0) - (Number(a.since) || 0));
+
+    let totalAdded = 0;
+    for (const session of activeSessions) {
+      totalAdded += this._flushSessionElapsed(session, nowMs);
+      session.lastSeen = nowMs;
+    }
+    return totalAdded;
+  }
+
+  /**
    * Her CHECKPOINT_SEC aralığında tüm aktif oturumların geçen saniyelerini toplar,
-   * süresi dolan karar izlerini temizler ve veritabanı kirliyse tek seferde atomik olarak diske kaydeder.
+   * ay dönümünü kaçırmadan sınırda böler, süresi dolan karar izlerini temizler
+   * ve veritabanı kirliyse tek seferde atomik olarak diske kaydeder.
    */
   runCheckpoint() {
     const now = this.now();
     this.pruneExpiredDecisions();
 
-    for (const session of this.sessions.values()) {
-      if (!session.confirmed || !session.gameId) continue;
-      // Sadece şu an gerçekten o oyunu oynayanları (stopGrace'te olmayanları) ilerlet
-      if (session.currentlyDetectedGameId === session.gameId) {
-        this._flushSessionElapsed(session, now);
-        session.lastSeen = now;
+    // Ay dönümü gerçekleştiyse (ileri yönde: storedMonth < currentMonth) önce sınırda eski/yeni ayı böl
+    const currentMonth = this.db.getCurrentIstanbulMonth(new Date(now));
+    const storedMonth = this.db.data.activityStats?.month;
+    if (storedMonth && currentMonth && storedMonth < currentMonth) {
+      this._rolloverMonthAtBoundary(now, currentMonth);
+      if (this.guild) {
+        this._sendMonthlyResetAnnouncement(this.guild).catch(() => {});
       }
     }
+
+    this._flushSessionsList(this.sessions.values(), now);
+    this.checkDurationHealth(now);
     return this.db.flushDirty();
   }
 
   /**
    * Kullanıcının şu an aktif (onaylı) oyun bilgisini ve kaydedilmemiş canlı saniye farkını döndürür.
+   * Canlı unsavedSec değeri de boşluk sınırı (MAX_DELTA_SEC) ve B3 aylık tavanı ile sınırlandırılır.
    */
   getLivePlayingInfo(userId) {
     const uid = String(userId || '');
@@ -3792,9 +4095,26 @@ class ActivityTracker {
 
     const now = this.now();
     const sessionElapsedSec = session.since ? Math.max(0, Math.floor((now - session.since) / 1000)) : 0;
-    const unsavedSec = session.lastAccountedAt
-      ? Math.max(0, Math.floor((now - session.lastAccountedAt) / 1000))
-      : 0;
+    const checkpointAt = this._getSessionCheckpointAt(session);
+    let unsavedSec = checkpointAt ? Math.max(0, Math.floor((now - checkpointAt) / 1000)) : 0;
+
+    const maxDeltaSec = this.getMaxDeltaSec();
+    if (unsavedSec > maxDeltaSec) {
+      unsavedSec = maxDeltaSec;
+    }
+
+    const elapsedMonthFn =
+      this.config.getElapsedSecondsInCurrentIstanbulMonth ||
+      activityConfig.getElapsedSecondsInCurrentIstanbulMonth;
+    const elapsedMonthSec = elapsedMonthFn(now, null);
+    const currentUserMonthlyTotal =
+      typeof this.db?.getUserMonthlyTotalSeconds === 'function'
+        ? this.db.getUserMonthlyTotalSeconds(uid)
+        : 0;
+    const allowedHeadroom = Math.max(0, elapsedMonthSec - currentUserMonthlyTotal);
+    if (unsavedSec > allowedHeadroom) {
+      unsavedSec = allowedHeadroom;
+    }
 
     return {
       gameId: session.gameId,
@@ -3805,26 +4125,57 @@ class ActivityTracker {
   }
 
   /**
-   * Europe/Istanbul saatine göre ay değiştiyse tüm aylık süreleri sıfırlar ve duyuru gönderir.
+   * Ay dönümünde yarım kalan oturumların süresini tam ay sınırında (00:00:00 Europe/Istanbul) ikiye böler:
+   * - Sınıra kadar olan kısım eski aya yazılır (ve activityAllTime'a aktarılır; kaybolmaz).
+   * - Sınırdan sonraki kısım yeni aya yazılır (çift yazılmaz).
    */
-  async checkMonthlyReset(guild = this.guild, nowDate = new Date(this.now())) {
-    const currentMonth = this.db.getCurrentIstanbulMonth(nowDate);
-    const storedMonth = this.db.data.activityStats?.month;
+  _rolloverMonthAtBoundary(nowMs, currentMonth) {
+    const storedMonth = this.db.data.activityStats?.month || null;
+    const monthStartFn =
+      this.config.getIstanbulMonthStartMs || activityConfig.getIstanbulMonthStartMs;
+    const newMonthStartMs = monthStartFn(currentMonth, nowMs);
 
-    if (storedMonth === currentMonth) {
-      return { reset: false, month: currentMonth };
-    }
-
-    // Aktif oturumların son hesaplanma zamanını yeni ay başına çek (eski ayın süresini yeni aya taşıma)
-    const resetMs = this.now();
+    // 1. Ay sınırından önce kalan süreyi ESKİ aya işle (boşluk sınırı uygulanır)
     for (const session of this.sessions.values()) {
-      if (session.confirmed) {
-        session.lastAccountedAt = resetMs;
+      if (!session || !session.confirmed || !session.gameId) continue;
+      if (session.currentlyDetectedGameId !== session.gameId) continue;
+      const checkpointAt = this._getSessionCheckpointAt(session);
+      if (checkpointAt && checkpointAt < newMonthStartMs) {
+        this._flushSessionElapsed(session, newMonthStartMs, { monthOverride: storedMonth });
       }
     }
 
+    // 2. Eski ayı arşivle ve yeni ayın boş istatistik haritasını aç
     this.db.resetActivityStatsForMonth(currentMonth);
 
+    // 3. Yeni ay için kullanıcı saatlerini en az ay başlangıcına çek ve sınırdan sonraki süreyi YENİ aya işle
+    const boundarySec = Math.floor(newMonthStartMs / 1000);
+    for (const [uid, prevSec] of this.userLastAccountedSec.entries()) {
+      if (prevSec > boundarySec) {
+        this.userLastAccountedSec.set(uid, boundarySec);
+      }
+    }
+
+    for (const session of this.sessions.values()) {
+      if (!session || !session.confirmed) continue;
+      const checkpointAt = this._getSessionCheckpointAt(session) || newMonthStartMs;
+      if (session.currentlyDetectedGameId === session.gameId) {
+        const startInNewMonth = Math.max(checkpointAt, newMonthStartMs);
+        this._setSessionCheckpointAt(session, startInNewMonth);
+        if (nowMs > startInNewMonth) {
+          this._flushSessionElapsed(session, nowMs, { monthOverride: currentMonth });
+        }
+        session.lastSeen = Math.max(session.lastSeen || 0, nowMs);
+      } else {
+        this._setSessionCheckpointAt(session, Math.max(nowMs, newMonthStartMs));
+      }
+    }
+
+    this.db.flushDirty();
+    return { newMonthStartMs };
+  }
+
+  async _sendMonthlyResetAnnouncement(guild = this.guild) {
     const cmdChannel = guild?.channels?.cache?.get?.(this.config.COMMAND_CHANNEL_ID) || null;
     if (cmdChannel && typeof cmdChannel.send === 'function') {
       await cmdChannel
@@ -3836,6 +4187,25 @@ class ActivityTracker {
         })
         .catch(() => {});
     }
+  }
+
+  /**
+   * Europe/Istanbul saatine göre ay değiştiyse yarım kalan oturumları ay sınırında bölerek
+   * tüm aylık süreleri sıfırlar ve duyuru gönderir.
+   */
+  async checkMonthlyReset(guild = this.guild, nowDate = new Date(this.now())) {
+    const effectiveNowMs = nowDate instanceof Date && Number.isFinite(nowDate.getTime())
+      ? nowDate.getTime()
+      : this.now();
+    const currentMonth = this.db.getCurrentIstanbulMonth(new Date(effectiveNowMs));
+    const storedMonth = this.db.data.activityStats?.month;
+
+    if (storedMonth === currentMonth) {
+      return { reset: false, month: currentMonth };
+    }
+
+    this._rolloverMonthAtBoundary(effectiveNowMs, currentMonth);
+    await this._sendMonthlyResetAnnouncement(guild);
 
     return { reset: true, month: currentMonth };
   }
@@ -3998,6 +4368,7 @@ class ActivityTracker {
     this.botMoveIgnoreUntil.delete(uid);
     this.memberFetchLastAt.delete(uid);
     this.endingSessions.delete(uid);
+    this.userLastAccountedSec.delete(uid);
 
     const session = this.sessions.get(uid);
     if (session) {
@@ -4047,6 +4418,7 @@ class ActivityTracker {
     this.botMoveIgnoreUntil.delete(uid);
     this.memberFetchLastAt.delete(uid);
     this.endingSessions.delete(uid);
+    this.userLastAccountedSec.delete(uid);
     for (const key of Array.from(this.manualCleanupRetryCounts.keys())) {
       if (key.startsWith(`${uid}:`)) {
         this.manualCleanupRetryCounts.delete(key);
@@ -4085,6 +4457,7 @@ class ActivityTracker {
     this.memberFetchTimestamps = [];
     this.memberFetchBackoffUntil = 0;
     this.lastDecisions.clear();
+    this.userLastAccountedSec.clear();
     this.evaluatingUsers.clear();
     this.endingSessions.clear();
     this.manualCleanupRetryCounts.clear();

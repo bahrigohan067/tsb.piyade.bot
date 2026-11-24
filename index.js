@@ -68,13 +68,20 @@ function createConfiguredClient({ includePresenceIntent = true } = {}) {
     }
   }
 
-  // 2. EVENTLERİ (OLAYLARI) YÜKLE
+  // 2. EVENTLERİ (OLAYLARI) YÜKLE (Çift dinleyici kaydına karşı korumalı)
   const eventsPath = path.join(__dirname, 'src', 'events');
+  const registeredEventNames = new Set();
   if (fs.existsSync(eventsPath)) {
     const eventFiles = fs.readdirSync(eventsPath).filter((file) => file.endsWith('.js'));
     for (const file of eventFiles) {
       const filePath = path.join(eventsPath, file);
       const event = require(filePath);
+      if (!event?.name || typeof event.execute !== 'function') continue;
+      if (registeredEventNames.has(event.name)) {
+        console.warn(`[EVENT ÇİFT KAYIT ENGELLENDİ] '${event.name}' olayı zaten kayıtlı; ${file} atlandı.`);
+        continue;
+      }
+      registeredEventNames.add(event.name);
       if (event.once) {
         client.once(event.name, (...args) => event.execute(...args));
       } else {
