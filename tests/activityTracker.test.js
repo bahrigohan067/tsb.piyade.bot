@@ -539,7 +539,7 @@ test('0. ZORUNLU Uçtan Uca Zincir: [presenceUpdate: "Roblox" / "Roblox Player"]
   database.init(); // diskten geri yükle
   assert.equal(database.getUserActivityStats('u_e2e').games.roblox_unknown, 75, 'Diskten yeniden yüklenince süre korunmalı');
 
-  // 5) /aktivitem çıktısı bu süreyi ("1 dk" ve "Roblox (oyun bilinmiyor)") göstermeli
+  // 5) /aktivitem çıktısı bu süreyi ("1 dk" ve gruplanmış tek "Roblox" başlığını) göstermeli
   let aktivitemReply = null;
   await aktivitemCmd.execute({
     user: uE2E.user,
@@ -550,7 +550,9 @@ test('0. ZORUNLU Uçtan Uca Zincir: [presenceUpdate: "Roblox" / "Roblox Player"]
     },
   });
   const embedDesc = aktivitemReply.embeds[0].toJSON().description;
-  assert.match(embedDesc, /Roblox \(oyun bilinmiyor\)/);
+  assert.match(embedDesc, /🧱 \*\*Roblox\*\*/);
+  assert.equal(embedDesc.includes('Roblox (diğer)'), false);
+  assert.equal(embedDesc.includes('Roblox (oyun bilinmiyor)'), false);
   assert.match(embedDesc, /1 dk/);
 });
 

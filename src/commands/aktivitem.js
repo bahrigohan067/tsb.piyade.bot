@@ -38,26 +38,10 @@ function hasSystemStatusAuthority(member) {
 }
 
 /**
- * Saniye cinsinden süreyi TR/EN okunabilir biçime çevirir ("5 sa 12 dk" / "5h 12m" / "<1 dk").
+ * Saniye cinsinden süreyi tek merkezi activity.config.js biçimleyicisiyle TR/EN metne çevirir.
  */
 function formatDuration(seconds, lang = 'tr') {
-  const isEn = lang === 'en';
-  const totalSec = Math.max(0, Math.floor(Number(seconds) || 0));
-  if (totalSec < 60) {
-    return isEn ? '<1m' : '<1 dk';
-  }
-
-  const totalMinutes = Math.floor(totalSec / 60);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-
-  if (hours === 0) {
-    return isEn ? `${minutes}m` : `${minutes} dk`;
-  }
-  if (minutes === 0) {
-    return isEn ? `${hours}h` : `${hours} sa`;
-  }
-  return isEn ? `${hours}h ${minutes}m` : `${hours} sa ${minutes} dk`;
+  return activityConfig.formatDuration(seconds, lang);
 }
 
 /**
@@ -275,13 +259,16 @@ function formatTriggerLabel(trigger, lang = 'tr') {
 
 /**
  * /aktivitem komutu ve GET /api/member/:id/activity uç noktası için ortak etkinlik özeti hesaplayıcısı.
- * Kayıtlı aylık süreleri ve varsa canlı oturumun kaydedilmemiş saniyesini (unsavedSec) birleştirir.
+ * Kayıtlı aylık süreleri ve varsa canlı oturumun kaydedilmemiş saniyesini (unsavedSec) birleştirir;
+ * tüm Roblox oyunlarını tek merkezi activityConfig.groupStatsByFamily ile tek "Roblox" satırında toplar.
  */
 function computeUserActivitySummary({
   userId,
   lang = 'tr',
   tracker = activityTracker,
   db = database,
+  cfg = activityConfig,
+  showBreakdown = null,
   nowDate = new Date(),
 }) {
   const uid = String(userId || '');
@@ -302,6 +289,7 @@ function computeUserActivitySummary({
       month,
       tracking: false,
       games: [],
+      families: [],
       totalSeconds: 0,
       live: null,
       nextResetAt,
@@ -320,37 +308,66 @@ function computeUserActivitySummary({
       (Number(combinedMap[liveInfo.gameId]) || 0) + liveInfo.unsavedSec;
   }
 
-  const entries = Object.entries(combinedMap)
-    .map(([gameId, sec]) => ({ gameId, seconds: Math.floor(Number(sec) || 0) }))
-    .filter((item) => item.seconds > 0)
-    .sort((a, b) => b.seconds - a.seconds);
-
-  const totalSeconds = entries.reduce((sum, item) => sum + item.seconds, 0);
-  const topEntries = entries.slice(0, 10).map((item) => {
-    const info = activityConfig.getGameDisplayInfo(item.gameId, cleanLang);
-    const ratio = totalSeconds > 0 ? item.seconds / totalSeconds : 0;
-    const percent = totalSeconds > 0 ? Math.round(ratio * 100) : 0;
-    return {
-      id: item.gameId,
-      name: info.name,
-      emoji: info.emoji,
-      family: info.family,
-      seconds: item.seconds,
-      ratio,
-      percent,
-      formattedDuration: formatDuration(item.seconds, cleanLang),
-    };
+  // Tek merkezi okuma-zamanı aile gruplaması (activityStats anahtarlarına dokunulmaz)
+  const groupFn = cfg.groupStatsByFamily || activityConfig.groupStatsByFamily;
+  const grouped = groupFn(combinedMap, {
+    cfg,
+    lang: cleanLang,
+    showBreakdown,
+    limit: 10,
   });
+
+  const totalSeconds = grouped.totalSeconds;
+  const topEntries = grouped.families.map((item) => ({
+    id: item.key,
+    name: item.label,
+    emoji: item.emoji,
+    family: item.family,
+    seconds: item.totalSeconds,
+    ratio: item.ratio,
+    percent: item.percent,
+    rank: item.rank,
+    formattedDuration: item.formattedDuration,
+    ...(item.breakdown ? { breakdown: item.breakdown } : {}),
+  }));
+
+  const families = grouped.families.map((item) => ({
+    key: item.key,
+    label: item.label,
+    emoji: item.emoji,
+    totalSeconds: item.totalSeconds,
+    uniquePlayers: item.uniquePlayers,
+    rank: item.rank,
+    percent: item.percent,
+    formattedDuration: item.formattedDuration,
+    ...(item.breakdown ? { breakdown: item.breakdown } : {}),
+  }));
 
   let live = null;
   if (liveInfo && liveInfo.gameId) {
-    const liveDisplay = activityConfig.getGameDisplayInfo(liveInfo.gameId, cleanLang);
+    const famKey = (cfg.familyOfGame || activityConfig.familyOfGame)(liveInfo.gameId, cfg);
+    const liveFamDisp = famKey
+      ? (cfg.getFamilyDisplayInfo || activityConfig.getFamilyDisplayInfo)(famKey, cfg)
+      : null;
+    const rawDisp = (cfg.getGameDisplayInfo || activityConfig.getGameDisplayInfo)(
+      liveInfo.gameId,
+      cleanLang,
+      cfg
+    );
+    const liveName =
+      liveInfo.gameId === 'roblox_unknown'
+        ? liveFamDisp?.label || 'Roblox'
+        : rawDisp.name;
+    const liveEmoji =
+      liveInfo.gameId === 'roblox_unknown'
+        ? liveFamDisp?.emoji || '🧱'
+        : rawDisp.emoji;
     const sessionElapsedSec = Math.max(0, Math.floor(Number(liveInfo.sessionElapsedSec) || 0));
     live = {
       gameId: liveInfo.gameId,
-      name: liveDisplay.name,
-      emoji: liveDisplay.emoji,
-      family: liveDisplay.family,
+      name: liveName,
+      emoji: liveEmoji,
+      family: famKey || rawDisp.family,
       sessionElapsedSec,
       formattedDuration: formatDuration(sessionElapsedSec, cleanLang),
     };
@@ -361,6 +378,7 @@ function computeUserActivitySummary({
     month,
     tracking: true,
     games: topEntries,
+    families,
     totalSeconds,
     live,
     nextResetAt,
@@ -377,11 +395,21 @@ function buildActivitySummaryPayload({
   lang = 'tr',
   tracker = activityTracker,
   db = database,
+  cfg = activityConfig,
+  showBreakdown = null,
   nowDate = new Date(),
 }) {
   const isEn = lang === 'en';
   const userId = String(user.id);
-  const summary = computeUserActivitySummary({ userId, lang, tracker, db, nowDate });
+  const summary = computeUserActivitySummary({
+    userId,
+    lang,
+    tracker,
+    db,
+    cfg,
+    showBreakdown,
+    nowDate,
+  });
   const displayName = member?.displayName || user.globalName || user.username || 'Oyuncu';
   const safeName = escapeEmbedText(displayName, 64);
   const nextResetUnix = summary.nextResetUnix;
@@ -454,6 +482,9 @@ function buildActivitySummaryPayload({
       lines.push(
         `${item.emoji} **${item.name}** — ⏱️ ${item.formattedDuration}  ${buildProgressBar(item.ratio)}`
       );
+      if (item.breakdown && item.breakdown.formattedLine) {
+        lines.push(`   ↳ *${item.breakdown.formattedLine}*`);
+      }
     }
     lines.push('━━━━━━━━━━━━━━━━━━━━');
     lines.push(
@@ -698,50 +729,72 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
   const hasMoveMembers = !botMember?.permissions?.has || botMember.permissions.has(PermissionFlagsBits.MoveMembers);
 
   const permLines = [];
-  permLines.push(
-    hasManageRoles
-      ? isEn
-        ? '✅ **Manage Roles:** Granted'
-        : '✅ **Rolleri Yönet:** Var'
-      : isEn
-        ? '⚠️ **Manage Roles:** Missing! *(Grant Manage Roles to the bot)*'
-        : '⚠️ **Rolleri Yönet:** Eksik! *(Bota Rolleri Yönet izni verin)*'
-  );
-  permLines.push(
-    hasMoveMembers
-      ? isEn
-        ? '✅ **Move Members:** Granted'
-        : '✅ **Üyeleri Taşı:** Var'
-      : isEn
-        ? '⚠️ **Move Members:** Missing! *(Grant Move Members to the bot)*'
-        : '⚠️ **Üyeleri Taşı:** Eksik! *(Bota Üyeleri Taşı izni verin)*'
-  );
+  if (hasManageRoles && hasMoveMembers) {
+    permLines.push(
+      isEn
+        ? '✅ **Permissions:** Manage Roles + Move Members granted'
+        : '✅ **İzinler:** Rolleri Yönet + Üyeleri Taşı var'
+    );
+  } else {
+    permLines.push(
+      hasManageRoles
+        ? isEn
+          ? '✅ **Manage Roles:** Granted'
+          : '✅ **Rolleri Yönet:** Var'
+        : isEn
+          ? '⚠️ **Manage Roles:** Missing! *(Grant Manage Roles to the bot)*'
+          : '⚠️ **Rolleri Yönet:** Eksik! *(Bota Rolleri Yönet izni verin)*'
+    );
+    permLines.push(
+      hasMoveMembers
+        ? isEn
+          ? '✅ **Move Members:** Granted'
+          : '✅ **Üyeleri Taşı:** Var'
+        : isEn
+          ? '⚠️ **Move Members:** Missing! *(Grant Move Members to the bot)*'
+          : '⚠️ **Üyeleri Taşı:** Eksik! *(Bota Üyeleri Taşı izni verin)*'
+    );
+  }
 
-  const roleLines = [];
+  const roleWarnLines = [];
+  const roleOkLabels = [];
   let manualReadyRoleCount = 0;
   const totalFamilyRoles = Object.keys(activityConfig.FAMILIES || {}).length;
   for (const [famKey, fam] of Object.entries(activityConfig.FAMILIES || {})) {
     const r = activeGuild?.roles?.cache?.get?.(fam.roleId) || null;
     if (!r) {
-      roleLines.push(
+      roleWarnLines.push(
         isEn
-          ? `⚠️ **${fam.emoji} ${famKey}:** Role (<@&${fam.roleId}>) not found on server!`
-          : `⚠️ **${fam.emoji} ${famKey}:** Rol (<@&${fam.roleId}>) sunucuda bulunamadı!`
+          ? `⚠️ **${fam.emoji} ${famKey}:** Role (<@&${fam.roleId}>) not found!`
+          : `⚠️ **${fam.emoji} ${famKey}:** Rol (<@&${fam.roleId}>) bulunamadı!`
       );
     } else if (botHighestPos !== null && typeof r.position === 'number' && botHighestPos <= r.position) {
-      roleLines.push(
+      roleWarnLines.push(
         isEn
-          ? `⚠️ **${fam.emoji} ${famKey}:** <@&${fam.roleId}> is ABOVE the bot's role! *(Move bot role higher)*`
-          : `⚠️ **${fam.emoji} ${famKey}:** <@&${fam.roleId}> botun rolünün ÜSTÜNDE! *(Bot rolünü yukarı taşıyın)*`
+          ? `⚠️ **${fam.emoji} ${famKey}:** <@&${fam.roleId}> is ABOVE bot role!`
+          : `⚠️ **${fam.emoji} ${famKey}:** <@&${fam.roleId}> botun rolünün ÜSTÜNDE!`
       );
     } else {
       manualReadyRoleCount += 1;
+      roleOkLabels.push(`${fam.emoji}${famKey}`);
+    }
+  }
+  const roleLines = [];
+  if (roleOkLabels.length > 0 && roleWarnLines.length === 0) {
+    roleLines.push(
+      isEn
+        ? `✅ **Activity Roles:** ${roleOkLabels.join(' • ')} (Bot role higher)`
+        : `✅ **Aktiflik Rolleri:** ${roleOkLabels.join(' • ')} (Bot rolü üstte)`
+    );
+  } else {
+    if (roleOkLabels.length > 0) {
       roleLines.push(
         isEn
-          ? `✅ **${fam.emoji} ${famKey}:** <@&${fam.roleId}> (Bot role is higher)`
-          : `✅ **${fam.emoji} ${famKey}:** <@&${fam.roleId}> (Bot rolü üstte)`
+          ? `✅ **Roles OK:** ${roleOkLabels.join(' • ')}`
+          : `✅ **Hazır Roller:** ${roleOkLabels.join(' • ')}`
       );
     }
+    roleLines.push(...roleWarnLines);
   }
 
   // Mobil /oyun manuel rol durumu ve gece 00:00 temizliği bilgileri (tamamen kimliksiz)
@@ -967,6 +1020,66 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     ? `🔄 **Voice-Role / Rearm Counters:** \`ROLE_WAITING_FOR_VOICE=${r.ROLE_WAITING_FOR_VOICE || 0} | REARMED_AFTER_DISCONNECT=${r.REARMED_AFTER_DISCONNECT || 0} | REARM_LIMIT_REACHED=${r.REARM_LIMIT_REACHED || 0} | REARM_RATE_LIMITED=${r.REARM_RATE_LIMITED || 0}\``
     : `🔄 **Ses-Rol / Yeniden Aktarma Sayaçları:** \`ROLE_WAITING_FOR_VOICE=${r.ROLE_WAITING_FOR_VOICE || 0} | REARMED_AFTER_DISCONNECT=${r.REARMED_AFTER_DISCONNECT || 0} | REARM_LIMIT_REACHED=${r.REARM_LIMIT_REACHED || 0} | REARM_RATE_LIMITED=${r.REARM_RATE_LIMITED || 0}\``;
 
+  // 6. İstatistik Sayım, Süre Sağlığı (B3) ve Aile Gruplama Sağlığı (Tamamen kimliksiz)
+  const lastSummary =
+    typeof tracker.getLastStatsSummary === 'function' ? tracker.getLastStatsSummary() : null;
+  const activeThisMonthVal =
+    typeof lastSummary?.activeThisMonth === 'number'
+      ? lastSummary.activeThisMonth
+      : typeof tracker.countQuickActiveThisMonth === 'function'
+        ? tracker.countQuickActiveThisMonth()
+        : 0;
+  const playingNowVal =
+    typeof lastSummary?.playingNow === 'number'
+      ? lastSummary.playingNow
+      : typeof tracker.countQuickPlayingNow === 'function'
+        ? tracker.countQuickPlayingNow()
+        : 0;
+  const uncertainVal =
+    typeof lastSummary?.uncertainCount === 'number' ? lastSummary.uncertainCount : 0;
+  const lastComputedMs = lastSummary?.computedAt ? Date.parse(lastSummary.computedAt) : NaN;
+  const lastComputedStr = Number.isFinite(lastComputedMs)
+    ? `<t:${Math.floor(lastComputedMs / 1000)}:R>`
+    : isEn
+      ? 'not computed yet'
+      : 'henüz hesaplanmadı';
+
+  const activeStatsLine = isEn
+    ? `👥 **Active Counts:** \`activeThisMonth=${activeThisMonthVal}\` • \`playingNow=${playingNowVal}\` • \`uncertainCount=${uncertainVal}\` • Computed: ${lastComputedStr}`
+    : `👥 **Aktif Sayım:** \`activeThisMonth=${activeThisMonthVal}\` • \`playingNow=${playingNowVal}\` • \`uncertainCount=${uncertainVal}\` • Son: ${lastComputedStr}`;
+
+  const durationHealth =
+    typeof tracker.checkDurationHealth === 'function'
+      ? tracker.checkDurationHealth(tracker.now ? tracker.now() : Date.now(), db)
+      : { checkedAt: Date.now(), oversizedUserCount: 0, totalExcessSeconds: 0 };
+  const gapClamped = Number(c.gapClamped) || 0;
+  const doubleCountBlocked = Number(c.doubleCountBlocked) || 0;
+  const oversizedCount = Number(durationHealth.oversizedUserCount) || 0;
+  const healthCheckedUnix = Math.floor((Number(durationHealth.checkedAt) || Date.now()) / 1000);
+  const hasDurationAlert = gapClamped > 0 || doubleCountBlocked > 0 || oversizedCount > 0;
+  const durationAlertHint = hasDurationAlert
+    ? isEn
+      ? ' *(⚠️ Gap/double-count/month-limit protection triggered)*'
+      : ' *(⚠️ Boşluk/çift-sayım/ay-sınırı koruması devreye girdi)*'
+    : '';
+  const durationHealthLine = isEn
+    ? `${hasDurationAlert ? '⚠️' : '✅'} **Duration Health:** \`gapClamped=${gapClamped}\` • \`doubleBlocked=${doubleCountBlocked}\` • \`oversizedUsers=${oversizedCount}\` • Check: <t:${healthCheckedUnix}:R>${durationAlertHint}`
+    : `${hasDurationAlert ? '⚠️' : '✅'} **Süre Sağlığı:** \`boşlukKırpıldı=${gapClamped}\` • \`çiftSayımEngellendi=${doubleCountBlocked}\` • \`aySüresiniAşan=${oversizedCount}\` • Kontrol: <t:${healthCheckedUnix}:R>${durationAlertHint}`;
+
+  const groupingHealth =
+    typeof tracker.inspectFamilyGroupingHealth === 'function'
+      ? tracker.inspectFamilyGroupingHealth(db)
+      : { robloxKeysFound: [], unmappedKeys: [] };
+  const robloxKeyCount = (groupingHealth.robloxKeysFound || []).length;
+  const unmappedKeys = groupingHealth.unmappedKeys || [];
+  const unmappedDetail =
+    unmappedKeys.length > 0
+      ? ` (\`${unmappedKeys.slice(0, 6).join(', ')}${unmappedKeys.length > 6 ? ', ...' : ''}\`)`
+      : '';
+  const groupingHealthLine = isEn
+    ? `${unmappedKeys.length > 0 ? '⚠️' : '✅'} **Family Grouping:** Roblox keys=\`${robloxKeyCount}\` • Unmapped=\`${unmappedKeys.length}\`${unmappedDetail}`
+    : `${unmappedKeys.length > 0 ? '⚠️' : '✅'} **Aile Gruplama:** Roblox anahtarı=\`${robloxKeyCount}\` • Eşlenemeyen=\`${unmappedKeys.length}\`${unmappedDetail}`;
+
   const lines = [
     isEn ? '🛠️ **Game Activity System Status**' : '🛠️ **Oyun Etkinliği Sistem Durumu**',
     presenceStatusLine,
@@ -979,17 +1092,18 @@ function buildSystemStatusPayload({ guild, client = null, lang = 'tr', tracker =
     voiceRoleSettingsLine,
     ...roleLines,
     '━━━━━━━━━━━━━━━━━━━━',
+    activeStatsLine,
+    durationHealthLine,
+    groupingHealthLine,
     isEn
-      ? `📊 **Active Sessions:** \`${confirmedSessionCount}\` • **Tracking Enabled:** \`${trackingOpenCount}\` (Off: \`${disabledTrackingCount}\`) • **DB Save:** ${dbOk ? '✅ OK' : '⚠️ Failed'}`
-      : `📊 **Aktif Oturum:** \`${confirmedSessionCount}\` • **Takibi Açık:** \`${trackingOpenCount}\` (Kapalı: \`${disabledTrackingCount}\`) • **Son DB:** ${dbOk ? '✅ OK' : '⚠️ Hata'}`,
+      ? `📊 **Active Sessions:** \`${confirmedSessionCount}\` • **Tracking:** \`${trackingOpenCount}\` (Off:\`${disabledTrackingCount}\`) • **DB:** ${dbOk ? '✅ OK' : '⚠️ Fail'}`
+      : `📊 **Aktif Oturum:** \`${confirmedSessionCount}\` • **Takip Açık:** \`${trackingOpenCount}\` (Kapalı:\`${disabledTrackingCount}\`) • **DB:** ${dbOk ? '✅ OK' : '⚠️ Hata'}`,
     isEn
-      ? `🔗 **Chain Counters (since startup):**\n` +
-        `\`pres=${c.presenceReceived}|proc=${c.presenceProcessed}|play=${c.presenceWithPlaying}|match=${c.matchedGame}|rblx=${c.generalRoblox}|unm=${c.unmatchedActivity}|ign=${c.ignoredActivity}\`\n` +
+      ? `🔗 **Chain Counters:** \`pres=${c.presenceReceived}|proc=${c.presenceProcessed}|play=${c.presenceWithPlaying}|match=${c.matchedGame}|rblx=${c.generalRoblox}|unm=${c.unmatchedActivity}|ign=${c.ignoredActivity}\`\n` +
         `\`conf=${c.sessionConfirmed}|end=${c.gamesEnded || 0}|rAdd=${c.roleAdded}|rRem=${c.rolesRemoved || 0}(e:${c.roleFailed})|man=+${c.manuelVerilen || 0}/-${c.manuelGeriAlinan || 0}|00h=${c.geceTemizligiAlinan || 0}(e:${c.geceTemizligiBasarisiz || 0})|chk=${c.checkpointWritten}|db=${c.dbSaveSuccess}(e:${c.dbSaveFailed})|vEvt=${c.voiceChangesReceived}|fetch=${c.memberFetchCalls || 0}(sk:${c.memberFetchSkipped || 0},e:${c.memberFetchErrors || 0})|MOVED=${c.transfersMoved}|RET=${r.RETURN_MOVED || 0}(sk:${returnSkipTotal},e:${returnErrTotal})\`\n` +
         `${voiceRoleCountersLine}\n` +
-        `• **Decision Reasons:** \`${reasonSummary}\``
-      : `🔗 **Zincir Sayaçları (açılıştan beri):**\n` +
-        `\`pres=${c.presenceReceived}|işl=${c.presenceProcessed}|play=${c.presenceWithPlaying}|eşl=${c.matchedGame}|rblx=${c.generalRoblox}|eşlm=${c.unmatchedActivity}|yok=${c.ignoredActivity}\`\n` +
+        `• **Reasons:** \`${reasonSummary}\``
+      : `🔗 **Zincir Sayaçları:** \`pres=${c.presenceReceived}|işl=${c.presenceProcessed}|play=${c.presenceWithPlaying}|eşl=${c.matchedGame}|rblx=${c.generalRoblox}|eşlm=${c.unmatchedActivity}|yok=${c.ignoredActivity}\`\n` +
         `\`oturum=${c.sessionConfirmed}|oyunBitti=${c.gamesEnded || 0}|rolVer=${c.roleAdded}|rolAlındı=${c.rolesRemoved || 0}(h:${c.roleFailed})|man=+${c.manuelVerilen || 0}/-${c.manuelGeriAlinan || 0}|gece=${c.geceTemizligiAlinan || 0}(h:${c.geceTemizligiBasarisiz || 0})|chk=${c.checkpointWritten}|db=${c.dbSaveSuccess}(h:${c.dbSaveFailed})|ses=${c.voiceChangesReceived}|üyeFetch=${c.memberFetchCalls || 0} (atlanan:${c.memberFetchSkipped || 0}, hata:${c.memberFetchErrors || 0})|MOVED=${c.transfersMoved}|RETURN_MOVED=${r.RETURN_MOVED || 0}(at:${returnSkipTotal},h:${returnErrTotal})\`\n` +
         `${voiceRoleCountersLine}\n` +
         `• **Karar Sebepleri:** \`${reasonSummary}\``,

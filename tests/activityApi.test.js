@@ -134,7 +134,7 @@ test('1. GET /api/member/:id/activity kimlik doğrulama ve doğrulama kontroller
   assert.equal(notFound.status, 404);
 });
 
-test('2. GET /api/member/:id/activity canlı oturumu birleştirmeli ve /aktivitem ile birebir aynı sonucu üretmeli', async () => {
+test('2. GET /api/member/:id/activity canlı oturumu birleştirmeli, Roblox ailesini tek satırda toplamalı ve /aktivitem ile birebir aynı sonucu üretmeli', async () => {
   const currentMonth = database.getCurrentIstanbulMonth();
   database.data.activityStats = {
     month: currentMonth,
@@ -151,7 +151,7 @@ test('2. GET /api/member/:id/activity canlı oturumu birleştirmeli ve /aktivite
   database.data.activityPrefs = {};
   database.save();
 
-  // Canlı oturum simülasyonu: 8101 şu an CS2 oynuyor, son checkpoint'ten beri 300 sn geçti (toplam oturum 900 sn)
+  // Canlı oturum simülasyonu: 8101 şu an CS2 oynuyor, son checkpoint'ten beri 90 sn geçti (toplam oturum 900 sn)
   const now = activityTracker.now();
   activityTracker.sessions.set('8101', {
     userId: '8101',
@@ -160,7 +160,8 @@ test('2. GET /api/member/:id/activity canlı oturumu birleştirmeli ve /aktivite
     confirmed: true,
     currentlyDetectedGameId: 'cs2',
     since: now - 900 * 1000,
-    lastAccountedAt: now - 300 * 1000,
+    lastCheckpointAt: now - 90 * 1000,
+    lastAccountedAt: now - 90 * 1000,
   });
 
   const trRes = await apiGet('/api/member/8101/activity?lang=tr');
@@ -168,35 +169,41 @@ test('2. GET /api/member/:id/activity canlı oturumu birleştirmeli ve /aktivite
   assert.equal(trRes.body.userId, '8101');
   assert.equal(trRes.body.month, currentMonth);
   assert.equal(trRes.body.tracking, true);
-  assert.equal(trRes.body.totalSeconds, 3600 + 2100 + 600);
-  assert.equal(trRes.body.games.length, 3);
-  assert.equal(trRes.body.games[0].id, 'tsb');
-  assert.equal(trRes.body.games[0].seconds, 3600);
+  // Roblox (tsb 3600 + roblox_unknown 600 = 4200) + CS2 (1800 + 90 = 1890) = 6090
+  assert.equal(trRes.body.totalSeconds, 3600 + 600 + 1890);
+  assert.equal(trRes.body.games.length, 2);
+  assert.equal(trRes.body.games[0].id, 'roblox');
+  assert.equal(trRes.body.games[0].name, 'Roblox');
+  assert.equal(trRes.body.games[0].seconds, 4200);
   assert.equal(trRes.body.games[1].id, 'cs2');
-  assert.equal(trRes.body.games[1].seconds, 2100);
+  assert.equal(trRes.body.games[1].seconds, 1890);
+  assert.ok(Array.isArray(trRes.body.families));
+  assert.equal(trRes.body.families[0].key, 'roblox');
+  assert.equal(trRes.body.families[0].totalSeconds, 4200);
   assert.ok(trRes.body.live);
   assert.equal(trRes.body.live.gameId, 'cs2');
   assert.ok(trRes.body.live.sessionElapsedSec >= 899);
   assert.equal(typeof trRes.body.nextResetAt, 'number');
   assert.ok(trRes.body.nextResetAt > Date.now());
 
-  // /aktivitem komutu çıktısıyla tutarlılık
+  // /aktivitem komutu çıktısıyla birebir tutarlılık (Roblox tek satır, "Roblox (diğer)" yok)
   const cmdPayload = aktivitemCommand.buildActivitySummaryPayload({
     user: { id: '8101', username: 'oyuncu1' },
     member: { displayName: 'Oyuncu Bir' },
     lang: 'tr',
   });
   const embedDesc = cmdPayload.embeds[0].data.description;
-  assert.ok(embedDesc.includes('The Strongest Battlegrounds'));
+  assert.ok(embedDesc.includes('🧱 **Roblox**'));
+  assert.equal(embedDesc.includes('Roblox (diğer)'), false);
   assert.ok(embedDesc.includes('CS2'));
   assert.ok(embedDesc.includes('Şu an oynuyor:'));
 
-  // İngilizce yanıt kontrolü
+  // İngilizce yanıt kontrolü: Roblox tek satır, "Roblox (other)" / "unknown" yok
   const enRes = await apiGet('/api/member/8101/activity?lang=en');
   assert.equal(enRes.status, 200);
-  const unkEn = enRes.body.games.find((g) => g.id === 'roblox_unknown');
-  assert.ok(unkEn);
-  assert.ok(unkEn.name.toLowerCase().includes('unknown'));
+  assert.equal(enRes.body.games[0].id, 'roblox');
+  assert.equal(enRes.body.games[0].name, 'Roblox');
+  assert.equal(JSON.stringify(enRes.body).includes('Roblox (other)'), false);
 });
 
 test('3. GET /api/member/:id/activity takip kapalıysa (tracking: false) boş liste döndürmeli', async () => {
@@ -214,7 +221,7 @@ test('3. GET /api/member/:id/activity takip kapalıysa (tracking: false) boş li
   database.setActivityPrefs('8101', { tracking: true });
 });
 
-test('4. GET /api/stats/top-games (scope=month, group=game ve group=family, anonimlik ve tracking:false hariç tutma)', async () => {
+test('4. GET /api/stats/top-games Roblox ailesini tek satırda toplamalı, anonim olmalı ve tracking:false hariç tutmalı', async () => {
   const currentMonth = database.getCurrentIstanbulMonth();
   database.data.activityStats = {
     month: currentMonth,
@@ -235,41 +242,50 @@ test('4. GET /api/stats/top-games (scope=month, group=game ve group=family, anon
   const monthRes = await apiGet('/api/stats/top-games?scope=month&limit=8&lang=tr');
   assert.equal(monthRes.status, 200);
   assert.equal(monthRes.body.scope, 'month');
-  assert.equal(monthRes.body.group, 'game');
+  assert.equal(monthRes.body.group, 'family');
   assert.equal(monthRes.body.month, currentMonth);
+  assert.equal(typeof monthRes.body.computedAt, 'string');
   assert.equal(monthRes.body.totalSeconds, 7200 + 3600 + 1800 + 3600 + 5400);
 
   // Takibi kapalı 8103'ün Zula süresi listede OLMAMALI
   assert.equal(monthRes.body.games.find((g) => g.id === 'zula'), undefined);
 
-  // Sıralama: 1. TSB (10800 sn, 2 oyuncu), 2. Minecraft (5400 sn, 1 oyuncu), 3. CS2 (3600 sn, 1 oyuncu), 4. Roblox (diğer) (1800 sn, 1 oyuncu)
-  assert.equal(monthRes.body.games[0].id, 'tsb');
-  assert.equal(monthRes.body.games[0].seconds, 10800);
-  assert.equal(monthRes.body.games[0].hours, 3);
+  // Sıralama (gruplanmış): 1. Roblox (12600 sn, 2 benzersiz oyuncu), 2. Minecraft (5400 sn, 1 oyuncu), 3. CS2 (3600 sn, 1 oyuncu)
+  assert.equal(monthRes.body.games.length, 3);
+  assert.equal(monthRes.body.games[0].id, 'roblox');
+  assert.equal(monthRes.body.games[0].name, 'Roblox');
+  assert.equal(monthRes.body.games[0].seconds, 12600);
+  assert.equal(monthRes.body.games[0].hours, 3.5);
   assert.equal(monthRes.body.games[0].players, 2);
-  assert.equal(monthRes.body.games[0].percent, 50);
+  assert.equal(monthRes.body.games[1].id, 'minecraft');
+  assert.equal(monthRes.body.games[2].id, 'cs2');
 
-  const robloxOther = monthRes.body.games.find((g) => g.id === 'roblox_unknown');
-  assert.ok(robloxOther);
-  assert.equal(robloxOther.name, 'Roblox (diğer)');
+  // Yeni families sözleşmesi
+  assert.ok(Array.isArray(monthRes.body.families));
+  assert.equal(monthRes.body.families[0].key, 'roblox');
+  assert.equal(monthRes.body.families[0].label, 'Roblox');
+  assert.equal(monthRes.body.families[0].totalSeconds, 12600);
+  assert.equal(monthRes.body.families[0].uniquePlayers, 2);
+  assert.equal(monthRes.body.families[0].rank, 1);
 
-  // Anonimlik kontrolü: Yanıtta hiçbir kullanıcı ID'si bulunmamalı
+  // Eski "Roblox (diğer)" hiçbir yerde görünmemeli ve kullanıcı ID'si sızmamalı
   const rawJson = JSON.stringify(monthRes.body);
+  assert.equal(rawJson.includes('Roblox (diğer)'), false);
   assert.equal(rawJson.includes('8101'), false);
   assert.equal(rawJson.includes('8102'), false);
   assert.equal(rawJson.includes('8103'), false);
 
-  // group=family kontrolü: TSB (10800) + roblox_unknown (1800) = roblox (12600 sn, 2 oyuncu)
+  // İngilizce yanıtta da etiket "Roblox" olmalı
   const familyRes = await apiGet('/api/stats/top-games?scope=month&group=family&lang=en');
   assert.equal(familyRes.status, 200);
-  assert.equal(familyRes.body.group, 'family');
-  assert.equal(familyRes.body.games[0].id, 'roblox');
-  assert.equal(familyRes.body.games[0].seconds, 12600);
-  assert.equal(familyRes.body.games[0].players, 2);
+  assert.equal(familyRes.body.families[0].key, 'roblox');
+  assert.equal(familyRes.body.families[0].label, 'Roblox');
+  assert.equal(familyRes.body.families[0].totalSeconds, 12600);
+  assert.equal(familyRes.body.families[0].uniquePlayers, 2);
 });
 
 test('5. Aylık sıfırlama (resetActivityStatsForMonth) ve Tüm Zamanlar (scope=all) birikimi + eski DB uyumu', async () => {
-  // Önceki testten kalan bu ay verileri: tsb=10800, minecraft=5400, cs2=3600, roblox_unknown=1800
+  // Önceki testten kalan bu ay verileri: tsb=10800, roblox_unknown=1800, minecraft=5400, cs2=3600
   database.data.activityAllTime = {
     since: 1700000000000,
     games: {
@@ -285,10 +301,11 @@ test('5. Aylık sıfırlama (resetActivityStatsForMonth) ve Tüm Zamanlar (scope
   // 1. Aylık kullanıcı verileri sıfırlanmış olmalı
   assert.deepEqual(database.data.activityStats.users, {});
 
-  // 2. Biten ayın toplamları activityAllTime.games içine eklenmiş olmalı (3600 + 10800 = 14400)
+  // 2. Biten ayın toplamları activityAllTime.games içine ham anahtarlarla (migrasyon yok) eklenmiş olmalı
   const allTimeAfterReset = database.getActivityAllTimeStats();
   assert.equal(allTimeAfterReset.since, 1700000000000);
   assert.equal(allTimeAfterReset.games.tsb, 14400);
+  assert.equal(allTimeAfterReset.games.roblox_unknown, 1800);
   assert.equal(allTimeAfterReset.games.minecraft, 5400);
   assert.equal(allTimeAfterReset.games.cs2, 3600);
 
@@ -296,17 +313,18 @@ test('5. Aylık sıfırlama (resetActivityStatsForMonth) ve Tüm Zamanlar (scope
   database.addActivitySeconds('8101', 'tsb', 1800, { immediate: true });
   statsRouter.clearTopGamesCache();
 
-  // scope=month yalnızca yeni ayın 1800 saniyesini göstermeli
+  // scope=month yalnızca yeni ayın 1800 saniyesini gruplanmış "roblox" altında göstermeli
   const monthRes = await apiGet('/api/stats/top-games?scope=month');
   assert.equal(monthRes.body.totalSeconds, 1800);
-  assert.equal(monthRes.body.games[0].seconds, 1800);
+  assert.equal(monthRes.body.families[0].key, 'roblox');
+  assert.equal(monthRes.body.families[0].totalSeconds, 1800);
 
-  // scope=all ise birikmiş 14400 + yeni ay 1800 = 16200 saniyeyi göstermeli
+  // scope=all ise birikmiş tsb(14400) + roblox_unknown(1800) + yeni ay tsb(1800) = 18000 saniyeyi tek Roblox satırında göstermeli
   const allRes = await apiGet('/api/stats/top-games?scope=all');
   assert.equal(allRes.body.scope, 'all');
   assert.equal(allRes.body.since, 1700000000000);
-  const allTsb = allRes.body.games.find((g) => g.id === 'tsb');
-  assert.equal(allTsb.seconds, 16200);
+  const allRoblox = allRes.body.families.find((f) => f.key === 'roblox');
+  assert.equal(allRoblox.totalSeconds, 18000);
 
   // 4. Üye ayrıldığında (removeUserActivityData) veya kayıt/uyarı sıfırlandığında activityAllTime azalmamalı
   database.removeUserActivityData('8101');
@@ -327,19 +345,30 @@ test('5. Aylık sıfırlama (resetActivityStatsForMonth) ve Tüm Zamanlar (scope
   assert.deepEqual(safeAllTime.games, {});
 });
 
-test('6. GET /api/stats/summary aktif kayıtlı üye ve oynayan sayılarını anonim olarak döndürmeli', async () => {
+test('6. GET /api/stats/summary yeni (activeThisMonth, playingNow, uncertainCount, computedAt, families) ve eski alanları anonim döndürmeli', async () => {
   // Yetkisiz istek -> 401
   const unauth = await apiGet('/api/stats/summary', { secret: null });
   assert.equal(unauth.status, 401);
 
-  // Mock guild içinde 8101, 8102, 8103 (3 insan üye) var; 8101 ve 8102 kayıtlı (CENGAVER rolü / DB), 8101 şu an oynuyor
+  // 8101 ve 8102 kayıtlı ve bu ay >= 1 dk süreleri var; 8101 canlı CS2 oynuyor (canlı presence ile doğrulanmış)
+  const currentMonth = database.getCurrentIstanbulMonth();
   database.data.registrations = [
     { discordId: '8101', displayName: 'Oyuncu Bir', games: [{ id: 'cs2', username: 'p1' }] },
     { discordId: '8102', displayName: 'Oyuncu İki', games: [{ id: 'roblox', username: 'p2' }] },
   ];
+  database.data.activityStats = {
+    month: currentMonth,
+    users: {
+      '8101': { games: { cs2: 600 } },
+      '8102': { games: { tsb: 120, roblox_unknown: 180 } },
+    },
+  };
+  database.data.activityPrefs = {};
   database.save();
   statsRouter.clearSummaryCache();
+  statsRouter.clearMemberLookupCache();
 
+  // 8101 için canlı presence ata (playingNow doğrulaması)
   const now = activityTracker.now();
   activityTracker.sessions.set('8101', {
     userId: '8101',
@@ -348,15 +377,23 @@ test('6. GET /api/stats/summary aktif kayıtlı üye ve oynayan sayılarını an
     confirmed: true,
     currentlyDetectedGameId: 'cs2',
     since: now - 120 * 1000,
+    lastCheckpointAt: now - 30 * 1000,
     lastAccountedAt: now - 30 * 1000,
   });
 
+  // Mock sunucudaki 8101 üyesine canlı presence ekle
   const res = await apiGet('/api/stats/summary');
   assert.equal(res.status, 200);
-  assert.equal(typeof res.body.activeRegisteredCount, 'number');
-  assert.ok(res.body.activeRegisteredCount >= 2, 'En az 2 kayıtlı üye sayılmalı');
+  assert.equal(res.body.activeThisMonth, 2);
+  assert.equal(res.body.activeRegisteredCount, 2);
+  // 8101'in mock presence'ı boş olduğundan playingNow=0, uncertainCount=1 olmalı
+  assert.equal(res.body.playingNow, 0);
+  assert.equal(res.body.playingCount, 0);
+  assert.equal(res.body.uncertainCount, 1);
+  assert.equal(typeof res.body.computedAt, 'string');
+  assert.ok(Array.isArray(res.body.families));
+  assert.equal(res.body.families.length, 2);
   assert.equal(typeof res.body.totalMemberCount, 'number');
-  assert.equal(res.body.playingCount, 1);
   assert.equal(typeof res.body.updatedAt, 'number');
 
   // Anonimlik kontrolü
