@@ -51,12 +51,57 @@ const MANUAL_TIMEZONE = 'Europe/Istanbul';
 // True yapılırsa gece 00:00'da 4 aktiflik rolünün role.members önbelleğindeki canlı oturumu olmayan herkesin rolü de alınır (varsayılan KAPALI)
 const MANUAL_CLEAR_ALL_ACTIVITY_ROLES = false;
 
+// =========================================================================
+// 1b. İSTATİSTİK, AKTİF SAYIM, SÜRE GÜVENCESİ VE ROBLOX GRUPLAMA AYARLARI
+// =========================================================================
+
+// "Bu ay aktif oyuncu" (activeThisMonth) sayımına girmek için bir üyenin
+// bu ay kaydetmiş olması gereken en az oynama süresi (dakika). Varsayılan: 1 dk.
+const MIN_ACTIVE_MINUTES = 1;
+
+// Aktif oyuncu ve şu an oyunda tanımlarının merkezi referans metinleri (TR/EN)
+const ACTIVE_METRIC_DEFINITIONS = Object.freeze({
+  activeThisMonth: {
+    tr: 'Kayıtlı, sunucuda hâlâ bulunan, bot olmayan, takibi açık ve bu ay en az MIN_ACTIVE_MINUTES dakika süresi olan benzersiz üye sayısı.',
+    en: 'Unique registered, non-bot members currently in the server with tracking enabled and at least MIN_ACTIVE_MINUTES recorded this month.',
+  },
+  playingNow: {
+    tr: 'Kayıtlı, takibi açık ve canlı Discord presence verisiyle doğrulanan onaylı (CONFIRM_SEC geçmiş) oyun oturumu olan benzersiz üye sayısı.',
+    en: 'Unique registered members with tracking enabled who have a confirmed (CONFIRM_SEC elapsed) live game session reconciled with live Discord presence.',
+  },
+});
+
+// Önbellekte olmayan üyelerin sunucuda hâlâ bulunup bulunmadığını sayım sırasında doğrularken
+// tek sayım turunda yapılabilecek en fazla guild.members.fetch çağrısı (Discord hız sınırı koruması).
+const SAYIM_MEMBER_LOOKUP_CAP = 25;
+
+// Üyelik doğrulama sonuçlarının bellek önbellek süresi (1 saat)
+const SAYIM_MEMBER_CACHE_TTL_MS = 60 * 60 * 1000;
+
+// Aynı üye için sayım amaçlı guild.members.fetch çağrıları arası en az bekleme süresi (10 dakika)
+const SAYIM_MEMBER_USER_COOLDOWN_MS = 10 * 60 * 1000;
+
+// İstatistik uç noktalarının bellek önbellek süresi (60 saniye)
+const STATS_CACHE_TTL_MS = 60 * 1000;
+
+// true yapılırsa site oyun sıralamasında ve /aktivitem çıktısında Roblox (ve çok oyunlu aile)
+// satırının altında küçük kırılım ("içinde: Oyun adı süre, ...", en çok 5 oyun + "+N diğer") gösterilir.
+// Varsayılan KAPALI (false): tasarım sade kalır.
+const SHOW_FAMILY_BREAKDOWN = false;
+
+// Varsayılan KAPALI (false): Mevcut veritabanı kayıtlarına ASLA dokunulmaz.
+// Yalnızca açık geliştirici onayıyla true yapılırsa açılışta tek seferlik olarak,
+// bu ayın toplam süresi ayın başından beri geçen gerçek süreyi aşan üyelerin toplamı
+// geçen ay süresine kırpılır ve konsola yalnızca kimliksiz toplam yazılır.
+const REPAIR_OVERSIZED_TOTALS_ON_START = false;
+
 // Süre, gecikme ve kuyruk sabitleri
 const TIMINGS = {
   CONFIRM_SEC: 15,                 // Etkinlik bu kadar kesintisiz sürmeden oyun oturumu onaylanmaz
   STOP_GRACE_SEC: 5,               // Etkinlik kesilince bu süre dolmadan oyun bırakıldı sayılmaz (Yanlış alarm olursa 10-15'e çıkarılabilir)
   COUNTDOWN_SEC: 10,               // Ses kanalına aktarmadan önce iptal edilebilir geri sayım süresi
   CHECKPOINT_SEC: 60,              // Süre biriktirme ve toplu veritabanı kayıt aralığı (saniye)
+  MAX_DELTA_SEC: 120,              // Boşluk sınırı (CHECKPOINT_SEC x 2): tek checkpoint adımında eklenecek en fazla süre (saniye)
   PROFILE_COOLDOWN_SEC: 30,        // /aktivitem komutu kullanıcı başına bekleme süresi (saniye)
   MANUAL_BUTTON_COOLDOWN_SEC: 2,   // /oyun komutu butonlarında kullanıcı+aile başına bekleme süresi (saniye)
   MANUAL_MIDNIGHT_SAFETY_CHECK_MS: 60000, // Gece 00:00 temizliği için 60 saniyelik güvenlik ağı kontrol aralığı (ms)
@@ -789,6 +834,332 @@ function getNextMidnightMsInTimeZone(nowMs = Date.now(), timeZone = MANUAL_TIMEZ
   return guess;
 }
 
+/**
+ * Belirtilen IANA saat diliminde (varsayılan Europe/Istanbul) ilgili ayın 1'i 00:00:00 anının
+ * UTC milisaniye zaman damgasını döndürür. Sabit +3 varsaymaz; Intl.DateTimeFormat ile çözer.
+ */
+function getIstanbulMonthStartMs(monthStr = null, nowMs = Date.now(), timeZone = TIMEZONE) {
+  let year;
+  let month;
+  if (typeof monthStr === 'string' && /^\d{4}-\d{2}$/.test(monthStr)) {
+    const [yStr, mStr] = monthStr.split('-');
+    year = Number(yStr);
+    month = Number(mStr);
+  } else {
+    const cur = getZonedDateParts(nowMs, timeZone);
+    year = cur.year;
+    month = cur.month;
+  }
+
+  const targetLocalAsUtc = Date.UTC(year, month - 1, 1, 0, 0, 0, 0);
+  let guess = targetLocalAsUtc;
+  for (let i = 0; i < 3; i++) {
+    const p = getZonedDateParts(guess, timeZone);
+    const actualAsUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second, 0);
+    const diff = targetLocalAsUtc - actualAsUtc;
+    if (diff === 0) break;
+    guess += diff;
+  }
+  return guess;
+}
+
+/**
+ * Geçerli Europe/Istanbul ayının başından şimdiye kadar geçen gerçek süreyi (saniye) döndürür.
+ * B3 değişmez kuralı (bir üyenin aylık süresi ay başından beri geçen süreyi aşamaz) için kullanılır.
+ */
+function getElapsedSecondsInCurrentIstanbulMonth(nowMs = Date.now(), monthStr = null, timeZone = TIMEZONE) {
+  const cleanNow = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const startMs = getIstanbulMonthStartMs(monthStr, cleanNow, timeZone);
+  return Math.max(0, Math.floor((cleanNow - startMs) / 1000));
+}
+
+/**
+ * Tek merkezi süre biçimleyici (bot ve site ile birebir tutarlı).
+ * - NaN / Infinity / negatif değerler asla NaN veya Infinity üretmez, 0 kabul edilir.
+ * - 0 sn -> "0 dk" / "0 min"
+ * - 0 < sn < 60 (1 dakikanın altındaki pozitif süreler) -> "1 dk'dan az" / "<1 min"
+ * - 60 dk -> "1 sa" / "1 hr"
+ * - 119.6 dk (7176 sn) -> "1 sa 59 dk" / "1 hr 59 min" (asla "1 sa 60 dk" veya ondalık olmaz)
+ * - 41 sa 47 dk -> "41 sa 47 dk" / "41 hr 47 min"
+ */
+function formatDuration(seconds, lang = 'tr') {
+  const isEn = lang === 'en';
+  const raw = Number(seconds);
+  if (!Number.isFinite(raw) || raw <= 0) {
+    return isEn ? '0 min' : '0 dk';
+  }
+  if (raw < 60) {
+    return isEn ? '<1 min' : "1 dk'dan az";
+  }
+
+  const totalSec = Math.floor(raw);
+  const totalMinutes = Math.floor(totalSec / 60);
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+
+  if (hours === 0) {
+    return isEn ? `${minutes} min` : `${minutes} dk`;
+  }
+  if (minutes === 0) {
+    return isEn ? `${hours} hr` : `${hours} sa`;
+  }
+  return isEn ? `${hours} hr ${minutes} min` : `${hours} sa ${minutes} dk`;
+}
+
+/**
+ * Bir oyun anahtarını (gameId veya 'roblox_unknown') activity.config.js içindeki
+ * FAMILIES ve GAMES tanımlarından türeterek oyun ailesine eşler.
+ * Eşlenemeyen anahtarlar için null döner (asla çökmez).
+ */
+function familyOfGame(gameKey, cfg = exportedConfig) {
+  if (!gameKey || typeof gameKey !== 'string') return null;
+  const cleanKey = gameKey.trim();
+  if (!cleanKey) return null;
+
+  const families = cfg?.FAMILIES && typeof cfg.FAMILIES === 'object' ? cfg.FAMILIES : {};
+  if (cleanKey === 'roblox_unknown') {
+    const unkFam = cfg?.ROBLOX_UNKNOWN?.family || 'roblox';
+    return families[unkFam] ? unkFam : null;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(families, cleanKey)) {
+    return cleanKey;
+  }
+
+  const found = (cfg?.GAMES || []).find((g) => g && g.id === cleanKey);
+  if (found && found.family && Object.prototype.hasOwnProperty.call(families, found.family)) {
+    return found.family;
+  }
+
+  return null;
+}
+
+/**
+ * Aile anahtarının gösterim bilgilerini (etiket ve emoji) yalnızca activity.config.js FAMILIES tanımından okur.
+ */
+function getFamilyDisplayInfo(familyKey, cfg = exportedConfig) {
+  const cleanKey = String(familyKey || '').trim();
+  const fam = cfg?.FAMILIES?.[cleanKey] || null;
+  if (!fam) {
+    return {
+      key: cleanKey || 'unknown',
+      label: cleanKey || 'Unknown',
+      emoji: '🎮',
+      known: false,
+    };
+  }
+  return {
+    key: fam.id || cleanKey,
+    label: fam.label || fam.id || cleanKey,
+    emoji: fam.emoji || '🎮',
+    known: true,
+  };
+}
+
+/**
+ * Tek merkezi okuma-zamanı aile gruplama yardımcısı (activityStats saklama biçimini DEĞİŞTİRMEZ).
+ * - Roblox ailesindeki tüm anahtarları (roblox_unknown + GAMES içindeki family:'roblox' kayıtları)
+ *   tek bir "Roblox" satırında toplar ("Roblox (diğer)" artık üretilmez).
+ * - Minecraft, CS2 ve Zula kendi aile satırlarında kalır; ad/emoji activity.config.js'ten okunur.
+ * - Aynı üye bir ailede birden fazla alt oyun oynasa da uniquePlayers içinde YALNIZCA BİR KEZ sayılır.
+ * - Eşlenemeyen anahtarlar çökme yaratmaz, unmappedKeys listesinde (kimliksiz) raporlanır.
+ * - SHOW_FAMILY_BREAKDOWN true ise çok oyunlu ailelerde en çok 5 alt oyun + "+N diğer" kırılımı üretilir.
+ *
+ * @param {Map<string, object>|object} statsInput - Map<uid, {gameId:sec}> | { users: { uid: { games } } } | { gameId: sec }
+ * @param {object} [options]
+ */
+function groupStatsByFamily(
+  statsInput,
+  {
+    cfg = exportedConfig,
+    lang = 'tr',
+    showBreakdown = null,
+    limit = null,
+    extraGameTotals = null,
+  } = {}
+) {
+  const isEn = lang === 'en';
+  const effectiveShowBreakdown =
+    showBreakdown !== null && showBreakdown !== undefined
+      ? Boolean(showBreakdown)
+      : Boolean(cfg?.SHOW_FAMILY_BREAKDOWN === true);
+
+  const buckets = new Map();
+  const robloxKeysFound = new Set();
+  const unmappedKeys = new Set();
+
+  const ensureBucket = (bucketKey, mappedFamily) => {
+    let b = buckets.get(bucketKey);
+    if (!b) {
+      if (mappedFamily) {
+        const disp = getFamilyDisplayInfo(mappedFamily, cfg);
+        b = {
+          key: disp.key,
+          label: disp.label,
+          emoji: disp.emoji,
+          family: disp.key,
+          unmapped: false,
+          totalSeconds: 0,
+          players: new Set(),
+          subGames: new Map(),
+        };
+      } else {
+        b = {
+          key: bucketKey,
+          label: bucketKey,
+          emoji: '🎮',
+          family: null,
+          unmapped: true,
+          totalSeconds: 0,
+          players: new Set(),
+          subGames: new Map(),
+        };
+      }
+      buckets.set(bucketKey, b);
+    }
+    return b;
+  };
+
+  const addRecord = (gameId, rawSec, uid = null) => {
+    const sec = Math.floor(Number(rawSec));
+    if (!gameId || !Number.isFinite(sec) || sec <= 0) return;
+    const cleanGid = String(gameId).trim();
+    if (!cleanGid) return;
+
+    const famKey = familyOfGame(cleanGid, cfg);
+    if (famKey) {
+      if (famKey === 'roblox') {
+        robloxKeysFound.add(cleanGid);
+      }
+      const bucket = ensureBucket(famKey, famKey);
+      bucket.totalSeconds += sec;
+      if (uid) bucket.players.add(String(uid));
+      bucket.subGames.set(cleanGid, (bucket.subGames.get(cleanGid) || 0) + sec);
+    } else {
+      unmappedKeys.add(cleanGid);
+      const bucket = ensureBucket(cleanGid, null);
+      bucket.totalSeconds += sec;
+      if (uid) bucket.players.add(String(uid));
+      bucket.subGames.set(cleanGid, (bucket.subGames.get(cleanGid) || 0) + sec);
+    }
+  };
+
+  // Girdi biçimini çöz: Map<uid, games> | { users: { uid: { games } } } | tek kullanıcı { gameId: sec }
+  if (statsInput instanceof Map) {
+    for (const [uid, entry] of statsInput.entries()) {
+      const gameObj = entry && typeof entry === 'object' && entry.games && typeof entry.games === 'object'
+        ? entry.games
+        : entry;
+      if (!gameObj || typeof gameObj !== 'object') continue;
+      for (const [gid, sec] of Object.entries(gameObj)) {
+        addRecord(gid, sec, uid);
+      }
+    }
+  } else if (statsInput && typeof statsInput === 'object') {
+    if (statsInput.users && typeof statsInput.users === 'object' && !Array.isArray(statsInput.users)) {
+      for (const [uid, userObj] of Object.entries(statsInput.users)) {
+        const gameObj = userObj?.games && typeof userObj.games === 'object' ? userObj.games : null;
+        if (!gameObj) continue;
+        for (const [gid, sec] of Object.entries(gameObj)) {
+          addRecord(gid, sec, uid);
+        }
+      }
+    } else {
+      for (const [gid, sec] of Object.entries(statsInput)) {
+        addRecord(gid, sec, '__self__');
+      }
+    }
+  }
+
+  // Tüm zamanlar (activityAllTime.games) gibi kullanıcı kimliği içermeyen ek toplamları birleştir
+  if (extraGameTotals && typeof extraGameTotals === 'object') {
+    for (const [gid, sec] of Object.entries(extraGameTotals)) {
+      addRecord(gid, sec, null);
+    }
+  }
+
+  const allSorted = Array.from(buckets.values())
+    .filter((b) => b.totalSeconds > 0)
+    .sort(
+      (a, b) =>
+        b.totalSeconds - a.totalSeconds ||
+        b.players.size - a.players.size ||
+        a.key.localeCompare(b.key)
+    );
+
+  const grandTotalSeconds = allSorted.reduce((sum, b) => sum + b.totalSeconds, 0);
+  const maxItems =
+    typeof limit === 'number' && Number.isFinite(limit) && limit > 0
+      ? Math.floor(limit)
+      : allSorted.length;
+
+  const families = allSorted.slice(0, maxItems).map((b, idx) => {
+    const ratio = grandTotalSeconds > 0 ? b.totalSeconds / grandTotalSeconds : 0;
+    const percent = grandTotalSeconds > 0 ? Math.round(ratio * 100) : 0;
+    const hours = Number((b.totalSeconds / 3600).toFixed(1));
+    const item = {
+      key: b.key,
+      label: b.label,
+      emoji: b.emoji,
+      family: b.family,
+      totalSeconds: b.totalSeconds,
+      uniquePlayers: b.players.size,
+      rank: idx + 1,
+      ratio,
+      percent,
+      hours,
+      formattedDuration: formatDuration(b.totalSeconds, isEn ? 'en' : 'tr'),
+      ...(b.unmapped ? { unmapped: true } : {}),
+    };
+
+    if (effectiveShowBreakdown && !b.unmapped && b.subGames.size > 0) {
+      const hasNonSelfSub = Array.from(b.subGames.keys()).some((k) => k !== b.key);
+      if (hasNonSelfSub) {
+        const subSorted = Array.from(b.subGames.entries())
+          .filter(([, sec]) => sec > 0)
+          .sort((a, c) => c[1] - a[1] || a[0].localeCompare(c[0]));
+
+        const topSubs = subSorted.slice(0, 5).map(([subId, subSec]) => {
+          let subName;
+          if (subId === 'roblox_unknown') {
+            subName = isEn ? 'Other' : 'Diğer';
+          } else {
+            const gameCfg = getGameConfigById(subId, cfg);
+            subName = gameCfg?.name || subId;
+          }
+          return {
+            id: subId,
+            name: subName,
+            seconds: subSec,
+            formattedDuration: formatDuration(subSec, isEn ? 'en' : 'tr'),
+          };
+        });
+        const overflowCount = Math.max(0, subSorted.length - 5);
+        const lineParts = topSubs.map((s) => `${s.name} ${s.formattedDuration}`);
+        if (overflowCount > 0) {
+          lineParts.push(isEn ? `+${overflowCount} more` : `+${overflowCount} diğer`);
+        }
+        item.breakdown = {
+          items: topSubs,
+          overflowCount,
+          formattedLine: isEn
+            ? `includes: ${lineParts.join(', ')}`
+            : `içinde: ${lineParts.join(', ')}`,
+        };
+      }
+    }
+
+    return item;
+  });
+
+  return {
+    families,
+    totalSeconds: grandTotalSeconds,
+    robloxKeysFound: Array.from(robloxKeysFound).sort(),
+    unmappedKeys: Array.from(unmappedKeys).sort(),
+  };
+}
+
 const exportedConfig = {
   COMMAND_CHANNEL_ID,
   RETURN_CHANNEL_ID,
@@ -802,6 +1173,14 @@ const exportedConfig = {
   TIMEZONE,
   MANUAL_TIMEZONE,
   MANUAL_CLEAR_ALL_ACTIVITY_ROLES,
+  MIN_ACTIVE_MINUTES,
+  ACTIVE_METRIC_DEFINITIONS,
+  SAYIM_MEMBER_LOOKUP_CAP,
+  SAYIM_MEMBER_CACHE_TTL_MS,
+  SAYIM_MEMBER_USER_COOLDOWN_MS,
+  STATS_CACHE_TTL_MS,
+  SHOW_FAMILY_BREAKDOWN,
+  REPAIR_OVERSIZED_TOTALS_ON_START,
   TIMINGS,
   TRANSFER_REASONS,
   NO_MOVE_CHANNEL_IDS,
@@ -814,6 +1193,12 @@ const exportedConfig = {
   getManagedGameChannelIds,
   getDateStringInTimeZone,
   getNextMidnightMsInTimeZone,
+  getIstanbulMonthStartMs,
+  getElapsedSecondsInCurrentIstanbulMonth,
+  formatDuration,
+  familyOfGame,
+  getFamilyDisplayInfo,
+  groupStatsByFamily,
   validateActivityConfigStructure,
   validateActivityConfigWithGuild,
   isRegularVoiceChannel,
