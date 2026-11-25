@@ -158,6 +158,10 @@ Bot aynı Node.js sürecinde Express ile REST API sunar. `/api/health` dışınd
 * **`GET /api/member/:id/activity?lang=tr|en`**: Üyenin bu ayki kişisel oyun etkinliği özetini (`/aktivitem` ile birebir aynı mantıkla; canlı oturum ve Roblox aile gruplaması dahil) döndürür.
 * **`GET /api/stats/top-games?scope=month|all&limit=8&lang=tr|en&group=family`**: Sunucuda en çok oynanan oyun ailelerinin anonim sıralamasını (`families` + geriye dönük `games`, `computedAt`) döndürür (hiçbir kullanıcı ID'si içermez, 60 sn önbellekli).
 * **`GET /api/stats/summary`**: Sunucudaki `activeThisMonth` ("Bu ay aktif"), `playingNow` ("Şu an oyunda"), `uncertainCount`, `computedAt`, `families` ile birlikte eski site uyumlu `activeRegisteredCount`, `totalMemberCount`, `onlineCount`, `playingCount`, `updatedAt` alanlarını anonim olarak döndürür (60 sn önbellekli).
+* **`GET /api/directory?query=&limit=&cursor=&excludeSelf=1`**: Site üzerindeki "Sohbet" özelliği için kayıtlı, sunucuda bulunan ve bot olmayan üyelerin rehberini döndürür (`Authorization: Bearer` + `X-Actor-Id` zorunlu, aktör başına **60/dk** hız sınırı, 30 sn bellek önbelleği).
+  - **Dönen 7 Alan (fazladan kişisel veri yok):** `id`, `displayName`, `discordAvatarUrl` (128 px PNG), `robloxId`, `robloxUsername`, `robloxAvatarUrl` (6 saat önbellekli, yalnızca `https://*.rbxcdn.com` doğrulanmış, yoksa `null`), `hasRoblox`.
+  - **Arama ve Sayfalama:** `query` (en çok 40 karakter, Türkçe/İngilizce harf duyarsız `displayName` + `robloxUsername`), `limit` (varsayılan `30`, en çok `50`), alfabetik sıra, kararlı keyset `cursor` (`{ items, nextCursor, hasMore, total }`), `excludeSelf=1` aktörü çıkarır.
+* **`POST /api/directory/lookup`**: Gövde `{ ids: [en çok 100 Discord ID] }`. Aynı 7 alanla yalnızca verilen ID'ler içindeki kayıtlı ve sunucuda mevcut insan üyeleri **istek sırasıyla** döndürür (kayıtsız/bot/ayrılanlar atlanır; geçersiz/uzun girdide `400 { error, code }`).
 * Diğer uç noktalar: `GET /api/member/:id/roles`, `POST /api/feedback`, `POST /api/admin/warn`, `POST /api/admin/warn/:id/evidence`.
 
 ---
