@@ -12,6 +12,7 @@ const feedbackRoutes = require('./routes/feedback');
 const gamesRoutes = require('./routes/games');
 const robloxRoutes = require('./routes/roblox');
 const statsRoutes = require('./routes/stats');
+const directoryRoutes = require('./routes/directory');
 
 function createApp(clientOrGetter) {
   const app = express();
@@ -58,16 +59,20 @@ function createApp(clientOrGetter) {
   app.use('/api/games', gamesRoutes);
   app.use('/api/roblox', robloxRoutes);
   app.use('/api/stats', statsRoutes);
+  app.use('/api/directory', directoryRoutes);
 
   // 404 Yakalayıcı (Tüm eşleşmeyen /api rotaları için)
   app.use('/api', (req, res) => {
-    return res.status(404).json({ error: 'Endpoint bulunamadı.' });
+    return res.status(404).json({ error: 'Endpoint bulunamadı.', code: 'NOT_FOUND' });
   });
 
   // Global Hata Yakalayıcı
   app.use((err, req, res, next) => {
-    console.error('[API SUNUCU HATASI]:', err);
-    return res.status(500).json({ error: `Sunucu içi hata: ${err.message}` });
+    console.error('[API SUNUCU HATASI]:', err?.message || 'Bilinmeyen hata');
+    return res.status(500).json({
+      error: `Sunucu içi hata: ${err.message}`,
+      code: 'INTERNAL_ERROR',
+    });
   });
 
   return app;
