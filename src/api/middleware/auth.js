@@ -13,6 +13,7 @@ function apiKeyAuth(req, res, next) {
     console.warn('[API AUTH UYARI] config.API_SECRET / process.env.API_SECRET tanımlanmamış!');
     return res.status(500).json({
       error: 'Sunucu yapılandırma hatası: API_SECRET tanımlı değil.',
+      code: 'CONFIG_ERROR',
     });
   }
 
@@ -20,6 +21,7 @@ function apiKeyAuth(req, res, next) {
   if (parts.length !== 2 || parts[0] !== 'Bearer' || parts[1] !== expectedSecret) {
     return res.status(401).json({
       error: 'Yetkisiz erişim: Geçersiz veya eksik Bearer token (API_SECRET).',
+      code: 'UNAUTHORIZED',
     });
   }
 
@@ -31,17 +33,27 @@ function apiKeyAuth(req, res, next) {
  * Site, işlemi yapan kullanıcının Discord ID'sini "X-Actor-Id" ile gönderir.
  */
 async function requireActor(req, res, next) {
-  const actorId = req.headers['x-actor-id'];
+  const rawActorId = req.headers['x-actor-id'];
+  const actorId = typeof rawActorId === 'string' ? rawActorId.trim() : '';
 
   if (!actorId) {
     return res.status(400).json({
       error: 'Eksik başlık: Bu işlem için "X-Actor-Id" (işlemi yapan yetkili/üye Discord ID) zorunludur.',
+      code: 'MISSING_ACTOR_ID',
+    });
+  }
+
+  if (!/^\d{1,21}$/.test(actorId)) {
+    return res.status(400).json({
+      error: 'Geçersiz başlık: "X-Actor-Id" geçerli bir Discord ID olmalıdır.',
+      code: 'INVALID_ACTOR_ID',
     });
   }
 
   if (!req.guild) {
     return res.status(503).json({
       error: 'Discord sunucusu henüz hazır değil veya önbelleğe alınamadı.',
+      code: 'GUILD_UNAVAILABLE',
     });
   }
 
@@ -49,16 +61,19 @@ async function requireActor(req, res, next) {
     const member = await req.guild.members.fetch(actorId).catch(() => null);
     if (!member) {
       return res.status(404).json({
-        error: `Belirtilen aktör (X-Actor-Id: ${actorId}) Discord sunucusunda bulunamadı.`,
+        error: 'Belirtilen aktör (X-Actor-Id) Discord sunucusunda bulunamadı.',
+        code: 'ACTOR_NOT_FOUND',
       });
     }
 
+    req.actorId = actorId;
     req.actorMember = member;
     req.actorUser = member.user;
     next();
   } catch (err) {
     return res.status(500).json({
-      error: `Aktör bilgisi doğrulanırken hata oluştu: ${err.message}`,
+      error: 'Aktör bilgisi doğrulanırken sunucu hatası oluştu.',
+      code: 'ACTOR_FETCH_FAILED',
     });
   }
 }

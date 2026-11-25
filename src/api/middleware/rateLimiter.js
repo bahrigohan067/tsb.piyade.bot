@@ -5,6 +5,11 @@ function createRateLimiter(options = {}) {
   const windowMs = options.windowMs || 60 * 1000; // Varsayılan 1 dakika
   const max = options.max || 120; // 1 dakikada max istek
   const message = options.message || 'Çok fazla istek gönderildi. Lütfen bir süre bekleyin (Rate limit aşıldı).';
+  const code = options.code || 'RATE_LIMITED';
+  const keyGenerator =
+    typeof options.keyGenerator === 'function'
+      ? options.keyGenerator
+      : (req) => req.headers['x-actor-id'] || req.ip || 'anonymous';
 
   const hits = new Map();
 
@@ -21,8 +26,8 @@ function createRateLimiter(options = {}) {
     }
   }, 5 * 60 * 1000).unref();
 
-  return function rateLimiter(req, res, next) {
-    const key = req.headers['x-actor-id'] || req.ip || 'anonymous';
+  function rateLimiter(req, res, next) {
+    const key = String(keyGenerator(req) || 'anonymous');
     const now = Date.now();
 
     let userHits = hits.get(key) || [];
@@ -35,6 +40,7 @@ function createRateLimiter(options = {}) {
       res.setHeader('Retry-After', resetInSeconds);
       return res.status(429).json({
         error: message,
+        code,
         retryAfter: resetInSeconds,
       });
     }
@@ -46,7 +52,10 @@ function createRateLimiter(options = {}) {
     res.setHeader('X-RateLimit-Remaining', Math.max(0, max - userHits.length));
 
     next();
-  };
+  }
+
+  rateLimiter.reset = () => hits.clear();
+  return rateLimiter;
 }
 
 module.exports = {

@@ -9,8 +9,34 @@ const { sanitizeTextInput, neutralizeMentions } = require('../utils/inputSanitiz
 const NEW_ACCOUNT_DAYS_THRESHOLD = 30;
 const DETAIL_TIMEOUT_MS = 5000;
 const RESOLVE_TIMEOUT_MS = 5000;
+const AVATAR_TIMEOUT_MS = 5000;
+const AVATAR_BATCH_MAX = 100;
+const AVATAR_CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 saat
+const AVATAR_CACHE_MAX_ENTRIES = 5000;
+const AVATAR_MAX_CONCURRENT = 2;
+const AVATAR_BACKOFF_BASE_MS = 2000;
+const AVATAR_BACKOFF_MAX_MS = 60 * 1000;
 const DEFAULT_AVATAR_URL =
   'https://tr.rbxcdn.com/30DAY-Avatar-Headshot-Default/150/150/AvatarHeadshot/Png/noFilter';
+
+/**
+ * Roblox küçük resim URL'sinin yalnızca HTTPS üzerinden rbxcdn.com alan adına ait olduğunu doğrular.
+ * Geçersiz veya farklı alan adlı URL'ler güvenlik gereği reddedilir (false).
+ */
+function isValidRbxCdnUrl(rawUrl) {
+  if (typeof rawUrl !== 'string') return false;
+  const trimmed = rawUrl.trim();
+  if (!trimmed || trimmed.length > 512) return false;
+  try {
+    const parsed = new URL(trimmed);
+    if (parsed.protocol !== 'https:') return false;
+    if (parsed.username || parsed.password) return false;
+    const host = parsed.hostname.toLowerCase();
+    return host === 'rbxcdn.com' || host.endsWith('.rbxcdn.com');
+  } catch {
+    return false;
+  }
+}
 
 /**
  * Hesap açıklamasını (about) güvenli hale getirir ve en fazla 200 karaktere kısaltır.
@@ -37,12 +63,22 @@ function computeAccountAgeDays(createdIso) {
 }
 
 class RobloxService {
-  constructor() {
+  constructor(options = {}) {
     this._queue = [];
     this._activeCount = 0;
     this._maxConcurrent = 3;
     this._minDispatchGapMs = 60;
     this._lastDispatchAt = 0;
+
+    // Toplu avatar küçük resim (headshot) kuyruğu, 6 saatlik önbellek ve 429 geri çekilme durumu
+    this._avatarQueue = [];
+    this._avatarActiveCount = 0;
+    this._avatarMaxConcurrent = options.avatarMaxConcurrent || AVATAR_MAX_CONCURRENT;
+    this._avatarCache = new Map(); // Map<robloxId, { url: string, expiresAt: number }>
+    this._avatarBackoffUntil = 0;
+    this._avatarConsecutive429 = 0;
+    this._fetchFn = typeof options.fetchFn === 'function' ? options.fetchFn : null;
+    this._nowFn = typeof options.nowFn === 'function' ? options.nowFn : () => Date.now();
   }
 
   /**
@@ -358,12 +394,215 @@ class RobloxService {
     // Yedek avatar URL (varsayılan)
     return DEFAULT_AVATAR_URL;
   }
+
+  /**
+   * Toplu avatar istekleri için en çok 2 eşzamanlı istek çalıştıran iç kuyruk.
+   */
+  _enqueueAvatarTask(taskFn) {
+    return new Promise((resolve, reject) => {
+      this._avatarQueue.push({ taskFn, resolve, reject });
+      this._drainAvatarQueue();
+    });
+  }
+
+  _drainAvatarQueue() {
+    while (this._avatarActiveCount < this._avatarMaxConcurrent && this._avatarQueue.length > 0) {
+      const item = this._avatarQueue.shift();
+      if (!item) break;
+      this._avatarActiveCount += 1;
+
+      Promise.resolve()
+        .then(() => item.taskFn())
+        .then((res) => item.resolve(res))
+        .catch((err) => item.reject(err))
+        .finally(() => {
+          this._avatarActiveCount -= 1;
+          this._drainAvatarQueue();
+        });
+    }
+  }
+
+  /**
+   * 6 saatlik avatar önbelleğini ve 429 geri çekilme sayacını temizler (testler için).
+   */
+  clearAvatarHeadshotCache() {
+    this._avatarCache.clear();
+    this._avatarBackoffUntil = 0;
+    this._avatarConsecutive429 = 0;
+  }
+
+  /**
+   * Önbellek boyutunu üst sınırda tutarak belleğin büyümesini engeller.
+   */
+  _setCachedAvatarUrl(robloxId, url, now) {
+    if (this._avatarCache.size >= AVATAR_CACHE_MAX_ENTRIES) {
+      for (const [key, entry] of this._avatarCache.entries()) {
+        if (entry.expiresAt <= now) {
+          this._avatarCache.delete(key);
+        }
+      }
+      if (this._avatarCache.size >= AVATAR_CACHE_MAX_ENTRIES) {
+        const firstKey = this._avatarCache.keys().next().value;
+        if (firstKey !== undefined) {
+          this._avatarCache.delete(firstKey);
+        }
+      }
+    }
+    this._avatarCache.set(robloxId, {
+      url,
+      expiresAt: now + AVATAR_CACHE_TTL_MS,
+    });
+  }
+
+  /**
+   * Herkese açık Roblox thumbnails API'si üzerinden en çok 100'lü gruplar hâlinde
+   * kullanıcı avatar başlık (headshot) URL'lerini toplu çeker.
+   * - Roblox hesabına giriş veya .ROBLOSECURITY çerezi KULLANMAZ.
+   * - Sonuçları 6 saat bellek önbelleğinde tutar.
+   * - Her istek 5 sn zaman aşımlı, en çok 2 eşzamanlı ve 429'da geri çekilmelidir.
+   * - Yalnızca https://*.rbxcdn.com URL'lerini kabul eder; başarısız/geçersiz olanlar için null döner (asla hata fırlatmaz).
+   * - Konsola kullanıcı kimliği veya kullanıcı adı yazmaz.
+   *
+   * @param {Array<string|number>} robloxIds
+   * @param {object} [options] - Test veya çağrı özelleştirmesi ({ fetchFn, nowFn, timeoutMs })
+   * @returns {Promise<Map<string, string|null>>}
+   */
+  async getAvatarHeadshots(robloxIds, options = {}) {
+    const result = new Map();
+    if (!Array.isArray(robloxIds) || robloxIds.length === 0) {
+      return result;
+    }
+
+    const nowFn = typeof options.nowFn === 'function' ? options.nowFn : this._nowFn;
+    const fetchFn =
+      typeof options.fetchFn === 'function'
+        ? options.fetchFn
+        : this._fetchFn || global.fetch;
+    const timeoutMs =
+      typeof options.timeoutMs === 'number' && options.timeoutMs > 0
+        ? options.timeoutMs
+        : AVATAR_TIMEOUT_MS;
+    const now = nowFn();
+
+    // 1. Geçerli rakamsal Roblox ID'lerini tekilleştir ve önce 6 saatlik önbellekten karşıla
+    const missingIds = [];
+    const seen = new Set();
+
+    for (const rawId of robloxIds) {
+      const cleanId = String(rawId ?? '').trim();
+      if (!/^\d{1,20}$/.test(cleanId)) continue;
+      if (seen.has(cleanId)) continue;
+      seen.add(cleanId);
+
+      const cached = this._avatarCache.get(cleanId);
+      if (cached && cached.expiresAt > now && isValidRbxCdnUrl(cached.url)) {
+        result.set(cleanId, cached.url);
+      } else {
+        if (cached && cached.expiresAt <= now) {
+          this._avatarCache.delete(cleanId);
+        }
+        result.set(cleanId, null);
+        missingIds.push(cleanId);
+      }
+    }
+
+    if (missingIds.length === 0 || typeof fetchFn !== 'function') {
+      return result;
+    }
+
+    // 2. 429 geri çekilme penceresi aktifse yeni ağ çağrısı atmadan null dön
+    if (now < this._avatarBackoffUntil) {
+      return result;
+    }
+
+    // 3. Eksik ID'leri en çok 100'lük parçalara böl ve eşzamanlı max 2 sınırıyla çek
+    const chunks = [];
+    for (let i = 0; i < missingIds.length; i += AVATAR_BATCH_MAX) {
+      chunks.push(missingIds.slice(i, i + AVATAR_BATCH_MAX));
+    }
+
+    const fetchChunk = async (chunkIds) => {
+      return this._enqueueAvatarTask(async () => {
+        const currentNow = nowFn();
+        if (currentNow < this._avatarBackoffUntil) {
+          return;
+        }
+
+        const url = `https://thumbnails.roblox.com/v1/users/avatar-headshot?userIds=${encodeURIComponent(
+          chunkIds.join(',')
+        )}&size=150x150&format=Png&isCircular=false`;
+
+        try {
+          const response = await fetchFn(url, {
+            headers: { Accept: 'application/json' },
+            signal: AbortSignal.timeout(timeoutMs),
+          });
+
+          if (!response) return;
+
+          // 429 hız sınırında basit geri çekilme (Retry-After veya üstel artış)
+          if (response.status === 429) {
+            this._avatarConsecutive429 += 1;
+            let delayMs = Math.min(
+              AVATAR_BACKOFF_MAX_MS,
+              AVATAR_BACKOFF_BASE_MS * Math.pow(2, this._avatarConsecutive429 - 1)
+            );
+            const retryAfterHeader = response.headers?.get?.('retry-after');
+            const retrySec = Number(retryAfterHeader);
+            if (Number.isFinite(retrySec) && retrySec > 0) {
+              delayMs = Math.min(AVATAR_BACKOFF_MAX_MS, Math.max(1000, Math.floor(retrySec * 1000)));
+            }
+            this._avatarBackoffUntil = nowFn() + delayMs;
+            return;
+          }
+
+          if (!response.ok) {
+            return;
+          }
+
+          // Başarılı yanıtta 429 geri çekilmesini sıfırla
+          this._avatarConsecutive429 = 0;
+          this._avatarBackoffUntil = 0;
+
+          const body = await response.json().catch(() => null);
+          const entries = Array.isArray(body?.data) ? body.data : [];
+          const writeNow = nowFn();
+
+          for (const entry of entries) {
+            if (!entry || entry.targetId === undefined || entry.targetId === null) continue;
+            const targetId = String(entry.targetId).trim();
+            if (!result.has(targetId)) continue;
+
+            const state = typeof entry.state === 'string' ? entry.state : '';
+            const imageUrl = typeof entry.imageUrl === 'string' ? entry.imageUrl.trim() : '';
+
+            if (state === 'Completed' && isValidRbxCdnUrl(imageUrl)) {
+              result.set(targetId, imageUrl);
+              this._setCachedAvatarUrl(targetId, imageUrl, writeNow);
+            } else {
+              result.set(targetId, null);
+            }
+          }
+        } catch {
+          // Zaman aşımı veya ağ hatasında asla hata fırlatma ve konsola kullanıcı kimliği yazma
+        }
+      });
+    };
+
+    await Promise.all(chunks.map((chunk) => fetchChunk(chunk)));
+    return result;
+  }
 }
 
 const robloxServiceInstance = new RobloxService();
 
 module.exports = robloxServiceInstance;
 module.exports.RobloxService = RobloxService;
+module.exports.isValidRbxCdnUrl = isValidRbxCdnUrl;
 module.exports.sanitizeAboutText = sanitizeAboutText;
 module.exports.computeAccountAgeDays = computeAccountAgeDays;
 module.exports.NEW_ACCOUNT_DAYS_THRESHOLD = NEW_ACCOUNT_DAYS_THRESHOLD;
+module.exports.AVATAR_CACHE_TTL_MS = AVATAR_CACHE_TTL_MS;
+module.exports.AVATAR_BATCH_MAX = AVATAR_BATCH_MAX;
+module.exports.AVATAR_TIMEOUT_MS = AVATAR_TIMEOUT_MS;
+module.exports.AVATAR_MAX_CONCURRENT = AVATAR_MAX_CONCURRENT;
