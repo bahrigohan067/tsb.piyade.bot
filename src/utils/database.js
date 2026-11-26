@@ -89,6 +89,7 @@ class DatabaseManager {
         since: Date.now(),
         games: {},
       },
+      siteRobloxClaims: {},           // Site Google üyelerinin Roblox hesabı sahiplenmeleri: { [robloxId]: { ownerRef, at } }
     };
     this.init();
   }
@@ -282,6 +283,23 @@ class DatabaseManager {
           games: normalizedAllTimeGames,
         };
 
+        // Site Roblox sahiplenmeleri (siteRobloxClaims) doğrulama ve yükleme
+        const normalizedSiteRobloxClaims = {};
+        if (parsed.siteRobloxClaims && typeof parsed.siteRobloxClaims === 'object' && !Array.isArray(parsed.siteRobloxClaims)) {
+          for (const [rawRbId, claimVal] of Object.entries(parsed.siteRobloxClaims)) {
+            const cleanRbId = String(rawRbId || '').trim();
+            if (!/^\d{1,20}$/.test(cleanRbId)) continue;
+            if (!claimVal || typeof claimVal !== 'object') continue;
+            const ownerRef = typeof claimVal.ownerRef === 'string' ? claimVal.ownerRef.trim() : '';
+            if (!/^m_[A-Za-z0-9_-]{1,64}$/.test(ownerRef)) continue;
+            const at =
+              typeof claimVal.at === 'number' && Number.isFinite(claimVal.at) && claimVal.at > 0
+                ? Math.floor(claimVal.at)
+                : Date.now();
+            normalizedSiteRobloxClaims[cleanRbId] = { ownerRef, at };
+          }
+        }
+
         // Yalnızca bilinen temel veri yapılarını koruyarak yükle (registrations/activeApplications içindeki tüm yeni alanlar dahil)
         this.data = {
           ...parsed,
@@ -311,6 +329,7 @@ class DatabaseManager {
           activityMeta: normalizedActivityMeta,
           activityManual: normalizedActivityManual,
           activityAllTime: normalizedActivityAllTime,
+          siteRobloxClaims: normalizedSiteRobloxClaims,
         };
         if ('userLang' in this.data) {
           delete this.data.userLang;
@@ -482,6 +501,125 @@ class DatabaseManager {
       return false;
     });
     return this.normalizeRegistrationForRead(found);
+  }
+
+  // ==========================================
+  // SİTE ROBLOX SAHİPLENMELERİ (siteRobloxClaims)
+  // (Discord ve Google üyeleri arasında "1 Roblox = 1 üye" kuralı)
+  // ==========================================
+
+  _ensureSiteRobloxClaims() {
+    if (!this.data.siteRobloxClaims || typeof this.data.siteRobloxClaims !== 'object' || Array.isArray(this.data.siteRobloxClaims)) {
+      this.data.siteRobloxClaims = {};
+    }
+    return this.data.siteRobloxClaims;
+  }
+
+  /**
+   * Belirtilen Roblox ID için site sahiplenmesi kaydını döndürür (yoksa null).
+   */
+  getSiteRobloxClaim(robloxId) {
+    if (robloxId === null || robloxId === undefined) return null;
+    const cleanId = String(robloxId).trim();
+    if (!/^\d{1,20}$/.test(cleanId)) return null;
+    const claims = this._ensureSiteRobloxClaims();
+    const entry = claims[cleanId];
+    if (!entry || typeof entry !== 'object' || !entry.ownerRef) return null;
+    return {
+      robloxId: cleanId,
+      ownerRef: String(entry.ownerRef),
+      at: Number(entry.at) || 0,
+    };
+  }
+
+  /**
+   * Bir Roblox ID'sinin Discord kayıtlarında VEYA site sahiplenmelerinde dolu olup olmadığını kontrol eder.
+   * İsteğe bağlı olarak belirtilen discordId veya ownerRef çakışma kontrolünden hariç tutulabilir.
+   */
+  isRobloxIdTaken(robloxId, { ignoreDiscordId = null, ignoreOwnerRef = null } = {}) {
+    const cleanId = String(robloxId ?? '').trim();
+    if (!/^\d{1,20}$/.test(cleanId)) {
+      return { taken: false, source: null };
+    }
+
+    const discordReg = this.getRegistrationByRobloxId(cleanId);
+    if (discordReg && (!ignoreDiscordId || String(discordReg.discordId) !== String(ignoreDiscordId))) {
+      return { taken: true, source: 'discord', discordId: String(discordReg.discordId) };
+    }
+
+    const claim = this.getSiteRobloxClaim(cleanId);
+    if (claim && (!ignoreOwnerRef || claim.ownerRef !== String(ignoreOwnerRef))) {
+      return { taken: true, source: 'site_claim', ownerRef: claim.ownerRef };
+    }
+
+    return { taken: false, source: null };
+  }
+
+  /**
+   * Site üyesi (ownerRef: "m_...") için Roblox ID sahiplenmesi oluşturur.
+   * - Discord kaydında veya başka bir ownerRef'te varsa 409 uyumlu ROBLOX_ALREADY_REGISTERED döner (kimlik sızdırmaz).
+   * - Aynı ownerRef zaten sahiplenmişse idempotent başarılı döner.
+   * - Yeni sahiplenmede atomik save() ile diske yazar.
+   */
+  claimSiteRobloxId(robloxId, ownerRef, now = Date.now()) {
+    const cleanId = String(robloxId ?? '').trim();
+    const cleanOwner = String(ownerRef ?? '').trim();
+
+    // 1. Discord kayıtlarında çakışma var mı?
+    const existingDiscord = this.getRegistrationByRobloxId(cleanId);
+    if (existingDiscord) {
+      return { ok: false, code: 'ROBLOX_ALREADY_REGISTERED' };
+    }
+
+    // 2. Site sahiplenmelerinde mevcut kayıt var mı?
+    const claims = this._ensureSiteRobloxClaims();
+    const existingClaim = claims[cleanId];
+    if (existingClaim && existingClaim.ownerRef) {
+      if (existingClaim.ownerRef === cleanOwner) {
+        return {
+          ok: true,
+          idempotent: true,
+          claim: {
+            robloxId: cleanId,
+            ownerRef: existingClaim.ownerRef,
+            at: Number(existingClaim.at) || 0,
+          },
+        };
+      }
+      return { ok: false, code: 'ROBLOX_ALREADY_REGISTERED' };
+    }
+
+    const at = Number.isFinite(Number(now)) && Number(now) > 0 ? Math.floor(Number(now)) : Date.now();
+    claims[cleanId] = { ownerRef: cleanOwner, at };
+    this.save();
+
+    return {
+      ok: true,
+      idempotent: false,
+      claim: { robloxId: cleanId, ownerRef: cleanOwner, at },
+    };
+  }
+
+  /**
+   * Site üyesinin Roblox ID sahiplenmesini yalnızca ownerRef eşleşiyorsa siler.
+   * Başka bir ownerRef'e aitse 403 uyumlu CLAIM_OWNER_MISMATCH döner (kimlik sızdırmaz).
+   */
+  releaseSiteRobloxClaim(robloxId, ownerRef) {
+    const cleanId = String(robloxId ?? '').trim();
+    const cleanOwner = String(ownerRef ?? '').trim();
+    const claims = this._ensureSiteRobloxClaims();
+    const existingClaim = claims[cleanId];
+
+    if (!existingClaim) {
+      return { ok: true, deleted: false };
+    }
+    if (existingClaim.ownerRef !== cleanOwner) {
+      return { ok: false, code: 'CLAIM_OWNER_MISMATCH' };
+    }
+
+    delete claims[cleanId];
+    this.save();
+    return { ok: true, deleted: true };
   }
 
   // Discord ID ile kayıt sorgulama
@@ -1987,4 +2125,6 @@ class DatabaseManager {
   }
 }
 
-module.exports = new DatabaseManager();
+const dbInstance = new DatabaseManager();
+module.exports = dbInstance;
+module.exports.DatabaseManager = DatabaseManager;

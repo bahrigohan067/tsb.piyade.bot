@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const config = require('../../config');
-const { apiKeyAuth } = require('./middleware/auth');
+const { apiKeyAuth, enforceActorPolicy } = require('./middleware/auth');
 const { createRateLimiter } = require('./middleware/rateLimiter');
 
 // Rotalar
@@ -33,8 +33,18 @@ function createApp(clientOrGetter) {
     next();
   });
 
-  // Global Rate Limiter (1 dakikada max 120 istek)
-  app.use(createRateLimiter({ windowMs: 60 * 1000, max: 120 }));
+  // Global Rate Limiter (Aktör türü + kimliği başına 1 dakikada max 120 istek)
+  app.use(
+    createRateLimiter({
+      windowMs: 60 * 1000,
+      max: 120,
+      keyGenerator: (req) => {
+        const actorType = String(req.headers['x-actor-type'] || 'discord').trim().toLowerCase();
+        const actorId = String(req.headers['x-actor-id'] || '').trim();
+        return actorId ? `${actorType}:${actorId}` : req.ip || 'anonymous';
+      },
+    })
+  );
 
   // Healthcheck (Railway veya dış izleme servisleri için şifresiz uç nokta)
   app.get('/api/health', (req, res) => {
@@ -48,8 +58,8 @@ function createApp(clientOrGetter) {
     });
   });
 
-  // Güvenlik Katmanı: Tüm /api endpoint'leri "Authorization: Bearer API_SECRET" zorunlu tutar
-  app.use('/api', apiKeyAuth);
+  // Güvenlik Katmanı: Tüm /api uçları Bearer API_SECRET + X-Actor-Type politikası uygular
+  app.use('/api', apiKeyAuth, enforceActorPolicy);
 
   // API Rotaları
   app.use('/api/member', memberRoutes);

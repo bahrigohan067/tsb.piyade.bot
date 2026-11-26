@@ -17,7 +17,7 @@ const router = express.Router();
 const config = require('../../../config');
 const database = require('../../utils/database');
 const robloxService = require('../../services/roblox');
-const { requireActor } = require('../middleware/auth');
+const { ACTOR_TYPES, requireActor } = require('../middleware/auth');
 const { createRateLimiter } = require('../middleware/rateLimiter');
 const { sanitizeTextInput } = require('../../utils/inputSanitizer');
 
@@ -31,13 +31,14 @@ const COLD_FETCH_COOLDOWN_MS = 5 * 60 * 1000; // Soğuk önbellek için 5 dk fet
 const LOOKUP_SINGLE_FETCH_CAP = 25; // lookup isteği başına en çok tekil üye fetch sınırı
 const LOOKUP_MISS_CACHE_TTL_MS = 5 * 60 * 1000; // Sunucuda olmayan ID için 5 dk negatif önbellek
 
-// Aktör (X-Actor-Id) başına dakikada en çok 60 istek
+// Aktör başına hız sınırı: discord 60/dk, site-service 120/dk
 const directoryRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 60,
+  max: (req) => (req.actorType === ACTOR_TYPES.SITE_SERVICE ? 120 : 60),
   code: 'RATE_LIMITED',
   message: 'Rehber istek sınırı aşıldı. Lütfen kısa süre sonra tekrar deneyin.',
-  keyGenerator: (req) => req.actorId || req.headers['x-actor-id'] || req.ip || 'anonymous',
+  keyGenerator: (req) =>
+    `${req.actorType || ACTOR_TYPES.DISCORD}:${req.actorId || req.headers['x-actor-id'] || req.ip || 'anonymous'}`,
 });
 
 // Bellek içi önbellek ve soğuk önbellek fetch durumları
@@ -395,6 +396,13 @@ router.get('/', async (req, res) => {
   const actorId = String(req.actorId || req.actorMember?.id || '');
 
   try {
+    if (!req.guild) {
+      return res.status(503).json({
+        error: 'Discord sunucusu henüz hazır değil veya önbelleğe alınamadı.',
+        code: 'GUILD_UNAVAILABLE',
+      });
+    }
+
     const allEntries = await getDirectorySnapshot(req.guild);
 
     // Filtreleme: excludeSelf + Türkçe/İngilizce harf farkına duyarsız içerir araması
@@ -447,10 +455,36 @@ router.get('/', async (req, res) => {
 });
 
 /**
+ * Kayıt kaydından yalnızca site-service includeGames: true isteği için sade { id, username } oyun listesi çıkarır.
+ * Eski kayıtlarda games yoksa database.normalizeGamesForRead üzerinden robloxUsername'i okuma sırasında dönüştürür.
+ */
+function extractPublicGamesForService(reg) {
+  if (!reg || typeof reg !== 'object') return [];
+  const normalizedGames = Array.isArray(reg.games)
+    ? reg.games
+    : typeof database.normalizeGamesForRead === 'function'
+      ? database.normalizeGamesForRead(reg)
+      : [];
+
+  const result = [];
+  const seen = new Set();
+  for (const g of normalizedGames) {
+    if (!g || !g.id || !g.username) continue;
+    const id = String(g.id).trim().toLowerCase();
+    const username = String(g.username).trim();
+    if (!id || !username || seen.has(id)) continue;
+    seen.add(id);
+    result.push({ id, username });
+  }
+  return result;
+}
+
+/**
  * POST /api/directory/lookup
- * Gövde: { ids: [en çok 100 Discord ID] }
+ * Gövde: { ids: [en çok 100 Discord ID], includeGames?: boolean }
  * Verilen Discord ID'leri arasından yalnızca kayıtlı, sunucuda bulunan ve bot olmayan üyeleri
  * İSTEK SIRASIYLA ve aynı 7 alanla döndürür.
+ * Not: includeGames: true yalnızca site-service aktöründe geçerlidir; diğer aktörlerde games alanı ASLA eklenmez.
  */
 router.post('/lookup', async (req, res) => {
   const rawIds = req.body?.ids;
@@ -495,13 +529,23 @@ router.post('/lookup', async (req, res) => {
     return res.json({ items: [] });
   }
 
+  // includeGames: true yalnızca site-service aktörü için etkindir
+  const includeGames = req.body?.includeGames === true && req.actorType === ACTOR_TYPES.SITE_SERVICE;
+
   try {
+    if (!req.guild) {
+      return res.status(503).json({
+        error: 'Discord sunucusu henüz hazır değil veya önbelleğe alınamadı.',
+        code: 'GUILD_UNAVAILABLE',
+      });
+    }
+
     const now = Date.now();
     await ensureGuildMembersWarm(req.guild, now);
 
     const gid = String(req.guild.id || 'default');
     let singleFetches = 0;
-    const matchedBase = [];
+    const matchedEntries = [];
 
     for (const uid of orderedIds) {
       let member = req.guild.members.cache.get(uid) || null;
@@ -524,16 +568,25 @@ router.post('/lookup', async (req, res) => {
       }
 
       const reg = database.getRegistrationByDiscordId(uid);
-      matchedBase.push(buildBaseDirectoryEntry(member, reg));
+      matchedEntries.push({
+        base: buildBaseDirectoryEntry(member, reg),
+        games: includeGames ? extractPublicGamesForService(reg) : null,
+      });
     }
 
-    const robloxIds = matchedBase.map((e) => e.robloxId).filter(Boolean);
+    const robloxIds = matchedEntries.map((e) => e.base.robloxId).filter(Boolean);
     const avatarMap =
       robloxIds.length > 0
         ? await robloxService.getAvatarHeadshots(robloxIds)
         : new Map();
 
-    const items = matchedBase.map((entry) => toPublicDirectoryItem(entry, avatarMap));
+    const items = matchedEntries.map(({ base, games }) => {
+      const publicItem = toPublicDirectoryItem(base, avatarMap);
+      if (includeGames) {
+        publicItem.games = games;
+      }
+      return publicItem;
+    });
 
     return res.json({ items });
   } catch {

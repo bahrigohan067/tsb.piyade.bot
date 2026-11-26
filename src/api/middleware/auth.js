@@ -1,6 +1,48 @@
 const { PermissionFlagsBits } = require('discord.js');
 const config = require('../../../config');
 
+// Desteklenen aktör türleri ve kimlik biçimleri
+const ACTOR_TYPES = Object.freeze({
+  DISCORD: 'discord',
+  SITE_GUEST: 'site-guest',
+  SITE_SERVICE: 'site-service',
+});
+const VALID_ACTOR_TYPE_SET = new Set(Object.values(ACTOR_TYPES));
+const SITE_GUEST_ID_REGEX = /^g_[0-9a-fA-F]{32}$/;
+const SITE_SERVICE_ACTOR_ID = 'site';
+
+/**
+ * site-guest ve site-service aktör türlerinin erişebileceği uç nokta izin listesi.
+ * Yol (/api öneği soyulmuş req.path) ve HTTP yöntemi üzerinden sıkı beyaz liste uygular.
+ */
+function isRouteAllowedForActor(actorType, method, reqPath) {
+  const m = String(method || 'GET').toUpperCase();
+  const rawPath = String(reqPath || '/');
+  const normPath = rawPath.length > 1 ? rawPath.replace(/\/+$/, '') : rawPath;
+
+  if (actorType === ACTOR_TYPES.SITE_GUEST) {
+    return (
+      (m === 'GET' && normPath === '/games') ||
+      (m === 'GET' && normPath === '/roblox/lookup')
+    );
+  }
+
+  if (actorType === ACTOR_TYPES.SITE_SERVICE) {
+    if (m === 'GET' && (normPath === '/games' || normPath === '/roblox/lookup' || normPath === '/directory')) {
+      return true;
+    }
+    if (m === 'POST' && (normPath === '/roblox/avatars' || normPath === '/directory/lookup')) {
+      return true;
+    }
+    if ((m === 'PUT' || m === 'DELETE') && /^\/roblox\/site-claims\/[^/]+$/.test(normPath)) {
+      return true;
+    }
+    return false;
+  }
+
+  return actorType === ACTOR_TYPES.DISCORD;
+}
+
 /**
  * 1. Bearer Token Kimlik Doğrulama Middleware
  * Tüm endpoint'ler "Authorization: Bearer API_SECRET" ister.
@@ -29,10 +71,106 @@ function apiKeyAuth(req, res, next) {
 }
 
 /**
+ * 1.5. Aktör Türü Politikası Middleware (X-Actor-Type)
+ * - Başlık yoksa veya 'discord' ise mevcut Discord aktör davranışı aynen korunur.
+ * - 'site-guest': X-Actor-Id "g_" + 32 hex olmalı; yalnızca GET /api/games ve GET /api/roblox/lookup izinlidir.
+ * - 'site-service': X-Actor-Id === "site" olmalı; yalnızca izinli servis uçlarına erişir.
+ * İzin dışı her uçta 403 { code: 'ACTOR_NOT_ALLOWED' } döner.
+ */
+function enforceActorPolicy(req, res, next) {
+  const rawType = req.headers['x-actor-type'];
+  const actorType =
+    typeof rawType === 'string' && rawType.trim() !== ''
+      ? rawType.trim().toLowerCase()
+      : ACTOR_TYPES.DISCORD;
+
+  if (!VALID_ACTOR_TYPE_SET.has(actorType)) {
+    return res.status(400).json({
+      error: 'Geçersiz "X-Actor-Type" başlığı (discord, site-guest veya site-service olmalıdır).',
+      code: 'INVALID_ACTOR_TYPE',
+    });
+  }
+
+  req.actorType = actorType;
+
+  // Varsayılan 'discord' türünde mevcut davranışa dokunma
+  if (actorType === ACTOR_TYPES.DISCORD) {
+    return next();
+  }
+
+  const rawActorId = req.headers['x-actor-id'];
+  const actorId = typeof rawActorId === 'string' ? rawActorId.trim() : '';
+
+  if (!actorId) {
+    return res.status(400).json({
+      error: 'Eksik başlık: Bu aktör türü için "X-Actor-Id" zorunludur.',
+      code: 'MISSING_ACTOR_ID',
+    });
+  }
+
+  if (actorType === ACTOR_TYPES.SITE_GUEST) {
+    if (!SITE_GUEST_ID_REGEX.test(actorId)) {
+      return res.status(400).json({
+        error: 'Geçersiz başlık: site-guest için "X-Actor-Id" "g_" + 32 hex biçiminde olmalıdır.',
+        code: 'INVALID_ACTOR_ID',
+      });
+    }
+    req.actorId = actorId;
+  } else if (actorType === ACTOR_TYPES.SITE_SERVICE) {
+    if (actorId !== SITE_SERVICE_ACTOR_ID) {
+      return res.status(400).json({
+        error: 'Geçersiz başlık: site-service için "X-Actor-Id" değeri "site" olmalıdır.',
+        code: 'INVALID_ACTOR_ID',
+      });
+    }
+    req.actorId = SITE_SERVICE_ACTOR_ID;
+  }
+
+  if (!isRouteAllowedForActor(actorType, req.method, req.path)) {
+    return res.status(403).json({
+      error: 'Bu aktör türü bu uç noktaya erişemez.',
+      code: 'ACTOR_NOT_ALLOWED',
+    });
+  }
+
+  return next();
+}
+
+/**
+ * Yalnızca belirli aktör türlerine açık uç noktalar için rota seviyesi koruma.
+ * Örn: requireActorTypes(['site-service']) -> discord ve site-guest için 403 ACTOR_NOT_ALLOWED.
+ */
+function requireActorTypes(allowedTypes) {
+  const allowedSet = new Set(Array.isArray(allowedTypes) ? allowedTypes : [allowedTypes]);
+  return function actorTypeGuard(req, res, next) {
+    const currentType = req.actorType || ACTOR_TYPES.DISCORD;
+    if (!allowedSet.has(currentType)) {
+      return res.status(403).json({
+        error: 'Bu aktör türü bu uç noktaya erişemez.',
+        code: 'ACTOR_NOT_ALLOWED',
+      });
+    }
+    return next();
+  };
+}
+
+/**
  * 2. Actor (İşlemi Yapan Kullanıcı) Doğrulama Middleware
- * Site, işlemi yapan kullanıcının Discord ID'sini "X-Actor-Id" ile gönderir.
+ * - 'site-guest' ve 'site-service' enforceActorPolicy tarafından zaten doğrulandığı için Discord sunucu sorgusu yapmaz.
+ * - 'discord' (varsayılan) için mevcut Discord üye doğrulaması aynen çalışır.
  */
 async function requireActor(req, res, next) {
+  const currentType = req.actorType || ACTOR_TYPES.DISCORD;
+  if (currentType === ACTOR_TYPES.SITE_GUEST || currentType === ACTOR_TYPES.SITE_SERVICE) {
+    if (!req.actorId) {
+      return res.status(400).json({
+        error: 'Eksik başlık: Bu işlem için "X-Actor-Id" zorunludur.',
+        code: 'MISSING_ACTOR_ID',
+      });
+    }
+    return next();
+  }
+
   const rawActorId = req.headers['x-actor-id'];
   const actorId = typeof rawActorId === 'string' ? rawActorId.trim() : '';
 
@@ -83,6 +221,13 @@ async function requireActor(req, res, next) {
  * Yönetim endpoint'leri sadece Yönetmenlik (1559614111128490044) veya Developer (1561777507223601353) içindir.
  */
 async function requireManagement(req, res, next) {
+  if ((req.actorType || ACTOR_TYPES.DISCORD) !== ACTOR_TYPES.DISCORD) {
+    return res.status(403).json({
+      error: 'Bu aktör türü yönetim uç noktalarına erişemez.',
+      code: 'ACTOR_NOT_ALLOWED',
+    });
+  }
+
   // Önce aktörü doğrula
   requireActor(req, res, () => {
     const member = req.actorMember;
@@ -100,6 +245,7 @@ async function requireManagement(req, res, next) {
     if (!isDeveloper && !isYonetmenlik) {
       return res.status(403).json({
         error: 'Erişim engellendi: Bu yönetim işlemine sadece Yönetmenlik veya Developer yetkisine sahip kullanıcılar erişebilir.',
+        code: 'FORBIDDEN',
         actorLevel: 'member',
       });
     }
@@ -136,7 +282,13 @@ function getMemberLevel(member, guild) {
 }
 
 module.exports = {
+  ACTOR_TYPES,
+  SITE_GUEST_ID_REGEX,
+  SITE_SERVICE_ACTOR_ID,
+  isRouteAllowedForActor,
   apiKeyAuth,
+  enforceActorPolicy,
+  requireActorTypes,
   requireActor,
   requireManagement,
   getMemberLevel,

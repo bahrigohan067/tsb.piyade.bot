@@ -3,7 +3,7 @@
  */
 function createRateLimiter(options = {}) {
   const windowMs = options.windowMs || 60 * 1000; // Varsayılan 1 dakika
-  const max = options.max || 120; // 1 dakikada max istek
+  const maxOption = options.max !== undefined ? options.max : 120; // Sabit sayı veya (req) => sayı
   const message = options.message || 'Çok fazla istek gönderildi. Lütfen bir süre bekleyin (Rate limit aşıldı).';
   const code = options.code || 'RATE_LIMITED';
   const keyGenerator =
@@ -28,12 +28,14 @@ function createRateLimiter(options = {}) {
 
   function rateLimiter(req, res, next) {
     const key = String(keyGenerator(req) || 'anonymous');
+    const resolvedMax =
+      typeof maxOption === 'function' ? Number(maxOption(req)) || 120 : Number(maxOption) || 120;
     const now = Date.now();
 
     let userHits = hits.get(key) || [];
     userHits = userHits.filter((t) => now - t < windowMs);
 
-    if (userHits.length >= max) {
+    if (userHits.length >= resolvedMax) {
       const oldestHit = userHits[0];
       const resetInSeconds = Math.ceil((oldestHit + windowMs - now) / 1000);
 
@@ -48,8 +50,8 @@ function createRateLimiter(options = {}) {
     userHits.push(now);
     hits.set(key, userHits);
 
-    res.setHeader('X-RateLimit-Limit', max);
-    res.setHeader('X-RateLimit-Remaining', Math.max(0, max - userHits.length));
+    res.setHeader('X-RateLimit-Limit', resolvedMax);
+    res.setHeader('X-RateLimit-Remaining', Math.max(0, resolvedMax - userHits.length));
 
     next();
   }

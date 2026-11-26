@@ -564,12 +564,29 @@ async function createRegistrationApplication({
         rbUser = robloxResult.user;
       }
 
-      // Çoklu hesap koruması
+      // Çoklu hesap koruması (Discord kayıtları + site sahiplenmeleri)
       const existingReg = database.getRegistrationByRobloxId(rbUser.id);
       if (existingReg && String(existingReg.discordId) !== String(targetUser.id)) {
         const errorBilingual = {
           tr: `Bu Roblox hesabı ([${rbUser.name}](https://www.roblox.com/users/${rbUser.id}/profile)) sunucumuzda başka bir Discord kullanıcısına (<@${existingReg.discordId}>) zaten kayıtlıdır!`,
           en: `This Roblox account ([${rbUser.name}](https://www.roblox.com/users/${rbUser.id}/profile)) is already registered to another Discord user (<@${existingReg.discordId}>)!`,
+        };
+        return {
+          success: false,
+          httpStatus: 409,
+          code: 'ROBLOX_ALREADY_REGISTERED',
+          canRetry: true,
+          message: isEn ? errorBilingual.en : errorBilingual.tr,
+          errorBilingual,
+        };
+      }
+
+      // Site Google üyesi sahiplenmesi kontrolü (kimin olduğu ASLA sızdırılmaz)
+      const existingSiteClaim = database.getSiteRobloxClaim(rbUser.id);
+      if (existingSiteClaim) {
+        const errorBilingual = {
+          tr: `Bu Roblox hesabı ([${rbUser.name}](https://www.roblox.com/users/${rbUser.id}/profile)) sunucumuzda başka bir üyeye zaten kayıtlıdır!`,
+          en: `This Roblox account ([${rbUser.name}](https://www.roblox.com/users/${rbUser.id}/profile)) is already registered to another member!`,
         };
         return {
           success: false,
