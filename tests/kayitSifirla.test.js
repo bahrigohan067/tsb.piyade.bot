@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { Collection, PermissionFlagsBits } = require('discord.js');
+const { Collection, PermissionFlagsBits, MessageFlags } = require('discord.js');
 
 // Testler için izole geçici veri klasörü
 const tempDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tsb-kayit-sifirla-test-'));
@@ -27,8 +27,11 @@ test.after(() => {
 
 function createMockInteractionEnvironment() {
   const guildRoles = new Collection([
-    [config.ROLES.STAFF, { id: config.ROLES.STAFF, name: 'Kayıt Yetkilisi', position: 30, managed: false }],
+    [config.ROLES.COMMUNITY_OFFICIAL, { id: config.ROLES.COMMUNITY_OFFICIAL, name: '| Community Official', position: 60, managed: false }],
     [config.ROLES.DEVELOPER, { id: config.ROLES.DEVELOPER, name: 'Developer', position: 50, managed: false }],
+    [config.ROLES.FOUNDER, { id: config.ROLES.FOUNDER, name: 'FOUNDER', position: 45, managed: false }],
+    [config.ROLES.STAFF_GENERAL, { id: config.ROLES.STAFF_GENERAL, name: 'Yetkili', position: 35, managed: false }],
+    [config.ROLES.STAFF, { id: config.ROLES.STAFF, name: 'Kayıt Yetkilisi', position: 30, managed: false }],
     [config.ROLES.REGISTERED_CHECK, { id: config.ROLES.REGISTERED_CHECK, name: 'Kayıtlı Üye', position: 15, managed: false }],
     [config.ROLES.OTHER_CLAN, { id: config.ROLES.OTHER_CLAN, name: 'Other Clan', position: 20, managed: false }],
     [config.ROLES.UNREGISTERED, { id: config.ROLES.UNREGISTERED, name: 'Kayıtsız', position: 5, managed: false }],
@@ -36,7 +39,7 @@ function createMockInteractionEnvironment() {
     ['role_managed', { id: 'role_managed', name: 'Server Booster', position: 25, managed: true }],
   ]);
 
-  function makeMember({ id, username, roleIds = [], position = 10, nickname = null }) {
+  function makeMember({ id, username, roleIds = [], position = 10, nickname = null, isAdmin = false }) {
     const roleMap = new Collection();
     for (const rid of roleIds) {
       if (guildRoles.has(rid)) {
@@ -62,7 +65,7 @@ function createMockInteractionEnvironment() {
         },
       },
       permissions: {
-        has: (perm) => (perm === PermissionFlagsBits.Administrator ? false : false),
+        has: (perm) => (perm === PermissionFlagsBits.Administrator ? isAdmin : false),
       },
       manageable: true,
       setNickname: async (newNick) => {
@@ -73,11 +76,34 @@ function createMockInteractionEnvironment() {
     return member;
   }
 
+  // Yetkili roller: yalnızca DEVELOPER (1561777507223601353) ve COMMUNITY_OFFICIAL (1570767625188016259)
+  const devMember = makeMember({
+    id: 'dev_1',
+    username: 'dev_user',
+    roleIds: [config.ROLES.DEVELOPER],
+    position: 50,
+  });
+
+  const communityOfficialMember = makeMember({
+    id: 'official_1',
+    username: 'official_user',
+    roleIds: [config.ROLES.COMMUNITY_OFFICIAL],
+    position: 30,
+  });
+
   const staffMember = makeMember({
     id: 'staff_1',
     username: 'staff_user',
     roleIds: [config.ROLES.STAFF],
     position: 30,
+  });
+
+  const founderAdminOwnerMember = makeMember({
+    id: 'owner_999',
+    username: 'founder_owner',
+    roleIds: [config.ROLES.FOUNDER, config.ROLES.STAFF_GENERAL],
+    position: 45,
+    isAdmin: true,
   });
 
   const targetMember = makeMember({
@@ -96,7 +122,10 @@ function createMockInteractionEnvironment() {
   });
 
   const membersCollection = new Collection([
+    [devMember.id, devMember],
+    [communityOfficialMember.id, communityOfficialMember],
     [staffMember.id, staffMember],
+    [founderAdminOwnerMember.id, founderAdminOwnerMember],
     [targetMember.id, targetMember],
     [unauthorizedMember.id, unauthorizedMember],
   ]);
@@ -122,7 +151,10 @@ function createMockInteractionEnvironment() {
   };
 
   return {
+    devMember,
+    communityOfficialMember,
     staffMember,
+    founderAdminOwnerMember,
     targetMember,
     unauthorizedMember,
     mockGuild,
@@ -172,28 +204,42 @@ test('1. database.removeRegistration metodu kaydı, Roblox hesabını ve aktif/r
   assert.equal(resultNonExist.removedRecord, null);
 });
 
-test('2. /kayit-sifirla: Yetkisiz kullanıcının komutu çalıştırması engellenmeli', async () => {
+test('2. /kayit-sifirla: Yalnızca 1561777507223601353 (Developer) ve 1570767625188016259 (Community Official) rolleri kullanabilmeli', async () => {
   const env = createMockInteractionEnvironment();
-  let replyPayload = null;
 
-  const mockInteraction = {
-    guild: env.mockGuild,
-    member: env.unauthorizedMember,
-    user: env.unauthorizedMember.user,
-    client: { user: { id: 'bot_id_123' } },
-    options: {
-      getUser: () => env.targetMember.user,
-    },
-    reply: async (payload) => {
-      replyPayload = payload;
-      return payload;
-    },
-  };
+  assert.deepEqual(kayitSifirlaCommand.ALLOWED_ROLE_IDS, [
+    '1561777507223601353',
+    '1570767625188016259',
+  ]);
+  assert.equal(kayitSifirlaCommand.hasKayitSifirlaAuthority(env.devMember), true);
+  assert.equal(kayitSifirlaCommand.hasKayitSifirlaAuthority(env.communityOfficialMember), true);
+  assert.equal(kayitSifirlaCommand.hasKayitSifirlaAuthority(env.unauthorizedMember), false);
+  assert.equal(kayitSifirlaCommand.hasKayitSifirlaAuthority(env.staffMember), false);
+  assert.equal(kayitSifirlaCommand.hasKayitSifirlaAuthority(env.founderAdminOwnerMember), false);
 
-  await kayitSifirlaCommand.execute(mockInteraction);
-  assert.ok(replyPayload);
-  assert.equal(replyPayload.ephemeral, true);
-  assert.match(replyPayload.content, /Bu komutu yalnızca Kayıt Yetkilileri ve Yönetim kullanabilir/);
+  // Normal üye, Kayıt Yetkilisi ve hatta izinli rolü olmayan Kurucu/Yönetici bile engellenmeli
+  for (const deniedMember of [env.unauthorizedMember, env.staffMember, env.founderAdminOwnerMember]) {
+    let replyPayload = null;
+    const mockInteraction = {
+      guild: env.mockGuild,
+      member: deniedMember,
+      user: deniedMember.user,
+      client: { user: { id: 'bot_id_123' } },
+      options: {
+        getUser: () => env.targetMember.user,
+      },
+      reply: async (payload) => {
+        replyPayload = payload;
+        return payload;
+      },
+    };
+
+    await kayitSifirlaCommand.execute(mockInteraction);
+    assert.ok(replyPayload);
+    assert.equal(replyPayload.flags, MessageFlags.Ephemeral);
+    assert.match(replyPayload.content, /1561777507223601353/);
+    assert.match(replyPayload.content, /1570767625188016259/);
+  }
 });
 
 test('3. /kayit-sifirla: Botun kendisinin veya bot hesaplarının sıfırlanması engellenmeli', async () => {
@@ -203,8 +249,8 @@ test('3. /kayit-sifirla: Botun kendisinin veya bot hesaplarının sıfırlanmas�
   // Botun kendisini sıfırlamaya çalışmak
   const mockInteractionBotSelf = {
     guild: env.mockGuild,
-    member: env.staffMember,
-    user: env.staffMember.user,
+    member: env.devMember,
+    user: env.devMember.user,
     client: { user: { id: 'bot_id_123' } },
     options: {
       getUser: () => ({ id: 'bot_id_123', bot: true }),
@@ -221,8 +267,8 @@ test('3. /kayit-sifirla: Botun kendisinin veya bot hesaplarının sıfırlanmas�
   // Başka bir botu sıfırlamaya çalışmak
   const mockInteractionOtherBot = {
     guild: env.mockGuild,
-    member: env.staffMember,
-    user: env.staffMember.user,
+    member: env.communityOfficialMember,
+    user: env.communityOfficialMember.user,
     client: { user: { id: 'bot_id_123' } },
     options: {
       getUser: () => ({ id: 'other_bot_999', bot: true }),
@@ -241,7 +287,7 @@ test('4. /kayit-sifirla: Kendisinden üst kademedeki birinin kaydını sıfırla
   const env = createMockInteractionEnvironment();
   let replyPayload = null;
 
-  // Hedef yetkili (Position 50), uygulayan yetkili (Position 30)
+  // Hedef yetkili (Position 50), uygulayan Community Official (testte Position 30)
   const highStaff = {
     id: 'high_staff_1',
     user: { id: 'high_staff_1', username: 'high_staff', bot: false },
@@ -251,8 +297,8 @@ test('4. /kayit-sifirla: Kendisinden üst kademedeki birinin kaydını sıfırla
 
   const mockInteraction = {
     guild: env.mockGuild,
-    member: env.staffMember,
-    user: env.staffMember.user,
+    member: env.communityOfficialMember,
+    user: env.communityOfficialMember.user,
     client: { user: { id: 'bot_id_123' } },
     options: {
       getUser: () => highStaff.user,
@@ -267,7 +313,7 @@ test('4. /kayit-sifirla: Kendisinden üst kademedeki birinin kaydını sıfırla
   assert.match(replyPayload.content, /Kendinizle aynı veya sizden daha üst kademedeki bir yetkilinin kaydını sıfırlayamazsınız/);
 });
 
-test('5. /kayit-sifirla (Başarılı Akış): Kayıt, Roblox hesabı silinmeli, roller alınmalı, Kayıtsız rolü verilmeli', async () => {
+test('5. /kayit-sifirla (Başarılı Akış): Community Official ve Developer ile kayıt/roller sıfırlanıp Kayıtsız rolü verilmeli', async () => {
   const env = createMockInteractionEnvironment();
 
   // Veritabanına hedef üyenin kaydını ekle
@@ -289,8 +335,8 @@ test('5. /kayit-sifirla (Başarılı Akış): Kayıt, Roblox hesabı silinmeli, 
   let replyPayload = null;
   const mockInteraction = {
     guild: env.mockGuild,
-    member: env.staffMember,
-    user: env.staffMember.user,
+    member: env.communityOfficialMember,
+    user: env.communityOfficialMember.user,
     client: { user: { id: 'bot_id_123' } },
     options: {
       getUser: () => env.targetMember.user,

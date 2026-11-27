@@ -1,17 +1,34 @@
-const { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } = require('discord.js');
+const { SlashCommandBuilder, EmbedBuilder, MessageFlags } = require('discord.js');
 const database = require('../utils/database');
 const config = require('../../config');
 const gamesConfig = require('../../games.config');
 const { resolveLang } = require('../utils/i18n');
 
+// /kayit-sifirla komutunu kullanmaya yetkili roller (yalnızca Developer ve Community Official)
+const ALLOWED_ROLE_IDS = Object.freeze(
+  [config.ROLES.DEVELOPER, config.ROLES.COMMUNITY_OFFICIAL].filter(Boolean)
+);
+
+/**
+ * Kullanıcının yalnızca izin verilen rollerden (1561777507223601353 veya 1570767625188016259)
+ * en az birine sahip olup olmadığını doğrular.
+ */
+function hasKayitSifirlaAuthority(member) {
+  const roleCache = member?.roles?.cache;
+  if (!roleCache || typeof roleCache.has !== 'function') return false;
+  return ALLOWED_ROLE_IDS.some((roleId) => roleCache.has(roleId));
+}
+
 module.exports = {
+  ALLOWED_ROLE_IDS,
+  hasKayitSifirlaAuthority,
+
   data: new SlashCommandBuilder()
     .setName('kayit-sifirla')
     .setDescription('Seçilen kişinin kaydını ve rollerini sıfırlar, Roblox hesabını bot hafızasından siler.')
     .setDescriptionLocalizations({
       'en-US': 'Resets user registration, wipes Roblox data, removes roles, and grants unregistered role.',
     })
-    .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles)
     .addUserOption((option) =>
       option
         .setName('kisi')
@@ -25,21 +42,17 @@ module.exports = {
   async execute(interaction) {
     const isEn = resolveLang(interaction) === 'en';
 
-    // 1. Yetki Kontrolü: Kayıt Yetkilisi, Genel Yetkili, Yönetmenlik, Developer, Kurucu veya Yönetici
-    const isStaff = interaction.member.roles.cache.has(config.ROLES.STAFF);
-    const isStaffGeneral = config.ROLES.STAFF_GENERAL && interaction.member.roles.cache.has(config.ROLES.STAFF_GENERAL);
-    const isDev = interaction.member.roles.cache.has(config.ROLES.DEVELOPER);
-    const isTryoutStaff = interaction.member.roles.cache.has(config.ROLES.TRYOUT_STAFF);
-    const isFounder = config.ROLES.FOUNDER && interaction.member.roles.cache.has(config.ROLES.FOUNDER);
-    const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.Administrator);
-    const isOwner = interaction.guild.ownerId === interaction.user.id;
-
-    if (!isStaff && !isStaffGeneral && !isDev && !isTryoutStaff && !isFounder && !isAdmin && !isOwner) {
+    // 1. Yetki Kontrolü: YALNIZCA Developer (1561777507223601353) ve Community Official (1570767625188016259) rolleri
+    const isDev = Boolean(
+      config.ROLES.DEVELOPER && interaction.member?.roles?.cache?.has?.(config.ROLES.DEVELOPER)
+    );
+    if (!hasKayitSifirlaAuthority(interaction.member)) {
       return interaction.reply({
         content: isEn
-          ? '❌ You do not have permission to use this command (Registration Staff or Management only).'
-          : '❌ Bu komutu yalnızca Kayıt Yetkilileri ve Yönetim kullanabilir.',
-        ephemeral: true,
+          ? `❌ Only members with the <@&${config.ROLES.DEVELOPER}> or <@&${config.ROLES.COMMUNITY_OFFICIAL}> role can use this command.`
+          : `❌ Bu komutu yalnızca <@&${config.ROLES.DEVELOPER}> ve <@&${config.ROLES.COMMUNITY_OFFICIAL}> rollerine sahip yetkililer kullanabilir.`,
+        flags: MessageFlags.Ephemeral,
+        allowedMentions: { parse: [] },
       });
     }
 
@@ -47,7 +60,7 @@ module.exports = {
     if (!targetUser) {
       return interaction.reply({
         content: isEn ? '❌ Please specify a valid user.' : '❌ Lütfen geçerli bir kullanıcı belirtin.',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
@@ -55,27 +68,27 @@ module.exports = {
     if (targetUser.id === interaction.client.user.id) {
       return interaction.reply({
         content: isEn ? '❌ You cannot reset the bot itself!' : '❌ Botun kaydını sıfırlayamazsınız!',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
     if (targetUser.bot) {
       return interaction.reply({
         content: isEn ? '❌ Bot accounts do not have registration records!' : '❌ Bot hesaplarının kayıt bilgisi bulunmaz!',
-        ephemeral: true,
+        flags: MessageFlags.Ephemeral,
       });
     }
 
-    // 3. Hiyerarşi Kontrolü: Kendinden üst veya eşit yetkiliyi sıfırlayamaz (Owner/Developer hariç)
+    // 3. Hiyerarşi Kontrolü: Kendinden üst veya eşit yetkiliyi sıfırlayamaz (Developer hariç)
     const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
 
-    if (targetMember && !isOwner && !isDev) {
+    if (targetMember && !isDev) {
       if (targetMember.roles.highest.position >= interaction.member.roles.highest.position) {
         return interaction.reply({
           content: isEn
             ? '❌ You cannot reset the registration of a staff member with equal or higher rank than you!'
             : '❌ Kendinizle aynı veya sizden daha üst kademedeki bir yetkilinin kaydını sıfırlayamazsınız!',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         });
       }
     }

@@ -132,7 +132,7 @@ Bot, yalnızca Discord'un yerleşik etkinlik (*Playing / Şunu oynuyor*) verisin
 | `/dil-sifirla` | Developer & Yönetim | Hedef kullanıcının kayıtlı dil tercihini ve English rolünü sıfırlar. |
 | `/kayit-paneli` | Yönetici | TR/EN kayıt panelini günceller (yoksa yeni oluşturur). |
 | `/kayit-bilgi` | Kayıt Yetkilisi & Yönetim | Üyenin kayıt, oyun ve Roblox detaylarını sorgular. |
-| `/kayit-sifirla` | Kayıt Yetkilisi & Yönetim | Belirtilen üyenin kaydını ve rollerini sıfırlar, Kayıtsız rolü verir. |
+| `/kayit-sifirla` | Developer & Community Official | Belirtilen üyenin kaydını ve rollerini sıfırlar, Kayıtsız rolü verir. |
 | `/veri-sifirla` | Developer & Sunucu Sahibi | Güvenli yedek alarak Uyarılar, Kayıtlar veya Hepsi için verileri sıfırlar. |
 | `/uyari-panel` | Developer & Yönetim | Disiplin & Uyarı Verme Panelini kurar. |
 | `/uyari-iptal` | Developer & Yönetim | Verilen bir uyarıyı ID'si ile iptal eder. |
